@@ -203,15 +203,17 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
         away = 0;
         if (sh > 20) home = 9;
     }
-    // The whole-match call (0, 60) ignores DS:76B2 (REAL-CODE test, all values 0..11); halving applies to
-    // the per-minute and overtime calls only.
-    if (minute > 60) {
+    if (special || minute > 60) {  // play-off mode (2a9e:76B2 = DS:D0C2 == 1) or overtime
         if (sh != 0) home = home / 2 + 1;
         if (sa != 0) away = away / 2 + 1;
     }
     if (h.skaters < a.skaters) home >>= 2;
     if (a.skaters < h.skaters) away >>= 2;
     if (minute < 58 && ((h.flags | a.flags) & 0x08)) home = away = 9;  // bit 3: goalkeeper pulled (ovl06_34f6)
+    if (!whole && special) {  // the extra point belongs to play-off mode only (REAL-CODE test), not to overtime
+        home++;
+        away++;
+    }
     return {home, away};
 }
 
