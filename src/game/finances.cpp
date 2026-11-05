@@ -292,11 +292,13 @@ int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int man
             if (item < 9) {
                 if (b.stadium[size_t(item)] == 0) continue;
                 b.stadium[size_t(item)]--;
+                rng.range(0, 3);  // message text of the loss (REAL-CODE test)
             } else {
                 int& places = b.places[size_t(item - 9)];
                 if (places == 0) continue;
                 const int loss = (rng.range(places / 20, places / 6) + 150) / 100 * 100;
                 places = uint16_t(places - loss);
+                rng.range(0, 3);  // message text of the loss (REAL-CODE test)
             }
             break;
         }
@@ -314,6 +316,7 @@ int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int man
             state.at(planned) = state.at(planned + 1) = 0;
         }
         completed++;
+        rng.range(0, 3);  // the completion message picks one of four texts (REAL-CODE test): one draw per building
     }
     for (size_t i = 0; i < b.stadium.size(); i++) state.at(block + kStadium + i * 2) = uint8_t(b.stadium[i]);
     for (size_t i = 0; i < b.places.size(); i++) {
