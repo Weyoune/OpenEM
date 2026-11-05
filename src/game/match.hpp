@@ -42,6 +42,9 @@ public:
     // FUN_199f_07e5: a value in lo..hi (inclusive)
     long range(long lo, long hi);
     uint32_t state() const { return s_; }
+    // The original takes its few 50:50 decisions from the Borland rand() (1000:06df via 199f:0847), a second
+    // stream. When set, those decisions draw from it (REAL-CODE test: FUN_162c_1e9c); otherwise this stream.
+    BorlandRandom* borland = nullptr;
 
 private:
     static constexpr uint32_t kModulus = 4000000;

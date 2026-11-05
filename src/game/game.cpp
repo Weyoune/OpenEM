@@ -142,6 +142,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     human_.players = &save_.players;
     human_.level = finance_.level;
     human_.selection_rng = &brng_;
+    rng_.borland = &brng_;
     human_.minimum_players = 9;
     human_.rotation = &human_rotation_;
     budget_ = budget_from_save(save_, 0);
@@ -263,6 +264,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         }
         rng_ = GameRandom(checkpoint.game_random);
         brng_ = BorlandRandom(checkpoint.borland_random);
+        rng_.borland = &brng_;
         line_counts_=checkpoint.line_counts;
         stadium_refusals_=checkpoint.stadium_refusals;
         save_history_=checkpoint.save_history;

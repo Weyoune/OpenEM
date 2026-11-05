@@ -52,11 +52,28 @@ target_include_directories(em_formats PUBLIC src)
 # em_game: game logic (schedule, ...), built on the original data read by em_formats
 add_library(em_game STATIC
     src/game/calendar.cpp
+    src/game/checkpoint.cpp
     src/game/competitions.cpp
     src/game/contracts.cpp
     src/game/finances.cpp
+    src/game/stadium.cpp
+    src/game/stadium_actions.cpp
+    src/game/youth.cpp
+    src/game/youth_actions.cpp
+    src/game/youth_progress.cpp
+    src/game/youth_intake.cpp
+    src/game/annual_players.cpp
+    src/game/annual_distribution.cpp
+    src/game/sale_quote.cpp
+    src/game/save_history.cpp
     src/game/game.cpp
+    src/game/lineup.cpp
     src/game/match.cpp
+    src/game/national_team.cpp
+    src/game/native_roster.cpp
+    src/game/purchase.cpp
+    src/game/reporting.cpp
+    src/game/penalties.cpp
     src/game/schedule.cpp
     src/game/scorers.cpp
     src/game/transfers.cpp
@@ -64,6 +81,8 @@ add_library(em_game STATIC
     src/game/season_end.cpp
     src/game/sponsors.cpp
     src/game/training.cpp
+    src/game/tactics.cpp
+    src/game/team_refresh.cpp
     src/game/injuries.cpp)
 target_link_libraries(em_game PUBLIC em_formats)
 
@@ -75,12 +94,223 @@ target_link_libraries(em_dump PRIVATE em_formats em_game)
 add_executable(em_view src/tools/em_view.cpp)
 target_link_libraries(em_view PRIVATE em_formats ${EM_SDL_TARGET})
 
+# The frontend uses the original graphics, fonts and native320x240 coordinates.
+add_library(em_frontend STATIC src/ui/session.cpp src/ui/save_io.cpp)
+target_link_libraries(em_frontend PUBLIC em_game)
+add_library(em_classic STATIC
+    src/ui/classic_canvas.cpp
+    src/ui/classic_font.cpp
+    src/ui/classic_graph.cpp
+    src/ui/classic_status.cpp
+    src/ui/classic_totals.cpp
+    src/ui/classic_roster.cpp
+    src/ui/classic_bank.cpp
+    src/ui/classic_lineup.cpp
+    src/ui/classic_tactics.cpp
+    src/ui/classic_transfer.cpp
+    src/ui/classic_player.cpp
+    src/ui/classic_preview.cpp
+    src/ui/classic_opponent.cpp
+    src/ui/classic_hover.cpp
+    src/ui/classic_transfer_hover.cpp
+    src/ui/classic_strengths.cpp
+    src/ui/classic_club_info.cpp
+    src/ui/classic_team_schedule.cpp
+    src/ui/classic_cup.cpp
+    src/ui/classic_euro.cpp
+    src/ui/classic_wm.cpp
+    src/ui/classic_league_fixtures.cpp
+    src/ui/classic_playoff.cpp
+    src/ui/classic_advertising.cpp
+    src/ui/classic_stadium.cpp
+    src/ui/classic_youth.cpp)
+target_link_libraries(em_classic PUBLIC em_game)
+
+option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
+if(EM_BUILD_GUI)
+    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp)
+    target_link_libraries(em_classic_app PUBLIC em_frontend em_classic ${EM_SDL_TARGET})
+    add_executable(openem WIN32 src/ui/classic_main.cpp)
+    target_link_libraries(openem PRIVATE em_classic_app)
+    add_executable(em_classic_app_tests tests/classic_app_tests.cpp)
+    target_link_libraries(em_classic_app_tests PRIVATE em_classic_app)
+    add_executable(em_classic_raster_tests tests/classic_raster_tests.cpp)
+    target_link_libraries(em_classic_raster_tests PRIVATE em_classic_app)
+endif()
+
 enable_testing()
 add_executable(em_format_tests tests/format_tests.cpp)
 target_link_libraries(em_format_tests PRIVATE em_formats em_game)
 add_test(NAME formats_unit COMMAND em_format_tests)
+add_executable(em_ui_tests tests/ui_tests.cpp)
+target_link_libraries(em_ui_tests PRIVATE em_frontend)
+add_executable(em_classic_tests tests/classic_tests.cpp)
+add_executable(em_stock_tests tests/stock_tests.cpp)
+target_link_libraries(em_stock_tests PRIVATE em_game)
+add_executable(em_lineup_action_tests tests/lineup_action_tests.cpp)
+target_link_libraries(em_lineup_action_tests PRIVATE em_game)
+add_test(NAME lineup_actions COMMAND em_lineup_action_tests)
+add_executable(em_tactics_tests tests/tactics_tests.cpp)
+target_link_libraries(em_tactics_tests PRIVATE em_game)
+add_test(NAME tactics_actions COMMAND em_tactics_tests)
+add_executable(em_classic_opponent_tests tests/classic_opponent_tests.cpp)
+target_link_libraries(em_classic_opponent_tests PRIVATE em_classic)
+add_test(NAME classic_opponent COMMAND em_classic_opponent_tests)
+add_executable(em_native_roster_tests tests/native_roster_tests.cpp)
+target_link_libraries(em_native_roster_tests PRIVATE em_game)
+add_test(NAME native_roster COMMAND em_native_roster_tests)
+add_executable(em_purchase_tests tests/purchase_tests.cpp)
+target_link_libraries(em_purchase_tests PRIVATE em_game)
+add_executable(em_team_refresh_tests tests/team_refresh_tests.cpp)
+target_link_libraries(em_team_refresh_tests PRIVATE em_game)
+add_executable(em_reporting_tests tests/reporting_tests.cpp)
+target_link_libraries(em_reporting_tests PRIVATE em_game)
+add_executable(em_advertising_actions_tests tests/advertising_actions_tests.cpp)
+target_link_libraries(em_advertising_actions_tests PRIVATE em_game)
+add_executable(em_classic_hover_tests tests/classic_hover_tests.cpp)
+target_link_libraries(em_classic_hover_tests PRIVATE em_classic)
+add_executable(em_classic_transfer_hover_tests tests/classic_transfer_hover_tests.cpp)
+target_link_libraries(em_classic_transfer_hover_tests PRIVATE em_classic)
+add_executable(em_classic_strengths_tests tests/classic_strengths_tests.cpp)
+target_link_libraries(em_classic_strengths_tests PRIVATE em_classic)
+add_executable(em_classic_club_info_tests tests/classic_club_info_tests.cpp)
+target_link_libraries(em_classic_club_info_tests PRIVATE em_classic)
+add_executable(em_classic_team_schedule_tests tests/classic_team_schedule_tests.cpp)
+target_link_libraries(em_classic_team_schedule_tests PRIVATE em_classic)
+add_executable(em_classic_cup_tests tests/classic_cup_tests.cpp)
+target_link_libraries(em_classic_cup_tests PRIVATE em_classic)
+add_executable(em_classic_euro_tests tests/classic_euro_tests.cpp)
+target_link_libraries(em_classic_euro_tests PRIVATE em_classic)
+add_executable(em_classic_wm_tests tests/classic_wm_tests.cpp)
+target_link_libraries(em_classic_wm_tests PRIVATE em_classic)
+add_executable(em_classic_league_fixtures_tests tests/classic_league_fixtures_tests.cpp)
+target_link_libraries(em_classic_league_fixtures_tests PRIVATE em_classic)
+add_executable(em_classic_promotion_tests tests/classic_promotion_tests.cpp)
+target_link_libraries(em_classic_promotion_tests PRIVATE em_classic)
+add_executable(em_classic_playoff_tests tests/classic_playoff_tests.cpp)
+target_link_libraries(em_classic_playoff_tests PRIVATE em_classic)
+add_executable(em_classic_advertising_tests tests/classic_advertising_tests.cpp)
+target_link_libraries(em_classic_advertising_tests PRIVATE em_classic)
+add_executable(em_stadium_actions_tests tests/stadium_actions_tests.cpp)
+target_link_libraries(em_stadium_actions_tests PRIVATE em_game)
+add_executable(em_classic_stadium_tests tests/classic_stadium_tests.cpp)
+target_link_libraries(em_classic_stadium_tests PRIVATE em_classic)
+add_executable(em_youth_actions_tests tests/youth_actions_tests.cpp)
+target_link_libraries(em_youth_actions_tests PRIVATE em_game)
+add_executable(em_youth_progress_tests tests/youth_progress_tests.cpp)
+target_link_libraries(em_youth_progress_tests PRIVATE em_game)
+add_executable(em_youth_intake_tests tests/youth_intake_tests.cpp)
+target_link_libraries(em_youth_intake_tests PRIVATE em_game)
+add_executable(em_annual_players_tests tests/annual_players_tests.cpp)
+target_link_libraries(em_annual_players_tests PRIVATE em_game)
+add_executable(em_annual_distribution_tests tests/annual_distribution_tests.cpp)
+target_link_libraries(em_annual_distribution_tests PRIVATE em_game)
+if(TARGET em_frontend)
+    add_executable(em_stadium_game_tests tests/stadium_game_tests.cpp)
+    target_link_libraries(em_stadium_game_tests PRIVATE em_frontend)
+endif()
+if(TARGET em_classic_app)
+    add_executable(em_stadium_input_tests tests/stadium_input_tests.cpp)
+    target_link_libraries(em_stadium_input_tests PRIVATE em_classic_app)
+    add_executable(em_youth_input_tests tests/youth_input_tests.cpp)
+    target_link_libraries(em_youth_input_tests PRIVATE em_classic_app)
+    add_executable(em_sale_quote_tests tests/sale_quote_tests.cpp)
+    target_link_libraries(em_sale_quote_tests PRIVATE em_classic_app)
+    add_executable(em_save_history_tests tests/save_history_tests.cpp)
+    target_link_libraries(em_save_history_tests PRIVATE em_classic_app)
+endif()
+target_link_libraries(em_classic_tests PRIVATE em_classic)
 # Reference saves made with the original in DOSBox-X (see work/README.md)
 set(EM_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/EM" CACHE PATH "Directory with reference savegames (START/TAG1/MONAT1.HOK)")
 if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME formats_original_kb COMMAND em_format_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME ui_session COMMAND em_ui_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/ui-test-work")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/nativepurchase-cancel.hok")
+        add_test(NAME purchase_dialog COMMAND em_purchase_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
+        add_test(NAME team_refresh COMMAND em_team_refresh_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
+        add_test(NAME reporting COMMAND em_reporting_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/advertising-monat1-accepted.hok")
+            add_test(NAME advertising_actions COMMAND em_advertising_actions_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
+        endif()
+    endif()
+    add_test(NAME classic_graphics COMMAND em_classic_tests "${EM_DATA}")
+    add_test(NAME classic_hover COMMAND em_classic_hover_tests "${EM_DATA}")
+    add_test(NAME classic_transfer_hover COMMAND em_classic_transfer_hover_tests "${EM_DATA}")
+    add_test(NAME classic_strengths COMMAND em_classic_strengths_tests "${EM_REFERENCE}")
+    add_test(NAME classic_club_info COMMAND em_classic_club_info_tests "${EM_REFERENCE}")
+    add_test(NAME classic_team_schedule COMMAND em_classic_team_schedule_tests "${EM_REFERENCE}")
+    add_test(NAME classic_cup COMMAND em_classic_cup_tests "${EM_REFERENCE}")
+    add_test(NAME classic_euro COMMAND em_classic_euro_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_wm COMMAND em_classic_wm_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_league_fixtures COMMAND em_classic_league_fixtures_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_promotion COMMAND em_classic_promotion_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_playoff COMMAND em_classic_playoff_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_advertising COMMAND em_classic_advertising_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME stadium_actions COMMAND em_stadium_actions_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME classic_stadium COMMAND em_classic_stadium_tests "${EM_DATA}" "${EM_REFERENCE}")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103/youth-reduced.hok")
+        add_test(NAME youth_actions COMMAND em_youth_actions_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103")
+        add_test(NAME youth_progress COMMAND em_youth_progress_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103/youth_progress/scripted.vectors")
+        add_test(NAME youth_intake COMMAND em_youth_intake_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103/youth_intake/scripted.vectors")
+        add_test(NAME annual_players COMMAND em_annual_players_tests "${EM_REFERENCE}" "${EM_DATA}")
+        add_test(NAME annual_distribution COMMAND em_annual_distribution_tests "${EM_REFERENCE}")
+        if(TARGET em_youth_input_tests)
+            add_test(NAME youth_input COMMAND em_youth_input_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103")
+            add_test(NAME save_history COMMAND em_save_history_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/token_20261103" "${CMAKE_CURRENT_BINARY_DIR}/save-history-work")
+        endif()
+    endif()
+    if(TARGET em_stadium_game_tests AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/evening_20261103/stadium-h2-accepted-condition.hok")
+        add_test(NAME stadium_game COMMAND em_stadium_game_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/evening_20261103")
+        if(TARGET em_stadium_input_tests)
+            add_test(NAME stadium_input COMMAND em_stadium_input_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/evening_20261103")
+        endif()
+    endif()
+    if(TARGET em_sale_quote_tests AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/menu_20261104/native-club-sold.hok")
+        add_test(NAME sale_quote COMMAND em_sale_quote_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/menu_20261104" "${CMAKE_CURRENT_BINARY_DIR}/sale-quote-work")
+    endif()
+    add_test(NAME stock_actions COMMAND em_stock_tests "${EM_DATA}" "${EM_REFERENCE}")
+    if(EM_BUILD_GUI)
+        add_test(NAME classic_input COMMAND em_classic_app_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
+        set(EM_CLASSIC_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/raster_goldens" CACHE PATH "Native DOSBox RGB reference captures")
+        if(EXISTS "${EM_CLASSIC_REFERENCE}/main-start.rgb")
+            add_test(NAME classic_raster COMMAND em_classic_raster_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_CLASSIC_REFERENCE}")
+        endif()
+    endif()
+endif()
+
+# REAL-CODE differential harness: original EM.EXE routines run in a Unicorn x86 emulator and are compared
+# with the C++ rules (docs/REALCODE.md). Off by default; Unicorn is fetched at configure time.
+option(EM_REALCODE "Build the Unicorn-based REAL-CODE differential tests" OFF)
+if(EM_REALCODE AND IS_DIRECTORY "${EM_DATA}")
+    include(FetchContent)
+    set(UNICORN_ARCH "x86" CACHE STRING "" FORCE)
+    set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(unicorn
+        GIT_REPOSITORY https://github.com/unicorn-engine/unicorn.git
+        GIT_TAG 2.1.3
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(unicorn)
+    add_library(em_realcode STATIC src/realcode/exe_image.cpp src/realcode/cpu.cpp)
+    target_include_directories(em_realcode PUBLIC src ${unicorn_SOURCE_DIR}/include)
+    target_link_libraries(em_realcode PUBLIC em_formats unicorn)
+    add_executable(em_realcode_tests tests/realcode_tests.cpp)
+    target_link_libraries(em_realcode_tests PRIVATE em_realcode em_game)
+    target_compile_definitions(em_realcode_tests PRIVATE EM_DATA_DIR="${EM_DATA}")
+    add_test(NAME realcode COMMAND em_realcode_tests "${EM_DATA}")
+    add_executable(em_realcode_rng_tests tests/realcode_rng_tests.cpp)
+    target_link_libraries(em_realcode_rng_tests PRIVATE em_realcode em_game)
+    target_compile_definitions(em_realcode_rng_tests PRIVATE EM_DATA_DIR="${EM_DATA}")
+    add_test(NAME realcode_rng COMMAND em_realcode_rng_tests "${EM_DATA}")
+endif()
+if(TARGET em_realcode)
+    add_executable(em_realcode_probe tests/realcode_probe.cpp)
+    target_link_libraries(em_realcode_probe PRIVATE em_realcode em_game)
+    target_include_directories(em_realcode_probe PRIVATE tests)
+endif()
+if(TARGET em_realcode)
+    add_executable(em_realcode_match_tests tests/realcode_match_tests.cpp)
+    target_link_libraries(em_realcode_match_tests PRIVATE em_realcode em_game)
+    add_test(NAME realcode_match COMMAND em_realcode_match_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
 endif()

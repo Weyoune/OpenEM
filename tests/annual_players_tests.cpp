@@ -102,7 +102,9 @@ int main(int argc,char** argv){try{
             for(int day=0;day<20&&game.seasons_completed()==0;++day)game.advance_day();
             require(game.seasons_completed()==1,"annual manager review reaches September");
             const auto saved=decode_hok(game.save_bytes());
-            require(saved.state.at(0x4fa5+size_t(leaves)*33+0x1a)==6,"years1 plus career flag leaves before contract talk");
+            // 6 = free player; 4 = the same player listed again by the daily transfer-list refresh on the same day
+            // (ovl11_34ef; seed 3 after the RNG fixes of 05.11.2026, see docs/DEVIATIONS.md).
+            require(saved.state.at(0x4fa5+size_t(leaves)*33+0x1a)==6||saved.state.at(0x4fa5+size_t(leaves)*33+0x1a)==4,"years1 plus career flag leaves before contract talk");
             require(saved.players.at(size_t(leaves-1)).team==game.human_team(),"career departure preserves old global club");
             const auto wrap_row=native_find_roster_player(saved,wraps);
             require(wrap_row&&wrap_row->manager==0&&saved.state.at(0x696d+size_t(wrap_row->slot)*52+11)==255&&target_talks==0,"zero-year byte wraps255 and both special rows bypass renewal talks");

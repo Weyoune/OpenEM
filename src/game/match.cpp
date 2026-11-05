@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/match.hpp"
+#include "game/penalties.hpp"
+#include "game/scorers.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -12,10 +14,12 @@ constexpr int kModeWeight[3][2] = {{85, 15}, {50, 50}, {25, 75}};
 // DS:4948: goal range of the stronger side by strength difference 0..19
 constexpr int kGoalRange[20] = {2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4};
 
-int clamp_byte(int v) { return std::clamp(v, 0, 255); }  // ovl12_0c45 (assumed: byte range)
+int clamp_line(int v) { return std::clamp(v, 0, 100); }  // 162c:1bce..1c1b, explicit 0/100 bounds
 
 // ovl06_134f: half the time the larger of two rolls, otherwise the second one
-int better_of(int a, int b, GameRandom& rng) { return rng.range(0, 1) == 0 ? b : std::max(a, b); }
+int better_of(int a, int b, GameRandom& rng) {
+    const long coin = rng.borland ? rng.borland->range(0, 1) : rng.range(0, 1);
+    return coin == 0 ? b : std::max(a, b); }
 
 int offence_bonus(const HokTeam& t, GameRandom& rng) {
     int r = int(rng.range((t.flags & 0x70) >> 4, 7));
@@ -25,7 +29,42 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 
 long GameRandom::range(long lo, long hi) {
     s_ = uint32_t((uint64_t(s_) * 16 + 167) % kModulus);
-    return lo + long(int64_t(s_) * (hi - lo + 1) / kModulus);
+    // 32-bit signed product that wraps like the original (REAL-CODE test): negative results appear when
+    // state * (hi - lo + 1) exceeds 2^31, i.e. for ranges above roughly 540 at high states.
+    const int32_t product = int32_t(uint32_t(s_) * uint32_t(int32_t(hi - lo + 1)));
+    return lo + long(product / int32_t(kModulus));
+}
+
+void configure_human_tactics(HumanSquad& human, const HokFile& save, int manager) {
+    if (manager < 0 || manager >= kHokManagers) throw FormatError("HOK: invalid tactics manager");
+    human.effort_control = save.state.at(0x01FF + size_t(manager));
+    human.offence_control = save.state.at(0x01F3 + size_t(manager));
+    human.line_control = save.state.at(0x01F9 + size_t(manager));
+    for (size_t kind = 0; kind < 2; kind++)
+        for (size_t line = 0; line < 4; line++)
+            human.line_quotas[kind][line] = save.state.at(0x025B + size_t(manager) * 8 + kind * 4 + line);
+}
+
+void refresh_line_energy(HokTeam& team, const HumanSquad& human) {
+    int remaining[2][4], sum[2][4];
+    for (int kind = 0; kind < 2; kind++)
+        for (int line = 0; line < 4; line++) {
+            remaining[kind][line] = human.per_line[kind];
+            sum[kind][line] = human.per_line[kind] < 2 ? 0 : (3 - human.per_line[kind]) * 90;
+        }
+    const auto& squad = *human.squad;
+    const auto end = squad.begin() + std::min(size_t(29), squad.size());
+    const size_t occupied = size_t(std::count_if(squad.begin(), end, [](const auto& p) { return p.player >= 0; }));
+    for (size_t slot = 0; slot < occupied; slot++) {
+        const auto& p = squad[slot];
+        const int line = (p.line & 0x7F) - 1, kind = (p.line & 0x80) != 0;
+        if (p.player < 0 || p.role == 0 || line < 0 || line >= 4 ||
+            human.players->at(size_t(p.player)).position == 0 || remaining[kind][line] == 0) continue;
+        remaining[kind][line]--;
+        sum[kind][line] += p.fitness;
+    }
+    for (int kind = 0; kind < 2; kind++)
+        for (int line = 0; line < 4; line++) team.energy[kind][line] = uint8_t(sum[kind][line] / 3);
 }
 
 LineValues line_strength(const HokTeam& t, int line, int kind, bool in_play, int man_advantage) {
@@ -40,9 +79,9 @@ LineValues line_strength(const HokTeam& t, int line, int kind, bool in_play, int
         v.skill2 = v.skill2 * ((t.energy[kind][line] >> 2) + 75) / 100;
         v.skill1 -= (100 - t.effort_current * v.skill1 / 100) / 4;
     }
-    v.skill1 = clamp_byte(v.skill1);
-    v.skill2 = clamp_byte(v.skill2);
-    v.form = clamp_byte(v.form);
+    v.skill1 = clamp_line(v.skill1);
+    v.skill2 = clamp_line(v.skill2);
+    v.form = clamp_line(v.form);
     return v;
 }
 
@@ -60,10 +99,8 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
         const bool member = (((p.line - 1) & 0x7F) == line && (p.line >> 7) == kind) || goalie;
         if (!member) continue;
         if (count >= hs.per_line[kind] && in_play) continue;
-        // +0x23 is the player energy (90 = fresh, lower after playing); 0 in a savegame from before the
-        // first match means "not set yet" and is taken as fresh (assumption, MONAT1 shows 90 for rested
-        // players)
-        const int energy = p.fitness == 0 ? 90 : p.fitness;
+        // +0x1B is energy, prepared once before the game. Zero during play is exhausted.
+        const int energy = p.fitness;
         const int m = (in_play && !goalie) ? (energy >> 1) + 50 : 100;
         hi_nibbles += p.nibbles >> 4;
         lo_nibbles += p.nibbles & 0x0F;
@@ -76,7 +113,9 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
         f += p.form;
         if (!goalie) count++;
     }
-    if (hs.per_line[kind] == 4) s2 = kind == 0 ? 0 : s2 + (s2 >> 1);
+    //162C:1A8B and1AA9 both read the defence cacheCC37, including
+    //the attack bonus. Four attackers alone do not select this rule.
+    if (hs.per_line[0] == 4) s2 = kind == 0 ? 0 : s2 + (s2 >> 1);
     s1 /= 3;
     s2 /= 3;
     f /= 3;
@@ -88,7 +127,7 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
     if (!goalie_found && in_play && kind == 0 && man_advantage < 1) s1 = s2 = 0;  // empty net
     if (kind != 0 && man_advantage > 0 && s2 != 0) s2 += hi_nibbles + (man_advantage - 1) * 16;
     if (in_play) s1 -= (100 - t.effort_current * s1 / 100) / 4;
-    return {clamp_byte(s1), clamp_byte(s2), clamp_byte(f)};
+    return {clamp_line(s1), clamp_line(s2), clamp_line(f)};
 }
 
 int playing_strength(const HokTeam& t, const HumanSquad* human, StrengthMode mode, int minute, int man_advantage,
@@ -164,7 +203,9 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
         away = 0;
         if (sh > 20) home = 9;
     }
-    if (special || minute > 60) {
+    // The whole-match call (0, 60) ignores DS:76B2 (REAL-CODE test, all values 0..11); halving applies to
+    // the per-minute and overtime calls only.
+    if ((special && !whole) || minute > 60) {
         if (sh != 0) home = home / 2 + 1;
         if (sa != 0) away = away / 2 + 1;
     }
@@ -215,17 +256,9 @@ int situation_of(int own, int opp) {
     return kNarrowDeficit;
 }
 
-// Energy of a line: computer teams keep it in the team record, a human team in its players
-// (squad +0x23); ovl14 writes the players' mean back into the record (FUN_162c_0737).
-int line_energy(const HokTeam& t, const std::vector<HokSquadPlayer>* squad, int kind, int line) {
-    if (!squad) return t.energy[kind][line];
-    int sum = 0, n = 0;
-    for (const HokSquadPlayer& p : *squad)
-        if (p.role != 0 && p.line != 0 && ((p.line - 1) & 0x7F) == line && (p.line >> 7) == kind) {
-            sum += p.fitness == 0 ? 90 : p.fitness;
-            n++;
-        }
-    return n ? sum / n : 90;
+// Both branches read the cache that 0737 refreshes after updating fitness.
+int line_energy(const HokTeam& t, const std::vector<HokSquadPlayer>*, int kind, int line) {
+    return t.energy[kind][line];
 }
 
 // FUN_162c_0737: one minute of energy - the lines on the ice lose
@@ -240,32 +273,47 @@ int drain(const HokTeam& t, int shift, GameRandom& rng) {
 }
 
 void energy_minute(HokTeam& t, std::vector<HokSquadPlayer>* squad, GameRandom& rng) {
-    for (int kind = 0; kind < 2; kind++) {
-        const int on_ice = t.current_line[kind];
-        t.shift[kind]++;
-        if (!squad) {
+    if (!squad) {
+        for (int kind = 0; kind < 2; kind++) {
+            const int on_ice = t.current_line[kind];
+            t.shift[kind] = uint8_t(t.shift[kind] + 1);
             for (int line = 0; line < 4; line++) {
                 int& e = t.energy[kind][line];
                 if (line == on_ice) {
-                    e = std::clamp(e - drain(t, t.shift[kind], rng), 0, 255);
+                    e = std::clamp(e - drain(t, t.shift[kind], rng), 1, 99);
                 } else if (e < 90) {
                     int bonus = (rng.range(0, 4) == 0 && t.skill1[kind] > rng.range(0, 100)) ? 1 : 0;
                     e += 1 + bonus;
                 }
             }
-            continue;
         }
-        for (HokSquadPlayer& p : *squad) {  // human branch: the players carry the energy
-            if (p.role == 0 || (p.line >> 7) != kind) continue;
-            int e = p.fitness == 0 ? 90 : p.fitness;
-            if (p.line != 0 && ((p.line - 1) & 0x7F) == on_ice) {
-                e = std::clamp(e - drain(t, t.shift[kind], rng), 0, 255);
-            } else if (e < 90) {
-                int bonus = (rng.range(0, 4) == 0 && p.skill_a > rng.range(0, 100)) ? 1 : 0;
-                e += 1 + bonus;
+        return;
+    }
+    // Native walks the packed occupied prefix once, in squad-slot order. Each
+    // kind's shift advances only when its first on-ice player is encountered.
+    bool advanced[2] = {};
+    const auto end = squad->begin() + std::min(size_t(29), squad->size());
+    const size_t occupied = size_t(std::count_if(squad->begin(), end, [](const auto& p) { return p.player >= 0; }));
+    for (size_t slot = 0; slot < occupied; slot++) {
+        HokSquadPlayer& p = (*squad)[slot];
+        if (p.player < 0 || p.role == 0) continue;
+        const int kind = (p.line >> 7) & 1;
+        int e = p.fitness;
+        if (p.line != 0 && ((p.line - 1) & 0x7F) == t.current_line[kind]) {
+            if (!advanced[kind]) {
+                t.shift[kind] = uint8_t(t.shift[kind] + 1);
+                advanced[kind] = true;
             }
-            p.fitness = e;
+            if (rng.range(0, 4 + (p.skill_b < p.skill_a)) == 0) {
+                p.raw_exhaustion = uint8_t(p.raw_exhaustion + 1);
+                p.exhaustion = p.raw_exhaustion * 2 / 3;
+            }
+            e = std::clamp(e - drain(t, t.shift[kind], rng), 1, 99);
+        } else if (e < 90) {
+            int bonus = (rng.range(0, 4) == 0 && p.skill_a > rng.range(0, 100)) ? 1 : 0;
+            e += 1 + bonus;
         }
+        p.fitness = e;
     }
 }
 
@@ -274,137 +322,166 @@ void energy_minute(HokTeam& t, std::vector<HokSquadPlayer>* squad, GameRandom& r
 // second freshest if the freshest is already playing); mode 3 follows the opponent's line of the
 // other kind unless that is line 3; mode 0 (all computer teams in the saves) never changes.
 // The original also compares "energy + 4 < best line" - a line index, so it never fires.
-void change_lines(HokTeam& t, const HokTeam& opp, const std::vector<HokSquadPlayer>* squad) {
+bool has_fourth_line(const HumanSquad* human, int kind) {
+    if (!human) return false;
+    const auto& squad = *human->squad;
+    const auto end = squad.begin() + std::min(size_t(29), squad.size());
+    const size_t occupied = size_t(std::count_if(squad.begin(), end, [](const auto& p) { return p.player >= 0; }));
+    for (size_t slot = 0; slot < occupied; slot++)
+        if (squad[slot].player >= 0 && squad[slot].role != 0 && squad[slot].line == 4 + kind * 128) return true;
+    return false;
+}
+
+void change_lines(HokTeam& t, const HokTeam& opp, const HumanSquad* human, LineRotation& rotation) {
+    if (human && human->line_control == 5) return;  // native manual/live control
+    if (human && human->line_control != 0) t.flags = (t.flags & 0xF8) | human->line_control;
     const int mode = t.flags & 7;
+    const auto* squad = human ? human->squad : nullptr;
     for (int kind = 0; kind < 2; kind++) {
-        if (kind == 0 && (t.flags & 0x08)) continue;  // goalkeeper pulled
-        int next = t.current_line[kind];
-        if (mode == 1 || mode == 2 || mode == 4) {
-            if (t.shift[kind] > 3) {
-                const int lines = mode == 1 ? 2 : 3;
-                int best = 0, second = 1;
-                for (int l = 1; l < lines; l++) {
-                    if (line_energy(t, squad, kind, l) > line_energy(t, squad, kind, best)) {
-                        second = best;
-                        best = l;
-                    } else if (second == best || line_energy(t, squad, kind, l) > line_energy(t, squad, kind, second)) {
-                        second = l;
-                    }
-                }
-                next = t.current_line[kind] == best ? second : best;
+        if (kind == 0 && (t.flags & 0x08)) continue;
+        const int current = t.current_line[kind];
+        int next = current;
+        const int lines = mode == 1 ? 2 : 3 + int(has_fourth_line(human, kind));
+        int best = 0, second = 1;
+        for (int line = 1; line < lines; line++) {
+            if (line_energy(t, squad, kind, line) > line_energy(t, squad, kind, best)) {
+                second = best; best = line;
+            } else if (second == best || line_energy(t, squad, kind, line) > line_energy(t, squad, kind, second)) {
+                second = line;
             }
+        }
+        if (mode == 1 || mode == 2) {
+            if (line_energy(t, squad, kind, current) + 4 < best || t.shift[kind] > 3)
+                next = current == best ? second : best;
         } else if (mode == 3) {
             next = opp.current_line[1 - kind];
-            if (next == 3) next = 0;
+            if (next == 3 || line_energy(t, squad, kind, next) + 8 < best) next = best;
+        } else if (mode == 4 && human) {
+            uint8_t& used = rotation.used[size_t(kind)][size_t(current)];
+            used = uint8_t(used + 1);
+            if (used > human->line_quotas[size_t(kind)][size_t(current)]) {
+                used = 0;
+                for (int tries = 0; tries <= 250; tries++) {
+                    if (++next >= lines) next = 0;
+                    if (human->line_quotas[size_t(kind)][size_t(next)] != 0) break;
+                }
+            }
         }
-        if (next != t.current_line[kind]) {
-            t.current_line[kind] = next;
-            t.shift[kind] = 0;
-        }
+        if (next != current) t.shift[kind] = 0;
+        t.current_line[kind] = next;
     }
 }
-
-// Penalties of one side (team record +0x33: two 3-bit timers, bit 3 = major).
-struct PenaltyBox {
-    int minutes[2] = {};
-    bool major[2] = {};
-    int running() const { return (minutes[0] != 0) + (minutes[1] != 0); }
+struct PenaltySide {
+    HokTeam& team;
+    PenaltyBox& box;
+    std::vector<HokSquadPlayer>* squad;
+    const HumanSquad* human;
+    BorlandRandom& selection_rng;
+    MatchStats* stats;
+    int side;
 };
 
-// ovl06_0000(team, 1): one minute passes; an expiring penalty frees the player (ovl06_0151).
-int tick_penalties(PenaltyBox& box, HokTeam& t) {
-    int running = 0;
-    for (int s = 0; s < 2; s++) {
-        if (box.minutes[s] == 0) continue;
-        running++;
-        if (--box.minutes[s] == 0) {
-            box.major[s] = false;
-            t.skaters++;
-            running--;
-        }
+// ovl06_02d8: the paired call also ticks its side, as in the original.
+bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRandom& rng) {
+    const int running = side.box.tick(side.team, side.squad);
+    if (running > 1) return false;
+    const int effort = side.human ? std::clamp(side.team.effort_current + side.human->penalty_effort_adjustment,
+                                               0, 100) : side.team.effort_current;
+    if (rng.range(0, 12) != 0 && rng.range(0, 110 - effort) != 0) return false;
+    if (side.squad && std::count_if(side.squad->begin(), side.squad->begin() + std::min(size_t(29), side.squad->size()), [](const auto& p) {
+            return p.player >= 0 && p.role != 0 && p.line != 0;
+        }) <= 7) return false;  // ovl12_0d27(manager, 1): protect a depleted human lineup
+    const bool major = running == 0 && rng.range(0, 15) == 0;
+    const bool pair = may_pair && rng.range(0, 3) == 0 && running == 0;
+    // The original books opportunities before attempting to select the player.
+    const int token = side.stats ? side.stats->record(side.side, side.team.skaters - 1,
+        other.team.skaters, side.human != nullptr, other.human != nullptr) : -1;
+    int slot = -1;
+    bool selection_failed = false;
+    if (side.human) {
+        slot = pick_penalized_player(side.team, *side.squad, *side.human->players, side.selection_rng);
+        selection_failed = slot < 0;
+        if (slot >= 0 && side.human->players->at(size_t(side.squad->at(size_t(slot)).player)).position == 0)
+            slot = -1;  // the team penalty remains, but goalkeepers receive no personal counter
     }
-    if (box.minutes[0] == 0 && box.minutes[1] != 0) {  // the later penalty moves up
-        std::swap(box.minutes[0], box.minutes[1]);
-        std::swap(box.major[0], box.major[1]);
-    }
-    return running;
-}
-
-// ovl06_02d8(team, other, ...): maybe a penalty for `t`; with 1 in 4 the other side gets one too.
-void penalty_minute(HokTeam& t, PenaltyBox& box, HokTeam& other, PenaltyBox& other_box, bool may_pair,
-                    GameRandom& rng) {
-    const int running = tick_penalties(box, t);
-    if (running > 1) return;
-    if (rng.range(0, 12) != 0 && rng.range(0, 110 - t.effort_current) != 0) return;
-    bool major = false;
-    if (running == 0 && rng.range(0, 15) == 0) major = true;  // code 13 = 5 minutes + major bit
-    t.skaters--;
-    box.minutes[running] = major ? 5 : 2;
-    box.major[running] = major;
-    if (may_pair && rng.range(0, 3) == 0 && running == 0) penalty_minute(other, other_box, t, box, false, rng);
-}
-
-// ovl06_0000(team, 0) + ovl06_0151: a goal against ends the first minor penalty.
-void goal_against(HokTeam& t, PenaltyBox& box) {
-    for (int s = 0; s < 2; s++)
-        if (box.minutes[s] != 0 && !box.major[s]) {
-            box.minutes[s] = 0;
-            t.skaters++;
-            if (s == 0 && box.minutes[1] != 0) {
-                std::swap(box.minutes[0], box.minutes[1]);
-                std::swap(box.major[0], box.major[1]);
-            }
-            return;
-        }
+    side.box.start(side.team, major, slot, side.squad);
+    if (selection_failed) return false;  // native sentinel aborts the paired call after the team penalty
+    if (pair && !penalty_minute(other, side, false, rng) && side.stats) side.stats->rollback(token);
+    return true;
 }
 }  // namespace
 
 void apply_effort(HokTeam& t, int own, int opp) { apply_effort(t, own, opp, nullptr); }
 
-void apply_effort(HokTeam& t, int own, int opp, const std::vector<HokSquadPlayer>* squad) {
+void apply_effort(HokTeam& t, int own, int opp, const std::vector<HokSquadPlayer>* squad,
+                  int effort_control, int offence_control) {
     const int situation = situation_of(own, opp);
     int effort = t.effort_base + t.effort[situation];
     const int energy = (line_energy(t, squad, 0, t.current_line[0]) + line_energy(t, squad, 1, t.current_line[1])) >> 1;
     if (energy < 50) effort += energy - 50;
-    t.effort_current = std::clamp(effort, 0, 100);
-    t.flags = (t.flags & 0x8F) | (((t.offence_base + t.offence[situation]) << 4) & 0x70);
+    if (effort_control != 2) t.effort_current = std::clamp(effort, 0, 100);
+    if (offence_control < 2)
+        t.flags = (t.flags & 0x8F) | (((t.offence_base + t.offence[situation]) << 4) & 0x70);
 }
 
-void setup_computer_team(HokTeam& t, const HokTeam& opp) {
+void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human, const HumanSquad* opponent_human) {
     // FUN_162c_02a5: neutral strengths (doubled) decide; tables DS:4912 (effort per situation) and
     // DS:491C (offence per situation)
     static constexpr int kEffortTable[2][kTacticSituations] = {{0, 25, 20, 30, 0}, {20, 20, 15, 20, 0}};
     static constexpr int kOffenceTable[2][kTacticSituations] = {{5, 6, 4, 4, 0}, {4, 5, 6, 7, 4}};
-    const int own = playing_strength(t, StrengthMode::Neutral, 0, 0) * 2;
-    const int other = playing_strength(opp, StrengthMode::Neutral, 0, 0) * 2;
+    const int own = playing_strength(t, human, StrengthMode::Neutral, 0, 0) * 2;
+    const int other = playing_strength(opp, opponent_human, StrengthMode::Neutral, 0, 0) * 2;
     const bool stronger = other <= own;
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);
     const bool close = std::abs(own - other) < 25;
+    const bool automatic_effort = !human || human->effort_control == 0;
+    const bool automatic_offence = !human || human->offence_control == 0;
     for (int s = 0; s < kTacticSituations; s++) {
-        t.effort[s] = kEffortTable[close ? 0 : 1][s];
-        t.offence[s] = kOffenceTable[stronger ? 1 : 0][s];
+        if (automatic_effort) t.effort[s] = kEffortTable[close ? 0 : 1][s];
+        if (automatic_offence) t.offence[s] = kOffenceTable[stronger ? 1 : 0][s];
     }
-    t.effort_base = t.effort_current = close ? 60 : 40;
-    t.offence_base = 0;
+    if (automatic_effort) t.effort_base = t.effort_current = close ? 60 : 40;
+    if (automatic_offence) t.offence_base = 0;
     t.flags &= ~0x08;
     t.skaters = 5;
 }
 
-// Penalty shoot-out of a drawn knock-out match (ovl06_161d quick path): both sides add rand(0, 2)
-// until the totals differ; the original marks the home value with +30.
-void shootout(MatchResult& r, GameRandom& rng) {
-    int x, y;
-    do {
-        x = int(rng.range(0, 2));
-        y = int(rng.range(0, 2));
-    } while (r.home + x == r.away + y);
+// Penalty decisions: ovl06_161d quick path and ovl06_3adb after a full minute game.
+void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool human = false) {
+    int x = 0, y = 0;
+    if (minute_game && human) {
+        // ovl06_3adb: five complete pairs, then complete sudden-death pairs.
+        // A shot succeeds when Borland rand(0,10) > 6. The simulation still uses
+        // its supplied GameRandom stream; native RNG restoration remains separate.
+        const int first = int(rng.range(0, 1));
+        int goals[2] = {};
+        for (int pair = 0; pair < 5 || goals[0] == goals[1]; pair++) {
+            goals[first] += rng.range(0, 10) > 6;
+            goals[1 - first] += rng.range(0, 10) > 6;
+        }
+        x = goals[0]; y = goals[1];
+    } else {
+        // Full CPU display: rand(2,5), distinct totals. Quick path: rand(0,2).
+        do {
+            x = int(rng.range(minute_game ? 2 : 0, minute_game ? 5 : 2));
+            y = int(rng.range(minute_game ? 2 : 0, minute_game ? 5 : 2));
+        } while (r.home + x == r.away + y);
+    }
     r.home += x;
     r.away += y;
+    r.shootout_goals[0] = x;
+    r.shootout_goals[1] = y;
     r.shootout = true;
+    r.decision_marker += 30;
 }
 
 MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
                            GameRandom& rng, int level) {
+    return quick_competition_match(home, away, home_german, away_german, rng, level, true);
+}
+
+MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
+                                    GameRandom& rng, int level, bool knockout) {
     // ovl06_161d, quick path: whole-match results (FUN_162c_1e9c), German clubs (team < 64) +6,
     // re-rolled up to min(4, |difference / 3|) times while the favourite does not win
     int sh = playing_strength(home, StrengthMode::Neutral, 0, 0) + (home_german ? 6 : 0);
@@ -418,12 +495,68 @@ MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_g
             if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 1) != 0)) r.away += int(rng.range(0, 4));
         }
     } while (rng.range(0, rerolls) != 0 && ((r.home <= r.away && sa < sh) || (r.away <= r.home && sh < sa)));
-    if (r.home == r.away) shootout(r, rng);
+    if (knockout && r.home == r.away) shootout(r, rng);
     return r;
+}
+
+void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval) {
+    if (!interval) {
+        if (team.flags & 0x08) team.current_line[0] = 2;
+        if (!squad) team.flags &= 0xF8;  // native CPU line mode is disabled, existing lines remain
+        team.shift[0] = team.shift[1] = 0;
+    }
+    for (auto& lines : team.energy)
+        for (int& energy : lines) energy = interval ? std::min(90, energy + 19) : 90;
+    if (!squad) return;
+    for (auto& player : *squad) {
+        if (player.player < 0) continue;
+        player.fitness = interval ? std::min(90, player.fitness + 19)
+                                  : std::min(90, 100 - player.raw_exhaustion / 8);
+        if (!interval) {
+            player.raw_exhaustion = std::clamp(player.raw_exhaustion, 50, 150);  // ovl14_2630
+            player.exhaustion = player.raw_exhaustion * 2 / 3;
+        }
+    }
+}
+
+int selected_match_players(const HumanSquad& human) {
+    if (!human.squad) return 0;
+    int count = 0;
+    for (size_t slot = 0; slot < std::min(size_t(29), human.squad->size()); slot++) {
+        const auto& player = human.squad->at(slot);
+        if (player.player >= 0 && player.role != 0 && player.line != 0) count++;
+    }
+    return count;
+}
+
+int squad_match_load(const HokTeam& team, const HumanSquad& human) {
+    if (selected_match_players(human) < 9) return 100;
+    int difference = 0;
+    for (int kind = 0; kind < 2; kind++) {
+        int skill1 = 0, skill2 = 0;
+        for (int line = 0; line < 3; line++) {
+            const auto values = line_strength(team, human, line, kind, false, 0);
+            skill1 += values.skill1;
+            skill2 += values.skill2;
+            difference += skill1 - skill2;
+        }
+    }
+    return std::clamp(difference / 5 + 20, 0, 40);
 }
 
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
                          const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts) {
+    if (stats) {
+        stats->forfeit_side = 0;
+        stats->initial_load[0] = hh ? squad_match_load(home, *hh) : -1;
+        stats->initial_load[1] = ha ? squad_match_load(away, *ha) : -1;
+    }
+    const int forfeited = hh && hh->minimum_players > 0 && selected_match_players(*hh) < hh->minimum_players ? 1 :
+                          ha && ha->minimum_players > 0 && selected_match_players(*ha) < ha->minimum_players ? 2 : 0;
+    if (forfeited) {
+        if (stats) stats->forfeit_side = forfeited;
+        return {forfeited == 1 ? 0 : 2, forfeited == 1 ? 2 : 0};
+    }
     // Working copies: the set-up (FUN_162c_02a5 for computer teams, 5 skaters for everybody), then
     // per minute chances and goals, energy (0737), line changes (0e32), effort (12da) and
     // penalties (ovl06_02d8, not in minute 60) as in the matchday loop ovl06_2522.
@@ -442,23 +575,34 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
     }
     const HumanSquad* hp = hh ? &hh2 : nullptr;
     const HumanSquad* ap = ha ? &ha2 : nullptr;
+    prepare_match_energy(h, hp ? &hsq : nullptr);
+    prepare_match_energy(a, ap ? &asq : nullptr);
     // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
     // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
-    // Manual tactics are not modelled yet, so every team gets the set-up; the line mode stays.
-    setup_computer_team(h, a);
-    setup_computer_team(a, h);
+    // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
+    setup_computer_team(h, a, hp, ap);
+    setup_computer_team(a, h, ap, hp);
     h.skaters = a.skaters = 5;
-    for (HokTeam* t : {&h, &a})
-        for (int kind = 0; kind < 2; kind++) {
-            t->current_line[kind] = 0;
-            t->shift[kind] = 0;
-        }
+    for (int kind = 0; kind < 2; kind++) {
+        h.shift[kind] = a.shift[kind] = 0;
+    }
+    LineRotation hlocal, alocal;
+    LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
+    LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
     PenaltyBox hbox, abox;
+    BorlandRandom fallback_selection(1);
+    PenaltySide hpen{h, hbox, hp ? &hsq : nullptr, hp,
+                    hp && hp->selection_rng ? *hp->selection_rng : fallback_selection, stats, 0};
+    PenaltySide apen{a, abox, ap ? &asq : nullptr, ap,
+                    ap && ap->selection_rng ? *ap->selection_rng : fallback_selection, stats, 1};
     MatchResult score;
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     int last = 60;
     for (int minute = 1; minute <= last; minute++) {
-        if (minute == 60 && opts.knockout && score.home == score.away) last = 70;
+        if (minute == 21 || minute == 41 || minute == 61 || minute == 66) {
+            prepare_match_energy(h, hp ? &hsq : nullptr, true);
+            prepare_match_energy(a, ap ? &asq : nullptr, true);
+        }
         MatchResult pts = goal_points(h, a, minute, false, rng, level, hp, ap, opts.playoff);
         int events = 0;  // FUN_162c_1e9c: a home chance sets the value to 1, each away chance adds 2
         for (int i = 0; i < pts.home; i++)
@@ -467,35 +611,55 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
             if (rng.range(1, 20) == 1) events += 2;
         if ((events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap)) {
             score.home++;
-            if (stats && h.skaters > a.skaters) stats->power_play_goals[0]++;
-            if (stats && h.skaters < a.skaters) stats->short_handed_goals[0]++;
-            goal_against(a, abox);
+            if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
+            if (stats && h.skaters + a.skaters != 11 && h.skaters < a.skaters) stats->short_handed_goals[0]++;
+            const bool equal = h.skaters == a.skaters;
+            abox.goal_against(a, ap ? &asq : nullptr);
+            if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
         if ((events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap)) {
             score.away++;
-            if (stats && a.skaters > h.skaters) stats->power_play_goals[1]++;
-            if (stats && a.skaters < h.skaters) stats->short_handed_goals[1]++;
-            goal_against(h, hbox);
+            if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
+            if (stats && h.skaters + a.skaters != 11 && a.skaters < h.skaters) stats->short_handed_goals[1]++;
+            const bool equal = h.skaters == a.skaters;
+            hbox.goal_against(h, hp ? &hsq : nullptr);
+            if (stats) stats->after_goal(1, equal, a.skaters, h.skaters, ap != nullptr, hp != nullptr);
         }
         energy_minute(h, hp ? &hsq : nullptr, rng);
         energy_minute(a, ap ? &asq : nullptr, rng);
-        change_lines(h, a, hp ? &hsq : nullptr);
-        change_lines(a, h, ap ? &asq : nullptr);
-        apply_effort(h, score.home, score.away, hp ? &hsq : nullptr);
-        apply_effort(a, score.away, score.home, ap ? &asq : nullptr);
+        if (hp) refresh_line_energy(h, *hp);
+        if (ap) refresh_line_energy(a, *ap);
+        change_lines(h, a, hp, hrotation);
+        change_lines(a, h, ap, arotation);
+        apply_effort(h, score.home, score.away, hp ? &hsq : nullptr,
+                     hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
+        apply_effort(a, score.away, score.home, ap ? &asq : nullptr,
+                     ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
         if (minute != 60 && minute != 70) {
-            const int before_h = hbox.running(), before_a = abox.running();
-            penalty_minute(h, hbox, a, abox, true, rng);
-            penalty_minute(a, abox, h, hbox, true, rng);
-            if (stats) {
-                stats->penalties[0] += std::max(0, hbox.running() - before_h);
-                stats->penalties[1] += std::max(0, abox.running() - before_a);
-            }
+            penalty_minute(hpen, apen, true, rng);
+            penalty_minute(apen, hpen, true, rng);
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
+        // ovl06_161d checks the completed third period, including minute 60.
+        // A last-minute equaliser must extend; a last-minute winner must not.
+        if (minute == 60 && opts.knockout && score.home == score.away) {
+            last = 70;
+            score.decision_marker = 30;  // ovl05_3573, before minutes 61-70
+        }
     }
-    if (opts.knockout && score.home == score.away) shootout(score, rng);
+    hbox.finish(h, hp ? &hsq : nullptr);
+    abox.finish(a, ap ? &asq : nullptr);
+    if (opts.knockout && score.home == score.away) shootout(score, rng, true, hp || ap);
+    if (stats) {
+        stats->final_teams = {h, a};
+        stats->penalties[0] += hbox.started();
+        stats->penalties[1] += abox.started();
+        stats->penalty_minutes[0] += hbox.minutes_assessed();
+        stats->penalty_minutes[1] += abox.minutes_assessed();
+        stats->final_squads[0] = std::move(hsq);
+        stats->final_squads[1] = std::move(asq);
+    }
     return score;
 }
 

@@ -51,6 +51,7 @@ ContractPlayer contract_player(const HokFile& h, int m, int slot, int* player_in
     c.salary = long(int32_t(le32(s, r + 0x28)));
     c.value = long(int32_t(le32(s, r + 0x2C)));
     const int p = s[r + 0x0F] - 1;  // player index + 1, 0 = free slot
+    c.player = p;
     if (player_index) *player_index = p;
     if (p >= 0) {
         const size_t pr = kPlayers + size_t(p) * kPlayerRecord;
@@ -61,11 +62,13 @@ ContractPlayer contract_player(const HokFile& h, int m, int slot, int* player_in
     return c;
 }
 
-long player_worth(const ContractTables& t, const ContractPlayer& p, Worth kind, BorlandRandom& rng, bool value_third) {
+long player_worth(const ContractTables& t,const ContractPlayer& p,Worth kind,const ContractRandomDraw& draw,bool value_third) {
     const auto& w = t.weights[size_t(kind)];
     long v = (p.skill1 + p.skill2) / 2 * w[0] / 100;
     const int goals = std::min((p.league_goals * 30 + p.cup_goals * 30 + p.other_goals * 40) / 100, 20);
-    const int games = std::min((p.games[0] * 50 + p.games[1] * 20 + p.games[2] * 30) / 100, 200);
+    // 16-bit arithmetic as in the original (IMUL/ADD on AX, then unsigned DIV): the sum wraps at 65536
+    // (found by the REAL-CODE differential test; irrelevant below about 650 games).
+    const int games = std::min(int(uint16_t(p.games[0] * 50 + p.games[1] * 20 + p.games[2] * 30) / 100), 200);
     v += w[1] * (goals * 100 / 20) / 100;
     v += w[2] * (games * 100 / 200) / 100;
     v += p.experience * w[3] / 100;
@@ -86,12 +89,15 @@ long player_worth(const ContractTables& t, const ContractPlayer& p, Worth kind, 
         v *= 5000;
         if (v > 55000) v -= 50000;
         if (value_third) v /= 3;
-        if (p.flags & 0x80) v = p.open16 > 63 ? v * 160 / 100 : v * rng.range(95, 100) / 100;
+        if (p.flags & 0x80) v = p.open16 > 63 ? v * 160 / 100 : v * draw(95, 100) / 100;
     }
     v = v * 10 / 3;
     if (p.position == 0) v = (v << 4) / 10;  // goalkeepers
     if (kind == Worth::Salary) return (v + t.league_bonus[size_t(team_class(t, p.team))]) / 300 * 300;
     return v / 3000 * 3000;
+}
+long player_worth(const ContractTables& t,const ContractPlayer& p,Worth kind,BorlandRandom& rng,bool value_third){
+    return player_worth(t,p,kind,ContractRandomDraw{[&](int lo,int hi){return rng.range(lo,hi);}},value_third);
 }
 
 long renewal_demand(const ContractTables& t, const ContractPlayer& p, int years, int mood, int matchday,
