@@ -124,6 +124,9 @@ struct MatchOptions {
 };
 
 // FUN_162c_1e9c over the whole match (minute 0 to 60) for two computer teams.
+// FUN_162c_0737: one minute of line energy and shift counters (REAL-CODE tests call it directly).
+void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, GameRandom& rng);
+
 int minute_events(const HokTeam& home, const HokTeam& away, int minute, GameRandom& rng, int level,
                   const HumanSquad* home_squad = nullptr, const HumanSquad* away_squad = nullptr, bool special = false);
 

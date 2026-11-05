@@ -667,4 +667,6 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
     return score;
 }
 
+void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, GameRandom& rng) { energy_minute(team, squad, rng); }
+
 }  // namespace em
