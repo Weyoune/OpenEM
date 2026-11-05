@@ -122,7 +122,8 @@ void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRando
         team.skill1[k] = std::clamp(int(team.skill1[k] + rng.range(trend - 1, trend + 1)), lim[0], lim[1]);
     for (int k = 0; k < 2; k++) {
         int v = team.skill2[k];
-        if (rng.range(0, 2) == 0) v += int(rng.range(trend - 1, trend + 1));
+        rng.range(0, 2);  // drawn but ignored in mode 3 (REAL-CODE test: `|| param_1 == 3`), the change always happens
+        v += int(rng.range(trend - 1, trend + 1));
         team.skill2[k] = std::clamp(v, lim[0], lim[1]);
     }
     team.form[0] = int(rng.range(45, 55));
