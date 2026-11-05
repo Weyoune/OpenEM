@@ -85,7 +85,9 @@ bool sponsor_renews(const AdRecord& contract, int image, BorlandRandom& rng) {
 }
 
 long stadium_score(const SponsorTables& t, const std::array<int, 9>& stadium, const std::array<int, 2>& places) {
-    long s = std::min((places[0] * 3L / 2 + places[1]) / 2, 50000L);
+    // unsigned 16-bit arithmetic of the original (REAL-CODE test): places * 3 wraps at 65536 (above 21845 places)
+    const uint16_t half = uint16_t(uint16_t(places[0] * 3) / 2);
+    long s = std::min(long(uint16_t(half + uint16_t(places[1])) / 2), 50000L);
     for (size_t i = 0; i < 9; i++) {
         long level = stadium[i];
         if (i == 0 && level > 0) level--;
