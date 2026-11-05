@@ -54,11 +54,11 @@ bool player_accepts(const ContractTables& t, const ContractPlayer& p, int years,
         if (p.salary < salary) return true;
         if (p.salary > salary) return false;
     }
-    if (p.years > years) {  // shorter contract
+    if (p.years > years) {  // shorter contract (REAL-CODE test): above 120 % accepted, up to 105 % refused, both without a draw
         if (p.salary * 120 / 100 < salary) return true;
-    } else if (p.years < years) {  // longer contract
         if (p.salary * 105 / 100 >= salary) return false;
     }
+    // A longer contract has no early refusal (REAL-CODE test): the original draws both factors and then compares.
     const long left = 100 - long(matchday) * 100 / std::max(matchdays, 1);
     const long u = (years - 1) * 100L + left;
     long want = player_worth(t, p, Worth::Salary, rng) * rng.range(85, 115) / 100;
