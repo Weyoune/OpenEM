@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/game.hpp"
+#include "game/result_books.hpp"
 #include "game/youth_progress.hpp"
 #include "game/youth_intake.hpp"
 #include "game/annual_players.hpp"
@@ -363,17 +364,7 @@ void Game::home_game(int guest, int kind, int home_class, int guest_class, int h
 // the manager's records at DS:BABB + manager * 0x15 (state 0x9EC8). Kinds: won, lost, drawn, not
 // won, not lost, without goal against, without goal scored. Checked against MONAT1's screen.
 void Game::update_series(int team, int side, int goals_for, int goals_against) {
-    if (team < 0 || team >= kSeriesTeams) return;
-    const bool cond[7] = {goals_for > goals_against, goals_for < goals_against, goals_for == goals_against,
-                          goals_for <= goals_against, goals_for >= goals_against, goals_against == 0, goals_for == 0};
-    uint8_t* cur = save_.state.data() + kSeries + size_t(team) * 0x15;
-    uint8_t* rec = save_.state.data() + kSeriesRecord;
-    for (size_t k = 0; k < 7; k++)
-        for (size_t col : {size_t(0), size_t(side) + 1}) {
-            uint8_t& v = cur[k * 3 + col];
-            v = cond[k] ? uint8_t(std::min(255, v + 1)) : 0;
-            if (team == human_team_) rec[k * 3 + col] = std::max(rec[k * 3 + col], v);
-        }
+    book_series(save_.state, team, side, goals_for, goals_against);
 }
 
 // Power play and short-handed figures of manager 0 (u16 at state 0x0F44.., "Totale").
@@ -440,6 +431,8 @@ void Game::play_league_day() {
             if (!forfeited && hi == human_team_)
                 home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
         }
+        // ovl13_3855 (after all games of the league day): the manager's series records follow his club's series
+        update_series_records(save_.state, human_team_);
     }
 }
 
@@ -476,6 +469,9 @@ void Game::play_cup_day() {
         const size_t o = kCupScores + size_t(cup_game_) * 32 + pair * 2;
         save_.state.at(o) = uint8_t(t.result.home + t.result.decision_marker);
         save_.state.at(o + 1) = uint8_t(t.result.away);
+        // ovl13_2f93 books the series in the cup mode (DS:D0C2 = 8) like in the league mode (REAL-CODE test)
+        update_series(t.home, 0, t.result.home, t.result.away);
+        update_series(t.away, 1, t.result.away, t.result.home);
         update_records(t.home, t.away, t.result.home, t.result.away);  // DS:D0C2 = 8 counts too
         if (t.home != human_team_ && t.away != human_team_) continue;
         const bool forfeited = book_forfeit(stats);
@@ -2039,27 +2035,7 @@ void Game::refresh_transfer_list() {
 // goes to the last. Opponents from DS:06AD (52) on use both columns as one list of ten. The
 // opponent info screen (ovl13_0095) shows these results and its records (highest win and so on).
 void Game::record_head_to_head(int home, int away, int home_goals, int away_goals) {
-    auto put = [&](int opp, int side, int own, int against) {
-        if (opp < 0 || opp >= kSeriesTeams) return;  // the block has 64 rows
-        uint8_t* row = save_.state.data() + kHeadToHead + size_t(opp) * 10;
-        const uint8_t v = uint8_t(std::min(against, 15) << 4 | std::min(own, 15));
-        std::vector<uint8_t*> slots;  // the column, or both for nations and later teams
-        if (opp < kFirstNationalTeam) {
-            for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i + side);
-        } else {
-            for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i);
-            for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i + 1);
-        }
-        for (uint8_t* p : slots)
-            if (*p == 0xFF) {
-                *p = v;
-                return;
-            }
-        for (size_t i = 0; i + 1 < slots.size(); i++) *slots[i] = *slots[i + 1];
-        *slots.back() = v;
-    };
-    if (home == human_team_) put(away, 0, home_goals, away_goals);
-    if (away == human_team_) put(home, 1, away_goals, home_goals);
+    book_head_to_head(save_.state, home, away, home_goals, away_goals, human_team_);
 }
 
 // ovl13_3e43, the club records of the opponent info (ovl13_12e5), from ovl13_2f93 after league and
@@ -2072,30 +2048,7 @@ void Game::record_head_to_head(int home, int away, int home_goals, int away_goal
 // look for the smallest difference and so never replace an empty 0:0 - in the original saves they
 // stay 0:0, the screen says "Noch keine Eintragung"). wb < 0 is stored as 1.
 void Game::update_records(int home, int away, int home_goals, int away_goals) {
-    auto record = [&](int team, int rec, int a, int b, bool less, int wa, int wb, int opp) {
-        if (team < 0 || team >= kSeriesTeams) return;
-        uint8_t* v = save_.state.data() + kRecords + size_t(team) * 16 + size_t(rec) * 2;
-        const int hi = v[1], lo = v[0];
-        const uint16_t now = uint16_t(a * wa - b * wb), old = uint16_t(hi * wa - lo * wb);
-        if (less ? !(now < old) : !(now > old)) return;
-        if (wb < 0) wb = 1;
-        const int x = (a * wa) << 8 | (b * wb);
-        v[0] = uint8_t(x);
-        v[1] = uint8_t(x >> 8);
-        save_.state[kRecordOpponents + size_t(team) * 8 + size_t(rec)] = uint8_t(opp);
-    };
-    const int hg = std::min(home_goals, 255), ag = std::min(away_goals, 255);
-    if (hg > ag) {
-        record(home, 0, hg, ag, false, 1, 1, away);
-        record(away, 5, hg, ag, false, 1, 1, home);
-    } else if (hg < ag) {
-        record(home, 1, hg, ag, true, 1, 1, away);
-        record(away, 4, hg, ag, true, 1, 1, home);
-    }
-    record(home, 2, hg, ag, false, 1, 0, away);
-    record(away, 7, hg, ag, false, 1, 0, home);
-    record(home, 3, hg, ag, false, 0, -1, away);
-    record(away, 6, hg, ag, false, 0, -1, home);
+    book_records(save_.state, home, away, home_goals, away_goals);
 }
 
 void Game::swap_teams(int a, int b) {

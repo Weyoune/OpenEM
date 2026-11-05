@@ -53,6 +53,7 @@ target_include_directories(em_formats PUBLIC src)
 add_library(em_game STATIC
     src/game/calendar.cpp
     src/game/checkpoint.cpp
+    src/game/result_books.cpp
     src/game/competitions.cpp
     src/game/contracts.cpp
     src/game/finances.cpp
@@ -491,4 +492,12 @@ if(TARGET em_realcode)
     target_link_libraries(em_realcode_eurodraw_tests PRIVATE em_realcode em_game)
     target_include_directories(em_realcode_eurodraw_tests PRIVATE tests)
     add_test(NAME realcode_eurodraw COMMAND em_realcode_eurodraw_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
+endif()
+if(TARGET em_realcode)
+    add_executable(em_realcode_books_tests tests/realcode_books_tests.cpp)
+    target_link_libraries(em_realcode_books_tests PRIVATE em_realcode em_game)
+    target_include_directories(em_realcode_books_tests PRIVATE tests)
+endif()
+if(TARGET em_realcode)
+    add_test(NAME realcode_books COMMAND em_realcode_books_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
 endif()

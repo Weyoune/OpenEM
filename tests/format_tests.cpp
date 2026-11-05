@@ -2761,9 +2761,21 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
             CHECK(decode_hok(resumed.save_bytes()).state[0x696D + slot * 52 + 15] == 0);
     }
     Game g(exe, read_file(ref_dir / "START.HOK"), 6);
+    // The cup books the series too (ovl13_2f93, DS:D0C2 = 8): the league-form check runs before the first cup date.
+    auto check_series = [](const HokFile& h) {
+        for (int t = 0; t < 12; t++) {  // series (state 0x9988): the current streaks follow the form string
+            const std::string& form = h.table[size_t(t)].form;
+            int won = 0, lost = 0;
+            for (size_t i = form.size(); i-- > 0 && (form[i] == 's' || form[i] == 'S');) won++;
+            for (size_t i = form.size(); i-- > 0 && (form[i] == 'n' || form[i] == 'N');) lost++;
+            const size_t b = 0x9988 + size_t(t) * 0x15;
+            CHECK((won < 8 ? h.state[b] == won : h.state[b] >= 8) && (lost < 8 ? h.state[b + 3] == lost : h.state[b + 3] >= 8));
+        }
+    };
     for (int i = 0; i < 30; i++) {
         g.advance_day();
         g.clear_log();
+        if (i == 9) check_series(decode_hok(g.save_bytes()));
     }
     const Bytes saved = g.save_bytes();
     CHECK(saved.size() == read_file(ref_dir / "START.HOK").size());
@@ -2776,14 +2788,6 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(h.state[b] == 2 * r.wins[0] + r.draws(0) && h.state[b + 1] == 2 * r.wins[1] + r.draws(1));
         CHECK(h.state[b + 2] == h.state[b] && h.state[b + 0x18] == h.state[b + 0x16] && h.state[b + 0x28] == r.wins[0]);
         CHECK(r.position_history[g.next_matchday(0) - 2] == r.position);
-    }
-    for (int t = 0; t < 12; t++) {  // series (state 0x9988): the current streaks follow the form string
-        const std::string& form = h.table[size_t(t)].form;
-        int won = 0, lost = 0;
-        for (size_t i = form.size(); i-- > 0 && (form[i] == 's' || form[i] == 'S');) won++;
-        for (size_t i = form.size(); i-- > 0 && (form[i] == 'n' || form[i] == 'N');) lost++;
-        const size_t b = 0x9988 + size_t(t) * 0x15;
-        CHECK((won < 8 ? h.state[b] == won : h.state[b] >= 8) && (lost < 8 ? h.state[b + 3] == lost : h.state[b + 3] >= 8));
     }
     CHECK(le16(h.state, 0x0F4C) > 0 && le16(h.state, 0x0F4E) > 0);  // power plays / penalty kills counted
     Game back(exe, saved, 6);
