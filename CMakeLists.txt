@@ -292,7 +292,7 @@ if(EM_REALCODE AND IS_DIRECTORY "${EM_DATA}")
         GIT_TAG 2.1.3
         GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(unicorn)
-    add_library(em_realcode STATIC src/realcode/exe_image.cpp src/realcode/cpu.cpp)
+    add_library(em_realcode STATIC src/realcode/exe_image.cpp src/realcode/cpu.cpp src/realcode/dos.cpp)
     target_include_directories(em_realcode PUBLIC src ${unicorn_SOURCE_DIR}/include)
     target_link_libraries(em_realcode PUBLIC em_formats unicorn)
     add_executable(em_realcode_tests tests/realcode_tests.cpp)
