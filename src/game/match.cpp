@@ -438,8 +438,9 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
     // DS:491C (offence per situation)
     static constexpr int kEffortTable[2][kTacticSituations] = {{0, 25, 20, 30, 0}, {20, 20, 15, 20, 0}};
     static constexpr int kOffenceTable[2][kTacticSituations] = {{5, 6, 4, 4, 0}, {4, 5, 6, 7, 4}};
-    const int own = playing_strength(t, human, StrengthMode::Neutral, 0, 0) * 2;
-    const int other = playing_strength(opp, opponent_human, StrengthMode::Neutral, 0, 0) * 2;
+    // ovl06_1371 takes the lines on the ice from the team records (REAL-CODE test)
+    const int own = playing_strength(t, human, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
+    const int other = playing_strength(opp, opponent_human, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
     const bool stronger = other <= own;
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);
     const bool close = std::abs(own - other) < 25;
