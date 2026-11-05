@@ -70,6 +70,9 @@ TrainingPlan default_training_plan(const TrainingTables& t) {
 
 void train_week(const TrainingTables& t, const TrainingPlan& plan, TrainingPlayer& p, BorlandRandom& rng) {
     const int pos = std::clamp(p.position, 0, 2);
+    // +0x13: the fatigue penalty uses the unsigned byte, but the stored result is clamped with a signed-char
+    // comparison (REAL-CODE test): anything from 128 on counts as negative and ends at 50.
+    const int exhaustion = p.exhaustion & 0xFF;
     long fresh = 0;
     long mood = -3 + (p.morale - 30) / 3;
     std::array<long, 4> acc{};
@@ -109,17 +112,17 @@ void train_week(const TrainingTables& t, const TrainingPlan& plan, TrainingPlaye
 
     for (size_t a = 0; a < 4; a++) {
         acc[a] = acc[a] * (mood + 100) / 100;
-        if (p.exhaustion > 125) acc[a] -= acc[a] * ((p.exhaustion - 125) * 2) / 100;
+        if (exhaustion > 125) acc[a] -= acc[a] * ((exhaustion - 125) * 2) / 100;
         acc[a] = step(acc[a] * 100 / t.norm[a][size_t(pos)], false, rng);
         if (a == 0) p.condition = std::clamp(int(p.condition + acc[a]), 1, 99);
         if (a == 1) p.technique = std::clamp(int(p.technique + acc[a]), 1, 99);
     }
     fresh = fresh * 100 / t.recovery_norm[size_t(pos)];
     fresh = step(fresh * 2, true, rng);
-    const int hi = std::clamp(int((p.nibbles >> 4) + acc[2]), 0, 15);
-    const int lo = std::clamp(int((p.nibbles & 15) + acc[3]), 0, 15);
+    const int hi = std::clamp(int((p.nibbles >> 4) + acc[3]), 0, 15);
+    const int lo = std::clamp(int((p.nibbles & 15) + acc[2]), 0, 15);
     if (pos != 0) p.nibbles = hi << 4 | lo;
-    p.exhaustion = std::clamp(int(p.exhaustion - fresh), 50, 150);
+    p.exhaustion = std::clamp(int(int8_t(uint8_t(exhaustion - fresh))), 50, 150);
 }
 
 void morale_week(TrainingPlayer& p, BorlandRandom& rng) {
