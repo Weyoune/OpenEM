@@ -9,12 +9,22 @@
 //                                                 decrypted state for analysis
 //   em_dump hok <file.hok> teams|players [team]  team table, or player records (of one team)
 //   em_dump hok <file.hok> cup                  DEB cup, European cup and WM pairings
-//   em_dump hok <file.hok> squad                human squad like the "Verträge" screen
+//   em_dump hok <file.hok> squad [manager]      squad (default 0); 5 = national team with caps
+//   em_dump hok <file.hok> strength [manager]   stored team values and recomputed line strengths
 //   em_dump hok <file.hok> table [league]        league table and next pairings (0 = first
 //                                                 division, 1 = second, 2 = Oberliga)
 //   em_dump tor <TORE\file>                     goal scene script: frames, sounds, end positions
 //   em_dump run <file.hok> <EM.EXE> [days] [seed] [out.hok]  run the day loop for some days
+//   em_dump checkpoint <file.hok|file.oem> <EM.EXE> [days] [seed] [out.oem]
 //                                                 (game/game.hpp) and optionally save the result
+//   em_dump finances <file.hok> <EM.EXE>         monthly income/expenses, accrued interest and adverts
+//   em_dump buy <save> <EM.EXE> <slot> <fee DM> <years> <salary DM> <seed> <new.hok|new.oem>
+//                                                 [--accept-subsidy], ordinary CPU transfer purchase
+//   em_dump insure <save> <EM.EXE> <slot 0..28> <on|off> <seed> <new.hok|new.oem>
+//   em_dump contract <save> <EM.EXE> <slot> <years> <salary DM> <seed> <new.hok|new.oem> [--allow-shortening]
+//   em_dump market <save> <EM.EXE> <list|recall> <slot> <seed> <new.hok|new.oem>
+//   em_dump bank <save> <EM.EXE> <deposit|withdraw> <amount DM> <seed> <new.hok|new.oem>
+//   em_dump train <save> <EM.EXE> <day 0..6> <unit 0..3> <kind 0..8> <seed> <new.hok|new.oem>
 //   em_dump simulate <file.hok> <EM.EXE> [league] [matchdays] [seed]  play the next league
 //                                                 matchdays with the rebuilt engine
 //   em_dump rink <KB dir> <out.bmp> [236|242..245|233..235]  goal scene rink (portrait) or a
@@ -22,9 +32,11 @@
 //   em_dump db <KB\23.vga> [club index]          master database: clubs with squad sizes, or one
 //                                                 club's player names
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -114,8 +126,54 @@ int cmd_vga(const fs::path& in, const fs::path& out, const fs::path* pal_file) {
     return 0;
 }
 
+int cmd_finances(const fs::path& in, const fs::path& exe) {
+    const HokFile h = decode_hok(read_file(in));
+    const FinanceTables tables = load_finance_tables(read_file(exe), h);
+    const ManagerBudget b = budget_from_save(h, 0);
+    std::printf("%02d.%02d.%d %s (raw money = DM x 3)\n", h.date.day, h.date.month, h.date.year, h.club.c_str());
+    std::printf("balance %ld raw, bank %ld raw, accrued %ld raw\n", b.balance, b.bank, b.accrued);
+    std::printf("income: %ld raw without interest, %ld raw with interest, stored %ld raw\n",
+                monthly_income(b, false), monthly_income(b, true), b.stored_income);
+    std::printf("expenses: %ld raw without interest/recovery, %ld raw full\n",
+                monthly_expenses(tables, b, false, false), monthly_expenses(tables, b, true, true));
+    std::printf("team strength sum %d, players %d, squad costs %ld raw, weekly recovery %ld raw\n",
+                b.team_strength, b.players, b.squad_costs, b.open_97ee);
+    std::printf("event cursor %u, season day %d\n", unsigned(le16(h.state, 0xB953)), h.date.day_index);
+    for (size_t i = 0; i < b.adverts.size(); i++) {
+        const AdvertContract& a = b.adverts[i];
+        if (a.amount || a.months_left || a.flags)
+            std::printf("advert %zu: %ld raw / month, %d months left, option/flags 0x%02x\n",
+                        i, a.amount, a.months_left, unsigned(a.flags));
+    }
+    return 0;
+}
+
 int cmd_hok_list(const fs::path& in, const std::string& what, int team) {
     HokFile h = decode_hok(read_file(in));
+    if (what == "strength") {
+        const int manager = team < 0 ? 0 : team;
+        if (manager >= kHokManagers) throw FormatError("HOK: invalid strength manager");
+        const int club = h.state.at(0x0DCD + size_t(manager) * 0x1AF + 0x14);
+        if (club >= int(h.teams.size())) throw FormatError("HOK: manager has no assigned team");
+        const HokTeam& stored = h.teams[size_t(club)];
+        const auto squad = hok_squad(h, manager);
+        const HumanSquad human{&squad, &h.players};
+        int computed_total = 0, stored_total = 0;
+        std::printf("manager %d, team %d %s, %zu squad slots\n", manager, club, stored.name.c_str(), squad.size());
+        for (int kind = 0; kind < 2; kind++) {
+            int sum[3] = {};
+            for (int line = 0; line < 3; line++) {
+                const LineValues v = line_strength(stored, human, line, kind, false, 0);
+                std::printf("  %s line %d: %d/%d/%d\n", kind == 0 ? "defence" : "attack", line + 1, v.skill1, v.skill2, v.form);
+                sum[0] += v.skill1; sum[1] += v.skill2; sum[2] += v.form;
+            }
+            std::printf("  stored %d/%d/%d; computed mean %d/%d/%d\n", stored.skill1[kind], stored.skill2[kind], stored.form[kind], sum[0]/3, sum[1]/3, sum[2]/3);
+            stored_total += stored.skill1[kind] + stored.skill2[kind];
+            computed_total += sum[0]/3 + sum[1]/3;
+        }
+        std::printf("income strength: stored %d, computed %d, delta %+d\n", stored_total, computed_total, computed_total - stored_total);
+        return 0;
+    }
     if (what == "table") {
         // Sorted by the stored position, columns as on the in-game "TABELLE Gesamt" screen.
         int league = team < 0 ? 0 : team;
@@ -138,15 +196,30 @@ int cmd_hok_list(const fs::path& in, const std::string& what, int team) {
     }
     if (what == "squad") {
         // Columns of the in-game "Verträge" screen.
+        const int manager = team < 0 ? 0 : team;
+        const auto squad = hok_squad(h, manager);
+        if (manager == 5) {
+            const int nation = h.state.at(0x164C);
+            std::printf("national team %s, owner %u, phase %u/%u, budget %ld DM, next appointment grant %ld DM\n",
+                        nation >= 52 && nation < 64 ? h.teams[size_t(nation)].name.c_str() : "(vacant)",
+                        unsigned(h.state.at(0x171C)), unsigned(h.state.at(0x0788)), unsigned(h.state.at(0x0789)),
+                        long(int32_t(le32(h.state, 0x17C7))) / 3, national_team_grant(h) / 3);
+        }
         static const char* const kStatus[] = {"", "RESERVE", "IM TEAM"};
         std::printf("%-3s %-18s %3s %3s %3s %-8s %3s %5s %8s\n", "ART", "NAME", "SP", "ST", "TO", "STATUS", "E",
-                    "JAHRE", "WERT");
-        for (const HokSquadPlayer& s : h.squad) {
+                    "JAHRE", "GEHALT");
+        for (const HokSquadPlayer& s : squad) {
+            if (s.player < 0) continue;  // empty native slots retain their position in hok_squad
             const HokPlayer& p = h.players[size_t(s.player)];
             const char* art = p.position == 0 ? "TOR" : p.position < 60 ? "ABW" : "STU";
-            std::printf("%-3s %-18s %3d %3d %3d %-8s %3d %5d %8ld\n", art, p.name.c_str(), s.league_games + s.cup_games,
+            std::printf("%-3s %-18s %3d %3d %3d %-8s %3d %5d %8ld\n", art, p.name.c_str(),
+                        manager == 5 ? p.raw[0x19] : s.league_games + s.cup_games,
                         s.strength(), s.league_goals + s.cup_goals, kStatus[int(s.status)], s.exhaustion,
                         s.contract_years, s.salary);
+            if (manager == 5)
+                std::printf("    native id %d, caps %u, role %d, line 0x%02x\n",
+                            int((p.raw - h.state.data() - 0x4FC6) / 33) + 1,
+                            unsigned(p.raw[0x19]), s.role, unsigned(s.line));
         }
         return 0;
     }
@@ -206,7 +279,7 @@ int cmd_hok(const fs::path& in, const fs::path* out) {
     std::printf("balance %ld DM, bank %ld DM (savings > 0, loan < 0), income this month %ld DM\n", f.balance,
                 f.bank, f.month_income);
     for (int c = 0; c < kHokShares; c++)
-        std::printf("share %d: price %d DM, %d held (bought for %ld DM)\n", c,
+        std::printf("share %d: price %d DM, %u held (bought for %ld DM)\n", c,
                     f.share_price[c][kHokShareHistory - 1], f.shares[c], f.share_cost[c]);
     std::printf("attendance total %ld, record %ld, lowest %ld; power play %d:%d of %d, short-handed %d:%d of %d\n",
                 f.attendance_total, f.attendance_record, f.attendance_min, f.pp_goals, f.pp_against,
@@ -276,7 +349,12 @@ int cmd_rink(const fs::path& kb, const fs::path& out, int map) {
 // the line strengths of its squad, first lines only) and prints results and the new table.
 // em_dump run: plays `days` days with the day loop (game/game.hpp) and prints what happened to
 // the human club, the month ends and the first division table at the end.
-int cmd_run(const fs::path& hok, const fs::path& exe, int days, uint32_t seed, const fs::path& out) {
+bool action_checkpoint_output(const fs::path& output);
+
+int cmd_run(const fs::path& hok, const fs::path& exe, int days, uint32_t seed, const fs::path& out,
+            bool checkpoint = false) {
+    if (!out.empty() && action_checkpoint_output(out) != checkpoint)
+        throw FormatError(checkpoint ? "Checkpoint output must be .oem" : "Native run output must be .hok");
     Game g(read_file(exe), read_file(hok), seed);
     const fs::path db = exe.parent_path() / "KB" / "23.vga";  // names for the season change
     if (fs::exists(db)) g.set_database(decode_db(read_file(db)));
@@ -288,22 +366,155 @@ int cmd_run(const fs::path& hok, const fs::path& exe, int days, uint32_t seed, c
         g.clear_log();
     }
     const League& l = g.league(0);
-    std::vector<int> order(kHokLeagueSize);
-    for (int s = 0; s < kHokLeagueSize; s++) order[size_t(l.rows[size_t(s)].position)] = s;
     std::printf("\nfirst division after day %d:\n", g.season_day());
-    for (int s : order) {
+    for (size_t place = 0; place < l.ranking.size(); place++) {
+        const int s = l.ranking[place];
         const HokTableRow& r = l.rows[size_t(s)];
-        std::printf("%2d. %-22s %2d games %3d:%-3d %2d:%-2d\n", r.position + 1, g.save().teams[size_t(l.first_team + s)].name.c_str(),
+        std::printf("%2d. %-22s %2d games %3d:%-3d %2d:%-2d\n", int(place) + 1, g.save().teams[size_t(l.first_team + s)].name.c_str(),
                     r.total(r.games), r.total(r.goals_for), r.total(r.goals_against), r.points_plus(), r.points_minus());
     }
     std::printf("balance %ld DM, image %d\n", g.budget().balance / 3, g.image());
     if (!out.empty()) {
-        const Bytes data = g.save_bytes();
+        const Bytes data = checkpoint ? g.checkpoint_bytes() : g.native_save_bytes();
         std::ofstream o(out, std::ios::binary);
         o.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
+        if (!o) throw FormatError("Unable to write game save: " + out.string());
         std::printf("saved %s (%zu bytes)\n", out.string().c_str(), data.size());
     }
     return 0;
+}
+
+int64_t action_number(const char* text, int64_t low, int64_t high) {
+    size_t end = 0;
+    const int64_t amount = std::stoll(text, &end);
+    if (end != std::string(text).size() || amount < low || amount > high)
+        throw FormatError("Invalid numeric action argument: " + std::string(text));
+    return amount;
+}
+
+long dm_raw(const char* text) {
+    const int64_t amount = action_number(text, 1, std::numeric_limits<int32_t>::max() / 3);
+    return long(amount * 3);
+}
+
+bool action_checkpoint_output(const fs::path& output) {
+    if (fs::exists(output)) throw FormatError("Action output already exists: " + output.string());
+    std::string extension = output.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    if (extension != ".hok" && extension != ".oem") throw FormatError("Action output must be .hok or .oem");
+    return extension == ".oem";
+}
+
+void write_action_save(Game& game, const fs::path& output, bool checkpoint) {
+    for (const auto& line : game.log()) std::printf("%s\n", line.c_str());
+    const Bytes data = checkpoint ? game.checkpoint_bytes() : game.native_save_bytes();
+    std::ofstream file(output, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
+    if (!file) throw FormatError("Unable to write action save: " + output.string());
+    std::printf("balance %ld DM; saved %s (%zu bytes)\n", game.budget().balance / 3, output.string().c_str(), data.size());
+}
+
+int cmd_train(const fs::path& input, const fs::path& exe, int day, int unit, int kind,
+              uint32_t seed, const fs::path& output) {
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    TrainingPlan plan = game.training_plan();
+    plan[size_t(day)][size_t(unit)] = uint8_t(kind);
+    if (!game.set_training_plan(plan)) {
+        std::printf("training: unavailable phase\n");
+        return 2;
+    }
+    write_action_save(game, output, checkpoint);
+    return 0;
+}
+
+int cmd_buy(const fs::path& input, const fs::path& exe, int slot, long fee, int years, long salary,
+            uint32_t seed, const fs::path& output, bool accept_subsidy) {
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    const PurchaseResult result = game.buy_transfer_player(size_t(slot), fee, years, salary, accept_subsidy);
+    constexpr const char* names[] = {"invalid request", "unavailable player or phase", "saved negotiation block",
+                                    "seller refused", "insufficient account funds", "squad full",
+                                    "player refused", "purchased"};
+    std::printf("purchase: %s\n", names[size_t(result)]);
+    if (result == PurchaseResult::Invalid || result == PurchaseResult::Unavailable || result == PurchaseResult::Blocked)
+        return 2;
+    write_action_save(game, output, checkpoint);
+    return 0;  // a refusal is a valid game action; its ban and RNG belong in the save too
+}
+
+int cmd_insure(const fs::path& input, const fs::path& exe, int slot, const std::string& state,
+               uint32_t seed, const fs::path& output) {
+    if (state != "on" && state != "off") throw FormatError("Insurance state must be on or off");
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    if (!game.set_player_insurance(size_t(slot), state == "on")) {
+        std::printf("insurance: unavailable or locked\n");
+        return 2;
+    }
+    std::printf("insurance: %s\n", state == "on" ? "enabled" : "cancelled");
+    write_action_save(game, output, checkpoint);
+    return 0;
+}
+
+int cmd_contract(const fs::path& input, const fs::path& exe, int slot, int years, long salary,
+                 uint32_t seed, const fs::path& output, bool allow_shortening) {
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    const ContractResult result = game.negotiate_contract(size_t(slot), years, salary, allow_shortening);
+    constexpr const char* names[] = {"invalid request", "unavailable player or phase", "saved negotiation block",
+                                    "shortening needs confirmation", "player refused", "signed"};
+    std::printf("contract: %s\n", names[size_t(result)]);
+    if (result != ContractResult::Signed && result != ContractResult::PlayerRefused) return 2;
+    write_action_save(game, output, checkpoint);
+    return 0;
+}
+
+int cmd_market(const fs::path& input, const fs::path& exe, const std::string& operation, int slot,
+               uint32_t seed, const fs::path& output) {
+    if (operation != "list" && operation != "recall") throw FormatError("Market action must be list or recall");
+    if (slot > (operation == "list" ? 28 : 10)) throw FormatError("Market slot out of range");
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    const auto result = operation == "list" ? game.list_transfer_player(size_t(slot)) : game.recall_transfer_player(size_t(slot));
+    constexpr const char* names[] = {"invalid request", "unavailable player or phase", "saved block or pending offer",
+                                    "three own players already listed", "market full", "squad full", "moved"};
+    std::printf("market: %s\n", names[size_t(result)]);
+    if (result != TransferMoveResult::Moved) return 2;
+    write_action_save(game, output, checkpoint);
+    return 0;
+}
+
+int cmd_bank(const fs::path& input, const fs::path& exe, const std::string& operation, long amount,
+             uint32_t seed, const fs::path& output) {
+    if (operation != "deposit" && operation != "withdraw") throw FormatError("Bank action must be deposit or withdraw");
+    const bool checkpoint = action_checkpoint_output(output);
+    Game game(read_file(exe), read_file(input), seed);
+    const auto result = game.bank_transfer(operation == "deposit" ? amount : -amount);
+    constexpr const char* names[] = {"invalid amount", "unavailable phase", "insufficient account funds", "credit limit", "transferred"};
+    std::printf("bank: %s\n", names[size_t(result)]);
+    if (result != BankResult::Transferred) return 2;
+    write_action_save(game, output, checkpoint);
+    return 0;
+}
+
+int cmd_shares(const fs::path& input,const fs::path& exe,const std::string& operation,int company,
+               uint32_t quantity,uint32_t seed,const fs::path& output){
+    if(operation!="buy"&&operation!="sell")throw FormatError("Share action must be buy or sell");
+    const bool checkpoint=action_checkpoint_output(output);
+    Game game(read_file(exe),read_file(input),seed);
+    const auto result=game.trade_shares(size_t(company),quantity,operation=="sell");
+    constexpr const char* names[]={"invalid","unavailable","insufficient cash","insufficient shares","traded"};
+    std::printf("shares: %s\n",names[size_t(result)]);
+    if(result!=StockResult::Traded)return 2;
+    write_action_save(game,output,checkpoint);return 0;
+}
+
+int cmd_tactics_exit(const fs::path& input,const fs::path& exe,uint32_t seed,const fs::path& output){
+    const bool checkpoint=action_checkpoint_output(output);
+    Game game(read_file(exe),read_file(input),seed);
+    if(!game.set_tactics(load_tactics(game.save())))return 2;
+    write_action_save(game,output,checkpoint);return 0;
 }
 
 int cmd_simulate(const fs::path& hok, const fs::path& exe, int league, int matchdays, uint32_t seed) {
@@ -312,6 +523,7 @@ int cmd_simulate(const fs::path& hok, const fs::path& exe, int league, int match
     League l = league_from_save(h, league);
     GameRandom rng(seed);
     HumanSquad human{&h.squad, &h.players};  // the manager's club plays with its squad
+    configure_human_tactics(human, h, 0);
     int human_team = -1;
     for (size_t t = 0; t < h.teams.size(); t++)
         if (h.teams[t].name == h.club) human_team = int(t);
@@ -371,7 +583,7 @@ int main(int argc, char** argv) {
         }
         if (cmd == "hok" && argc >= 4 && (std::string(argv[3]) == "teams" || std::string(argv[3]) == "players" ||
                                        std::string(argv[3]) == "table" || std::string(argv[3]) == "cup" ||
-                                       std::string(argv[3]) == "squad"))
+                                       std::string(argv[3]) == "squad" || std::string(argv[3]) == "strength"))
             return cmd_hok_list(argv[2], argv[3], argc == 5 ? std::stoi(argv[4]) : -1);
         if (cmd == "hok" && (argc == 3 || argc == 4)) {
             fs::path out = argc == 4 ? fs::path(argv[3]) : fs::path();
@@ -379,16 +591,55 @@ int main(int argc, char** argv) {
         }
         if (cmd == "db" && (argc == 3 || argc == 4)) return cmd_db(argv[2], argc == 4 ? std::stoi(argv[3]) : -1);
         if (cmd == "tor" && argc == 3) return cmd_tor(argv[2]);
-        if (cmd == "run" && argc >= 4)
-            return cmd_run(argv[2], argv[3], argc > 4 ? std::stoi(argv[4]) : 30, argc > 5 ? uint32_t(std::stoul(argv[5])) : 1,
-                           argc > 6 ? fs::path(argv[6]) : fs::path());
+        if ((cmd == "run" || cmd == "checkpoint") && argc >= 4 && argc <= 7)
+            return cmd_run(argv[2], argv[3], argc > 4 ? int(action_number(argv[4], 0, std::numeric_limits<int>::max())) : 30,
+                           argc > 5 ? uint32_t(action_number(argv[5], 0, std::numeric_limits<uint32_t>::max())) : 1,
+                           argc > 6 ? fs::path(argv[6]) : fs::path(), cmd == "checkpoint");
+        if (cmd == "finances" && argc == 4) return cmd_finances(argv[2], argv[3]);
+        if (cmd == "buy" && (argc == 10 || (argc == 11 && std::string(argv[10]) == "--accept-subsidy")))
+            return cmd_buy(argv[2], argv[3], int(action_number(argv[4], 0, 10)), dm_raw(argv[5]),
+                            int(action_number(argv[6], 1, 4)), dm_raw(argv[7]),
+                            uint32_t(action_number(argv[8], 0, std::numeric_limits<uint32_t>::max())), argv[9], argc == 11);
+        if (cmd == "insure" && argc == 8)
+            return cmd_insure(argv[2], argv[3], int(action_number(argv[4], 0, 28)), argv[5],
+                              uint32_t(action_number(argv[6], 0, std::numeric_limits<uint32_t>::max())), argv[7]);
+        if (cmd == "market" && argc == 8)
+            return cmd_market(argv[2], argv[3], argv[4], int(action_number(argv[5], 0, 28)),
+                              uint32_t(action_number(argv[6], 0, std::numeric_limits<uint32_t>::max())), argv[7]);
+        if (cmd == "bank" && argc == 8)
+            return cmd_bank(argv[2], argv[3], argv[4], dm_raw(argv[5]),
+                            uint32_t(action_number(argv[6], 0, std::numeric_limits<uint32_t>::max())), argv[7]);
+        if(cmd=="shares"&&argc==9)
+            return cmd_shares(argv[2],argv[3],argv[4],int(action_number(argv[5],0,3)),
+                              uint32_t(action_number(argv[6],1,std::numeric_limits<uint32_t>::max()-1)),
+                              uint32_t(action_number(argv[7],0,std::numeric_limits<uint32_t>::max())),argv[8]);
+        if(cmd=="tactics-exit"&&argc==6)
+            return cmd_tactics_exit(argv[2],argv[3],uint32_t(action_number(argv[4],0,std::numeric_limits<uint32_t>::max())),argv[5]);
+        if (cmd == "train" && argc == 9)
+            return cmd_train(argv[2], argv[3], int(action_number(argv[4], 0, 6)), int(action_number(argv[5], 0, 3)),
+                             int(action_number(argv[6], 0, 8)),
+                             uint32_t(action_number(argv[7], 0, std::numeric_limits<uint32_t>::max())), argv[8]);
+        if (cmd == "contract" && (argc == 9 || (argc == 10 && std::string(argv[9]) == "--allow-shortening")))
+            return cmd_contract(argv[2], argv[3], int(action_number(argv[4], 0, 28)), int(action_number(argv[5], 1, 4)),
+                                 dm_raw(argv[6]), uint32_t(action_number(argv[7], 0, std::numeric_limits<uint32_t>::max())),
+                                 argv[8], argc == 10);
         if (cmd == "simulate" && argc >= 4)
             return cmd_simulate(argv[2], argv[3], argc > 4 ? std::stoi(argv[4]) : 0, argc > 5 ? std::stoi(argv[5]) : 1,
                                 argc > 6 ? uint32_t(std::stoul(argv[6])) : 1);
         if (cmd == "rink" && (argc == 4 || argc == 5)) return cmd_rink(argv[2], argv[3], argc == 5 ? std::stoi(argv[4]) : 236);
         std::fprintf(stderr,
                      "usage: em_dump kb <KB dir> | em_dump vga <file.vga> <out.bmp> [pal.vga] | "
-                     "em_dump hok <file.hok> [out.bin] | em_dump db <KB\\23.vga> [club]\n");
+                     "em_dump hok <file.hok> [out.bin] | em_dump finances <file.hok> <EM.EXE> | "
+                     "em_dump run|checkpoint <file.hok|file.oem> <EM.EXE> [days] [seed] [out.hok|out.oem] | "
+                     "em_dump buy <save> <EM.EXE> <slot 0..10> <fee DM> <years 1..4> <salary DM> <seed> <new.hok|new.oem> [--accept-subsidy] | "
+                     "em_dump market <save> <EM.EXE> <list|recall> <slot> <seed> <new.hok|new.oem> | "
+                     "em_dump bank <save> <EM.EXE> <deposit|withdraw> <amount DM> <seed> <new.hok|new.oem> | "
+                     "em_dump shares <save> <EM.EXE> <buy|sell> <company 0..3> <quantity> <seed> <new.hok|new.oem> | "
+                     "em_dump tactics-exit <save> <EM.EXE> <seed> <new.hok|new.oem> | "
+                     "em_dump train <save> <EM.EXE> <day 0..6> <unit 0..3> <kind 0..8> <seed> <new.hok|new.oem> | "
+                     "em_dump insure <save> <EM.EXE> <slot 0..28> <on|off> <seed> <new.hok|new.oem> | "
+                     "em_dump contract <save> <EM.EXE> <slot 0..28> <years 1..4> <salary DM> <seed> <new.hok|new.oem> [--allow-shortening] | "
+                     "em_dump db <KB\\23.vga> [club]\n");
         return 2;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());

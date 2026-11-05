@@ -22,8 +22,9 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
     for (int attempt = 0; attempt < 250; attempt++) {
         const int slot = rng.range(0, n - 1);
         const HokSquadPlayer& p = squad[size_t(slot)];
+        if (p.player < 0 || size_t(p.player) >= players.size() || p.role == 0 || p.role >= 12) continue;
         const int position_value = players[size_t(p.player)].position;
-        if (position_value == 0 || p.role == 0 || p.role >= 12) continue;
+        if (position_value == 0) continue;
         int weight = (kind == 0 && !goal) ? rng.range(120, 170)
                                           : p.skill_b * 3 / (5 - 3 * kind) + p.skill_a / 5 + p.form / 5;
         weight += std::min(2, position_value / 25) * (72 - 17 * kind);
@@ -31,21 +32,31 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
         if (p.line & 0x80) weight += 700;
         if (rng.range(0, 3000) < weight) return slot;
     }
-    for (int slot = 0; slot < n - 1; slot++)
-        if (players[size_t(squad[size_t(slot)].player)].position != 0) return slot;
-    return 0;
+    for (int slot = 0; slot < n; slot++) {
+        const auto& p = squad[size_t(slot)];
+        if (p.player >= 0 && size_t(p.player) < players.size() && p.role > 0 && p.role < 12 &&
+            players[size_t(p.player)].position != 0) return slot;
+    }
+    return -1;
 }
 
 GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players,
-                       BorlandRandom& rng) {
+                       BorlandRandom& rng, int competition, bool shootout) {
     GoalCredit c;
     if (squad.size() < 4) return c;  // ovl14_2349 needs more than 3 players
     c.scorer = pick_player(squad, players, 0, true, rng);
-    do c.assist = pick_player(squad, players, 1, true, rng);
-    while (c.assist == c.scorer);
+    if (c.scorer < 0) return c;
+    for (int attempt = 0; attempt < 250; attempt++) {
+        c.assist = pick_player(squad, players, 1, true, rng);
+        if (c.assist != c.scorer) break;
+    }
+    if (c.assist == c.scorer) c.assist = -1;  // a depleted squad may have only one outfield player
+    if (shootout) return c;  // ovl14_2349(param_3=1) still picks scorer/assist but suppresses goals
     HokSquadPlayer& s = squad[size_t(c.scorer)];
-    s.league_goals++;
-    s.league_goals_byte++;
+    int& goals = competition == 2 ? s.other_goals : competition == 1 ? s.cup_goals : s.league_goals;
+    int& goal_byte = competition == 2 ? s.other_goals_byte : competition == 1 ? s.cup_goals_byte : s.league_goals_byte;
+    goals = std::min(goals + 1, 255);
+    goal_byte = std::min(goal_byte + 1, 255);
     return c;
 }
 

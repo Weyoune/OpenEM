@@ -30,6 +30,7 @@ public:
     explicit BorlandRandom(uint32_t seed = 1) : seed_(seed) {}
     int rand();                      // 0..32767
     int range(int lo, int hi);       // 199f:0847, inclusive
+    uint32_t state() const { return seed_; }
 
 private:
     uint32_t seed_;
@@ -44,9 +45,11 @@ struct GoalCredit {
 };
 
 // ovl14_2349 for a goal of the human team: picks scorer and assist and books the goal into the
-// squad (league goals) - the copy of the player records is left to the caller.
+// squad (competition 0 league/WM/play-offs, 1 DEB cup, 2 EuroCup).
+// A shoot-out still chooses both players (the native assist remains), but does not
+// increment normal goal fields. The copy of the player records is left to the caller.
 GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players,
-                       BorlandRandom& rng);
+                       BorlandRandom& rng, int competition = 0, bool shootout = false);
 
 
 // Scorers of a computer club, 1000:3228 (segment 1238:0ea8), called by 1238:114f for both teams

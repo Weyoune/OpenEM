@@ -29,9 +29,11 @@
 //   (mood DS:E1A4 = rand(85, 115), drawn every day by ovl10_1cd2; matchday / matchdays of the
 //   manager's league from DS:07A9 / DS:07B6), after season day 232 times (152 - age) / 100.
 //   On game levels above 0 the demand is accepted as it is; on level 0 the manager may type an
-//   amount. A new contract without signing-on money gets half a salary (+0x30).
+//   amount. Record +0x30 is optional monthly injury insurance, toggled separately
+//   in the third dialog row; a new uninsured contract leaves it zero.
 #include <array>
 #include <cstdint>
+#include <functional>
 
 #include "formats/binary.hpp"
 #include "formats/hok.hpp"
@@ -60,15 +62,19 @@ struct ContractPlayer {
     std::array<int, 3> games{};                   // +0x1C, +0x1E, +0x20
     long salary = 0, value = 0;                   // +0x28, +0x2C (raw)
     int age = 0, position = 0, team = -1;         // player record +0x14, +0x18, +0x1D
+    int player = -1;  // global player index for a contract decision; not a serialized field
 };
 
 // Squad slot `slot` of manager `m` (block 4 = the pool); nullopt-like: player < 0 if free.
 ContractPlayer contract_player(const HokFile& h, int m, int slot, int* player_index = nullptr);
 
 enum class Worth { Value = 0, Salary = 1 };
+using ContractRandomDraw=std::function<int(int,int)>;
 // ovl11_3d36. `rng` is only used for the value of flagged players.
 long player_worth(const ContractTables& t, const ContractPlayer& p, Worth kind, BorlandRandom& rng,
                   bool value_third = false);
+long player_worth(const ContractTables&,const ContractPlayer&,Worth,const ContractRandomDraw&,
+                  bool value_third=false);
 
 // ovl11_41db: salary the player asks for a new contract of `years` seasons.
 long renewal_demand(const ContractTables& t, const ContractPlayer& p, int years, int mood, int matchday,

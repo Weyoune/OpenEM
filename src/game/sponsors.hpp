@@ -9,7 +9,7 @@
 // (game/finances) adds the amounts; on the 1st every running contract loses a month.
 //
 // Offers: DS:C313 + manager * 0x1F4, 5 kinds x 10 offers of the same 10-byte layout (+4 =
-// number of boards the sponsor wants). ovl08_2ba7(forced) builds them on the 15th and the last
+// number of boards the sponsor wants). ovl08_2ba7(forced) builds them on month_length/2 and the last
 // day of the month (forced: all of them, at the game start), with D = image * 10:
 //   for offer i of kind k: unless forced, keep the offer if rand(0, 2i/3) != 0; kind 2 offers
 //   5..9 are removed; a new offer appears if rand(0, 5 - D/200) == 0 or rand(0, 4) > i, else the
@@ -30,7 +30,7 @@
 //   1) or 2 while DS:5CF3 = 0, E = (in the European cup) * (DS:07AF + 1), F = mean of (result
 //   + 1) over the last up to 5 matchdays (divided by matchday - max(matchday - 5, 0), so too
 //   few games early in the season lower it; 6 without any; ovl10_0a9d: odd matchdays use the high
-//   nibble of the table byte, even ones the whole byte - an original quirk), V = mean of
+//   nibble of the table byte, even ones the low nibble), V = mean of
 //   value / 5500 over the squad, stars = players with value / 7000 > V * rand(35, 55) / 10 (at
 //   most 4)
 //   image = min((S / 12 + (2 - league) * 10) * 85 / 100, 100)
@@ -43,6 +43,8 @@
 #include <vector>
 
 #include "formats/binary.hpp"
+#include "formats/hok.hpp"
+#include "game/contracts.hpp"
 #include "game/scorers.hpp"
 
 namespace em {
@@ -68,6 +70,10 @@ struct AdRecord {
 
 using SponsorOffers = std::array<std::array<AdRecord, kSponsorOffers>, kSponsorKinds>;
 
+// Native HOK block at state 0xA52C + manager * 0x1F4 (ovl16_11bd / ovl16_1bc3).
+SponsorOffers sponsor_offers_from_save(const Bytes& state, int manager);
+void store_sponsor_offers(Bytes& state, const SponsorOffers& offers, int manager);
+
 // ovl08_2ba7
 void generate_sponsor_offers(const SponsorTables& t, int image, bool forced, SponsorOffers& offers,
                              BorlandRandom& rng);
@@ -89,7 +95,22 @@ struct ImageInputs {
     long stadium = 0;                 // stadium_score()
 };
 
+struct ImageCompetitionFactors {
+    int playoffs = 0;  // A: active play-off or relegation participant
+    int cup = 2;       // C: active cup participant * (draw round + 1), 2 before a draw
+    int euro = 0;      // E: active EuroCup participant * (completed rounds + 1)
+};
+
+// Read the native participation queries of ovl10_18f8 (codes 0x40, 8, 0x20).
+// These use the current draw/bracket, rather than the manager's historical phase.
+ImageCompetitionFactors image_competition_factors(const HokFile& save, int manager);
+
 // ovl08_2893
 int club_image(const ImageInputs& in, BorlandRandom& rng);
+
+// Native day path: calculate market values separately in the mean and star
+// loops, preserving flagged-player RNG calls between the image draws.
+int club_image(const ImageInputs& in, const std::vector<ContractPlayer>& squad,
+               const ContractTables& contracts, BorlandRandom& rng);
 
 }  // namespace em

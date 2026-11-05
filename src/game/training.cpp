@@ -35,8 +35,17 @@ TrainingTables load_training_tables(const Bytes& exe) {
     for (size_t i = 0; i < t.free_units.size(); i++)
         t.free_units[i] = {exe.at(kDgroupFile + kFreeUnits + 2 * i), exe.at(kDgroupFile + kFreeUnits + 2 * i + 1)};
     t.level = exe.at(kDgroupFile + kLevel);
+    t.recovery_cost_factor = int32_t(le32(exe, kDgroupFile + 0x02B8));
     if (t.norm[0][0] != 83 || t.recovery_norm[0] != 111) throw FormatError("EM.EXE: training tables not found");
     return t;
+}
+
+long training_recovery_cost(const TrainingTables& t, const TrainingPlan& plan, int league) {
+    league = std::clamp(league, 0, 2);
+    const long unit = (12000L - league * 1200L) * t.recovery_cost_factor / 100;
+    long cost = 0;
+    for (const auto& day : plan) for (uint8_t kind : day) if (kind == kRecovery) cost += unit;
+    return cost != 0 ? cost + 21000L - league * 6000L : 0;
 }
 
 TrainingPlan default_training_plan(const TrainingTables& t) {
@@ -122,7 +131,16 @@ void morale_week(TrainingPlayer& p, BorlandRandom& rng) {
     const int weeks = (p.trend & 15) - 1;
     p.trend = (p.trend & 0xF0) + (weeks & 0xFF);
     p.trend &= 0xFF;
-    p.morale = std::clamp(m, 30, 68);
+    if (weeks == 0) {
+        // 146e:16ec calls ovl11_307a instead of storing the movement:
+        // both morale and trend are replaced, in this four-draw order.
+        p.morale = rng.range(35, 65);
+        p.trend = rng.range(1, 13);
+        p.trend |= rng.range(1, 3) << 4;
+        p.trend |= rng.range(0, 1) << 7;
+    } else {
+        p.morale = std::clamp(m, 30, 68);
+    }
 }
 
 }  // namespace em

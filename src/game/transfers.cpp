@@ -8,10 +8,17 @@ namespace em {
 
 bool seller_accepts(long price, long bid, BorlandRandom& rng) {
     price &= 0x7FFFFFFFL;
-    if (price <= 0) return true;
+    if (price == 0) { //391D still consumes both threshold draws for a positive bid
+        (void)rng.range(75,85);(void)rng.range(110,130);return bid>0;
+    }
     if (price * rng.range(75, 85) / 100 > bid) return false;
     if (price * rng.range(110, 130) / 100 < bid) return true;
     return rng.range(70, 120) < bid * 100 / price;
+}
+
+long purchase_subsidy(long fee, BorlandRandom& rng) {
+    if (rng.range(0, 6) != 0) return 0;
+    return long(int64_t(fee) * rng.range(25, 65) / 30000 * 300);
 }
 
 int pick_bidder(const std::vector<HokTeam>& teams, int player_strength, bool foreign, BorlandRandom& rng) {

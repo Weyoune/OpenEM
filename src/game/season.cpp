@@ -18,17 +18,27 @@ League league_from_save(const HokFile& save, int league) {
     League l;
     l.first_team = league * kHokLeagueSize;
     for (int s = 0; s < kHokLeagueSize; s++) l.rows[size_t(s)] = save.table[size_t(l.first_team + s)];
+    std::array<bool, kHokLeagueSize> seen{};
+    bool valid = true;
+    for (size_t place = 0; place < l.ranking.size(); place++) {
+        const int slot = save.table_order[size_t(league)][place] - l.first_team;
+        if (slot < 0 || slot >= kHokLeagueSize || seen[size_t(slot)]) { valid = false; break; }
+        seen[size_t(slot)] = true;
+    }
+    if (valid)
+        for (size_t place = 0; place < l.ranking.size(); place++)
+            l.ranking[place] = save.table_order[size_t(league)][place] - l.first_team;
     return l;
 }
 
 void book_result(League& league, int home, int away, MatchResult r) {
     HokTableRow& h = league.rows[size_t(home)];
     HokTableRow& a = league.rows[size_t(away)];
-    h.goals_for[0] += r.home;
-    h.goals_against[0] += r.away;
+    h.goals_for[0] = uint8_t(h.goals_for[0] + r.home);
+    h.goals_against[0] = uint8_t(h.goals_against[0] + r.away);
     h.games[0]++;
-    a.goals_for[1] += r.away;
-    a.goals_against[1] += r.home;
+    a.goals_for[1] = uint8_t(a.goals_for[1] + r.away);
+    a.goals_against[1] = uint8_t(a.goals_against[1] + r.home);
     a.games[1]++;
     if (r.home > r.away) {
         h.wins[0]++;
@@ -46,16 +56,25 @@ void book_result(League& league, int home, int away, MatchResult r) {
     }
 }
 
+int fever_curve_position(const HokTableRow& row, int matchday) {
+    if (matchday < 0 || matchday > 44) throw FormatError("League: invalid fever-curve matchday");
+    if (matchday == 44) return row.penalty_minutes & 15;
+    return row.position_history[size_t(matchday)] & 15;
+}
+
 void sort_league(League& league) {
-    std::array<int, kHokLeagueSize> order{};
-    std::iota(order.begin(), order.end(), 0);
+    auto order = league.ranking;
     auto key = [&](int s) {
         const HokTableRow& r = league.rows[size_t(s)];
         int gf = r.total(r.goals_for), ga = r.total(r.goals_against);
-        return std::array<int, 3>{r.points_plus(), gf - ga, gf};
+        return std::array<int, 4>{r.points_plus(), -r.total(r.games), gf - ga, gf};
     };
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return key(a) > key(b); });
+    // ovl13_3855, normal DS:06B0=0: points, fewer games, goal difference,
+    // goals scored. Strict non-adjacent exchanges preserve native tie effects.
+    for (size_t i = 0; i + 1 < order.size(); i++)
+        for (size_t j = i + 1; j < order.size(); j++) if (key(order[j]) > key(order[i])) std::swap(order[i], order[j]);
     for (int p = 0; p < kHokLeagueSize; p++) league.rows[size_t(order[size_t(p)])].position = p;
+    league.ranking = order;
 }
 
 std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam>& teams,
@@ -66,10 +85,16 @@ std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam
         const HokTeam& home = teams[size_t(league.first_team + p.home)];
         const HokTeam& away = teams[size_t(league.first_team + p.away)];
         const int hi = league.first_team + p.home, ai = league.first_team + p.away;
-        MatchStats* st = (hi == human_team || ai == human_team) ? human_stats : nullptr;
+        MatchStats local;
+        MatchStats* st = (hi == human_team || ai == human_team) && human_stats ? human_stats : &local;
+        const int before[2] = {st->penalty_minutes[0], st->penalty_minutes[1]};
         MatchResult r = league_match(home, away, rng, 0, hi == human_team ? human : nullptr,
                                      ai == human_team ? human : nullptr, st);
         book_result(league, p.home, p.away, r);
+        league.rows[size_t(p.home)].penalty_minutes = uint16_t(league.rows[size_t(p.home)].penalty_minutes +
+            st->penalty_minutes[0] - before[0]);
+        league.rows[size_t(p.away)].penalty_minutes = uint16_t(league.rows[size_t(p.away)].penalty_minutes +
+            st->penalty_minutes[1] - before[1]);
         results.push_back(r);
     }
     sort_league(league);

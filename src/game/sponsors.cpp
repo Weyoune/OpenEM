@@ -20,6 +20,34 @@ SponsorTables load_sponsor_tables(const Bytes& exe) {
     return t;
 }
 
+SponsorOffers sponsor_offers_from_save(const Bytes& state, int manager) {
+    if (manager < 0 || manager >= 4) throw FormatError("HOK: invalid human manager index");
+    SponsorOffers offers{};
+    for (size_t k = 0; k < offers.size(); k++)
+        for (size_t i = 0; i < offers[k].size(); i++) {
+            const size_t o = 0xA52C + size_t(manager) * 0x1F4 + (k * kSponsorOffers + i) * 10;
+            offers[k][i] = {long(int32_t(le32(state, o))), state.at(o + 4), state.at(o + 5), state.at(o + 6),
+                            state.at(o + 7), le16(state, o + 8)};
+        }
+    return offers;
+}
+
+void store_sponsor_offers(Bytes& state, const SponsorOffers& offers, int manager) {
+    if (manager < 0 || manager >= 4) throw FormatError("HOK: invalid human manager index");
+    for (size_t k = 0; k < offers.size(); k++)
+        for (size_t i = 0; i < offers[k].size(); i++) {
+            const size_t o = 0xA52C + size_t(manager) * 0x1F4 + (k * kSponsorOffers + i) * 10;
+            const AdRecord& a = offers[k][i];
+            for (int b = 0; b < 4; b++) state.at(o + size_t(b)) = uint8_t(uint32_t(a.amount) >> (8 * b));
+            state.at(o + 4) = uint8_t(a.boards);
+            state.at(o + 5) = uint8_t(a.months);
+            state.at(o + 6) = uint8_t(a.renewal);
+            state.at(o + 7) = uint8_t(a.sponsor);
+            state.at(o + 8) = uint8_t(a.min_image);
+            state.at(o + 9) = uint8_t(a.min_image >> 8);
+        }
+}
+
 void generate_sponsor_offers(const SponsorTables& t, int image, bool forced, SponsorOffers& offers,
                              BorlandRandom& rng) {
     const int d = image * 10;
@@ -69,7 +97,50 @@ long stadium_score(const SponsorTables& t, const std::array<int, 9>& stadium, co
     return s / 700;
 }
 
-int club_image(const ImageInputs& in, BorlandRandom& rng) {
+ImageCompetitionFactors image_competition_factors(const HokFile& save, int manager) {
+    if (manager < 0 || manager >= 6 || save.state.size() < 0x8F88)
+        throw FormatError("Image: invalid manager or truncated competition state");
+    const auto& state = save.state;
+    auto owned = [&](int team) {
+        return team >= 0 && size_t(team) < save.teams.size() &&
+               save.teams[size_t(team)].raw[0x16] == manager + 1;
+    };
+    auto group = [&](int kind, int index, int round) {
+        // ovl05_27a5 suppresses unformed relegation/final groups. Its first
+        // three schedule rows also describe return dates with sides reversed.
+        if (round < 0 || round >= 6 || (kind == 1 && state[0x03B6] == 0xFF) ||
+            (kind == 3 && state[0x8F86] < 6)) return false;
+        const size_t at = 0x03B8 + size_t(kind * 0x48 + index * 0x24 + (round % 3) * 6);
+        for (size_t slot = 0; slot < 4; slot++) if (owned(state[at + slot])) return true;
+        return false;
+    };
+    ImageCompetitionFactors factors;
+    const int playoff_game = state[0x0259];
+    const int relegation_round = state[0x8F87] * 2 + (playoff_game != 0) + (playoff_game > 2);
+    factors.playoffs = group(1, 0, relegation_round) || group(1, 1, relegation_round);
+    // The param_2=1 query includes a drawn play-off participant even when
+    // that particular series is already decided; the next bracket removes it.
+    for (size_t slot = state[0x03B6]; slot < 32; slot++) {
+        const int team = state[0x8E91 + slot];
+        if (team == 0xFF) break;
+        if (owned(team)) { factors.playoffs = 1; break; }
+    }
+    const int cup_round = state[0x8ED1];
+    if (cup_round != 0) {
+        factors.cup = 0;
+        for (size_t slot = 0; slot < 32 && state[0x8E51 + slot] != 0xFF; slot++)
+            if (owned(state[0x8E51 + slot])) { factors.cup = cup_round + 1; break; }
+    }
+    const int euro_round = state[0x8F86];
+    const bool euro = euro_round < 6 ? group(2, 0, euro_round) || group(2, 1, euro_round)
+                                     : group(3, 0, euro_round - 6);
+    factors.euro = euro ? euro_round + 1 : 0;
+    return factors;
+}
+
+namespace {
+template <class Value>
+int calculate_club_image(const ImageInputs& in, size_t count, Value value, BorlandRandom& rng) {
     const int lg = std::clamp(in.league, 0, 2);
     long s = (2 - lg) * (in.in_competition * 80L + 170);
     s += rng.range(32, 32) * long(in.cup - 2);
@@ -80,20 +151,36 @@ int club_image(const ImageInputs& in, BorlandRandom& rng) {
     form = form && window > 0 ? form / window : 6;
     s += rng.range(12, 12) * long(11 - form);
     long mean = 0;
-    if (!in.squad_values.empty()) {
+    if (count != 0) {
         unsigned long sum = 0;
-        for (long v : in.squad_values) sum += unsigned(v / 5500);
-        mean = long(sum / in.squad_values.size());
+        for (size_t slot = 0; slot < count; slot++) sum += unsigned(value(slot) / 5500);
+        mean = long(sum / count);
         s += mean;
         int stars = 0;
-        for (long v : in.squad_values)
-            if (unsigned(v / 7000) > unsigned(mean * rng.range(35, 55) / 10) && stars < 4) stars++;
+        for (size_t slot = 0; slot < count; slot++) {
+            // Sequence explicitly: value recalculation may itself draw rand().
+            const long current = value(slot);
+            const int threshold = rng.range(35, 55);
+            if (unsigned(current / 7000) > unsigned(mean * threshold / 10) && stars < 4) stars++;
+        }
         s += rng.range(20, 50) * long(stars);
     }
     s += 3 * in.stadium;
     long image = s / 12 + (2 - lg) * 10;
     image = image * 85 / 100;
     return int(std::min(image, 100L));
+}
+}  // namespace
+
+int club_image(const ImageInputs& in, BorlandRandom& rng) {
+    return calculate_club_image(in, in.squad_values.size(),
+                                [&](size_t slot) { return in.squad_values[slot]; }, rng);
+}
+
+int club_image(const ImageInputs& in, const std::vector<ContractPlayer>& squad,
+               const ContractTables& contracts, BorlandRandom& rng) {
+    return calculate_club_image(in, squad.size(),
+        [&](size_t slot) { return player_worth(contracts, squad[slot], Worth::Value, rng); }, rng);
 }
 
 }  // namespace em

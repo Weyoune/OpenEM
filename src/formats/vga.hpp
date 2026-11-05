@@ -48,8 +48,10 @@ enum class VgaKind { Image, ImageWithPalette, Palette, Voc, Cmf, Unknown };
 VgaKind classify_vga(const Bytes& data);
 Image decode_vga(const Bytes& data);
 
-// Palette from a raw 765-byte block (21.vga/247.vga or the tail of a screen image). The block is
-// taken as entries 0..254; values <= 63 everywhere are VGA DAC (6 bit) and are scaled to 8 bit.
+// Palette from a raw 765-byte block (21.vga/247.vga or the tail of a screen image).
+// The original passes these bytes unchanged to the six-bit VGA DAC: high bits
+// are ignored, including KB21's values above63. Expand low6bits by bit repetition.
+// Verified against every pixel of a native DOSBox-X PNG (day_20261103/palette_runtime_proof.json).
 Palette decode_palette(const Bytes& data, size_t offset = 0);
 
 }  // namespace em

@@ -8,6 +8,18 @@ namespace em {
 namespace {
 constexpr int kFirstForeignTeam = 64;  // team records 0-63: German clubs and nations
 
+// ovl05_52bf / ovl05_5aa5: the lower division hosts the first cup game.
+std::vector<HokPairing> cup_pairs(const std::vector<int>& pool) {
+    auto division = [](int team) { return team < 12 || team > 52 ? 1 : team < 24 ? 2 : 4; };
+    std::vector<HokPairing> draw;
+    for (size_t i = 0; i + 1 < pool.size(); i += 2) {
+        int home = pool[i], away = pool[i + 1];
+        if (division(away) > division(home)) std::swap(home, away);
+        draw.push_back({home, away});
+    }
+    return draw;
+}
+
 // A knock-out or play-off game: the minute loop when the human club plays, else the quick path
 // for cup games and the minute loop with play-off rules for play-off games.
 MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameRandom& rng, const HumanSide& human,
@@ -20,7 +32,8 @@ MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameR
     MatchOptions opts;
     opts.knockout = true;
     opts.playoff = playoff;
-    return league_match(teams[size_t(home)], teams[size_t(away)], rng, 0, hh, ha, nullptr, opts);
+    return league_match(teams[size_t(home)], teams[size_t(away)], rng, 0, hh, ha,
+                        hh || ha ? human.stats : nullptr, opts);
 }
 }  // namespace
 
@@ -41,10 +54,38 @@ std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::ve
 
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng) {
     std::vector<int> pool = winners;
-    for (size_t i = pool.size(); i > 1; i--) std::swap(pool[i - 1], pool[size_t(rng.range(0, int(i) - 1))]);
-    std::vector<HokPairing> draw;
-    for (size_t i = 0; i + 1 < pool.size(); i += 2) draw.push_back({pool[i], pool[i + 1]});
-    return draw;
+    if (pool.empty()) return {};
+    // ovl05_536d: twenty swaps, including draws that select the same slot twice.
+    for (int swap = 0; swap < 20; swap++) {
+        const size_t a = size_t(rng.range(1, int(pool.size())) - 1);
+        const size_t b = size_t(rng.range(1, int(pool.size())) - 1);
+        std::swap(pool[a], pool[b]);
+    }
+    return cup_pairs(pool);
+}
+
+std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng) {
+    if (human_teams.size() > 4) throw FormatError("cup: at most four human managers");
+    std::vector<int> pool(32, -1), humans;
+    for (int team : human_teams) {
+        if (team < 0 || team >= 53 || std::find(humans.begin(), humans.end(), team) != humans.end())
+            throw FormatError("cup: invalid or duplicate human club");
+        humans.push_back(team);
+        int slot;
+        do { slot = rng.range(0, 31); } while (pool[size_t(slot)] >= 0);
+        pool[size_t(slot)] = team;
+    }
+    // ovl05_4c7b(0): human clubs have reserved slots; draw the remaining clubs
+    // from 0..35 with rejection, including humans whose reserved slot is later.
+    for (size_t slot = 0; slot < pool.size(); slot++) {
+        if (pool[slot] >= 0) continue;
+        int team;
+        do { team = rng.range(0, 35); }
+        while (std::find(humans.begin(), humans.end(), team) != humans.end() ||
+               std::find(pool.begin(), pool.begin() + long(slot), team) != pool.begin() + long(slot));
+        pool[slot] = team;
+    }
+    return cup_pairs(pool);
 }
 
 int team_strength(const HokTeam& team) {
@@ -98,13 +139,13 @@ PlayoffResult play_playoffs(const std::vector<HokTeam>& teams, const std::vector
                             const HumanSide& human) {
     PlayoffResult p;
     for (int i = 0; i < 4; i++) p.quarter.push_back(best_of_five(teams, order[size_t(i)], order[size_t(7 - i)], rng, human));
-    // bracket: (1-8 vs 4-5) and (2-7 vs 3-6); the better placed team is the higher seed
+    // DS:0144: (1-8 vs 3-6) and (2-7 vs 4-5); the better placed team is the higher seed
     auto seed = [&](int team) { return int(std::find(order.begin(), order.end(), team) - order.begin()); };
     auto pair = [&](int a, int b) {
         return seed(a) < seed(b) ? best_of_five(teams, a, b, rng, human) : best_of_five(teams, b, a, rng, human);
     };
-    p.semi.push_back(pair(p.quarter[0].winner(), p.quarter[3].winner()));
-    p.semi.push_back(pair(p.quarter[1].winner(), p.quarter[2].winner()));
+    p.semi.push_back(pair(p.quarter[0].winner(), p.quarter[2].winner()));
+    p.semi.push_back(pair(p.quarter[1].winner(), p.quarter[3].winner()));
     p.final_series = pair(p.semi[0].winner(), p.semi[1].winner());
     return p;
 }
@@ -141,6 +182,9 @@ std::vector<RelegationTie> play_relegation(const std::vector<HokTeam>& teams, co
             t.second_leg.home += x;
             t.second_leg.away += y;
             t.second_leg.shootout = true;
+            t.second_leg.decision_marker = 30;
+            t.second_leg.shootout_goals[0] = x;
+            t.second_leg.shootout_goals[1] = y;
         }
         out.push_back(t);
     }

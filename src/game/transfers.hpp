@@ -2,7 +2,8 @@
 #pragma once
 // Transfer market of EM.EXE (overlay 11). Amounts are raw (shown Deutschmark times 3).
 //
-// The transfer list is squad block 4 (HOK 0x696D + 4 * 0x618, the first 10 slots). Player
+// The transfer list is squad block 4 (HOK 0x696D + 4 * 0x618), up to 11 occupied slots;
+// the refresh routine visits the first 10. Player
 // record byte +0x1A tells where a player belongs: 0..3 = the club of human manager n, 4 = on the
 // transfer list, 6 = an ordinary computer club player.
 //
@@ -40,7 +41,8 @@
 
 namespace em {
 
-constexpr int kTransferListSlots = 10;
+constexpr int kTransferRefreshSlots = 10;  // ovl11_34ef visits indices 0..9
+constexpr int kTransferListSlots = 11;     // ovl09_2cd1(..., 10) can insert at index 10
 
 // ovl11_34ef: candidate for the transfer list as an index into DS:8253 (= HOK player index + 1);
 // `is_free(p)` tells whether that player is an ordinary club player (+0x1A == 6). Returns -1 after 1500 failed tries.
@@ -62,6 +64,10 @@ int pick_bidder(const std::vector<HokTeam>& teams, int player_strength, bool for
 
 // ovl11_391d: does the selling club accept `bid` for a listed player worth `price`?
 bool seller_accepts(long price, long bid, BorlandRandom& rng);
+
+// FUN_1238_223e: with probability 1/7 a sponsor offers 25..65 percent of
+// the paid transfer fee, rounded down to 100 DM. The manager may decline it.
+long purchase_subsidy(long fee, BorlandRandom& rng);
 
 // ovl11_05f1: offer of a club for a player the manager has put up for sale (flag bit 6).
 long sale_offer(long value, bool foreign_club, BorlandRandom& rng);

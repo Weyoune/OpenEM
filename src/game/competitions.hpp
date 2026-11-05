@@ -9,7 +9,7 @@
 //   - play-off days (calendar code 0x40, ovl05_2404) run with DS:76B2 = 1: halved goal points
 // From the manual (p. 37), not yet traced in the code:
 //   - play-offs of the first division: the first eight, best of five, 1-8, 2-7, 3-6, 4-5; the
-//     semi-finals pair the winners of 1-8 / 4-5 and 2-7 / 3-6 (bracket assumed), the higher seed
+//     semi-finals pair the winners of 1-8 / 3-6 and 2-7 / 4-5 (DS:0144), the higher seed
 //     has home ice in games 1, 3 and 5 (assumed)
 //   - relegation (play_relegation, kept as an alternative): the original plays groups instead -
 //     ovl05_0ef7(1) puts the 11th/12th of a division and the 1st/2nd of the one below into a
@@ -17,7 +17,8 @@
 //     11th and 12th of a division against 1st and 2nd of the one below, home and away;
 //     the two better teams play in the higher division (pairs 11-2 and 12-1 assumed, goal
 //     aggregate, a draw decided by shoot-out after the second leg)
-//   - the draw of the next cup round is not traced yet: winners are paired in random order
+//   - ovl05_4c7b reserves human clubs in the 32-slot cup draw; ovl05_536d redraws
+//     winners with twenty swaps; ovl05_52bf gives the lower division home ice first.
 #include <array>
 #include <vector>
 
@@ -36,14 +37,18 @@ struct Tie {
 struct HumanSide {
     int team = -1;
     const HumanSquad* squad = nullptr;
+    MatchStats* stats = nullptr;
 };
 
 // One cup round: plays every pair once, knock-out.
 std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw,
                                 GameRandom& rng, const HumanSide& human = {});
 
-// Pairs the winners of a cup round for the next one (random order - approximation).
+// Native redraw: twenty random swaps, then home ice for the lower division.
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng);
+
+// Native first round: 32 entrants from clubs 0..35; every human club is guaranteed a slot.
+std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng);
 
 // Team strength as the draws use it (ovl13_0026): skill 1, skill 2 and form of both kinds, / 6.
 int team_strength(const HokTeam& team);

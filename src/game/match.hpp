@@ -4,7 +4,7 @@
 //
 // Random numbers: FUN_199f_07e5(long lo, long hi), state at DS:E017:
 //   s = (16 * s + 167) mod 4 000 000;  result = lo + s * (hi - lo + 1) / 4 000 000
-// (the Borland RTL random at 1000:0bc7 is used for a few 50:50 decisions; GameRandom stands in).
+// (the Borland RTL random at 1000:06df is used for a few 50:50 decisions; GameRandom stands in).
 //
 // Line strength, FUN_162c_16bf for a computer team, kind k (0 = defence, 1 = attack), line l:
 //   s1 = skill1[k] + 4 - 4l, s2 = skill2[k] + 4 - 4l, f = form[k] + 4 - 4l (f >= 0)
@@ -25,18 +25,23 @@
 //   a team without strength scores 0 (and gives 9 if the other is above 20); a team with fewer
 //   skaters on the ice (+0x32) has its goals divided by 4.
 // Result for a goal chance of a live match: FUN_162c_23c4, see docs/logic/SPIELSIMULATION.md.
+#include <array>
 #include <cstdint>
 #include <vector>
 
 #include "formats/hok.hpp"
+#include "game/penalties.hpp"
 
 namespace em {
+
+class BorlandRandom;
 
 class GameRandom {
 public:
     explicit GameRandom(uint32_t seed = 1) : s_(seed % kModulus) {}
     // FUN_199f_07e5: a value in lo..hi (inclusive)
     long range(long lo, long hi);
+    uint32_t state() const { return s_; }
 
 private:
     static constexpr uint32_t kModulus = 4000000;
@@ -47,11 +52,17 @@ struct LineValues {
     int skill1 = 0, skill2 = 0, form = 0;
 };
 
+// DS:4926, transient counters of the native minutes-based line rotation. They
+// survive uninterrupted matches but are absent from native HOK save blocks.
+struct LineRotation {
+    std::array<std::array<uint8_t, 4>, 2> used{};
+};
+
 // FUN_162c_16bf for a computer team.
 LineValues line_strength(const HokTeam& team, int line, int kind, bool in_play, int man_advantage);
 
 // The squad of a human manager, for line strengths from the players (FUN_162c_16bf, human branch;
-// squad records at DS:5DBB + manager * 0x618, see hok.hpp):
+// squad records at DS:5DC3 + manager * 0x618, see hok.hpp):
 //   members of line l of kind k: role != 0, (block - 1) & 0x7F == l and block >> 7 == k; the
 //   goalkeeper (block 1, position value 0) belongs to every defence line. At most DS:CC37
 //   players per line (2 defenders, 3 forwards; the goalkeeper extra).
@@ -65,7 +76,21 @@ struct HumanSquad {
     const std::vector<HokPlayer>* players = nullptr;
     int per_line[2] = {2, 3};  // DS:CC37 for this manager
     int level = 2;             // DS:0ED8
+    int penalty_effort_adjustment = 0;  // ovl06_02d8, read through the native owner index
+    int effort_control = 0, offence_control = 0;  // 0 automatic, 1 semi, 2 manual/live value
+    int line_control = 0;  // 0 follows team mode, 1 two lines, 2 auto, 3 opponent, 4 minutes, 5 manual
+    std::array<std::array<int, 4>, 2> line_quotas{};  // DS:CC73, normalized user minutes
+    LineRotation* rotation = nullptr;
+    BorlandRandom* selection_rng = nullptr;  // separate native stream for individual player selection
+    int minimum_players = 0;  // career policy: 9; 0 permits isolated small-squad physics simulations
 };
+
+// Native independent control bytes DS:A6FB/A707 + manager (HOK 01FF/01F3).
+void configure_human_tactics(HumanSquad& human, const HokFile& save, int manager);
+
+// FUN_162c_0737: human line-energy cache, excluding natural goalkeepers;
+// fixed divisor 3, with a 90-point defence allowance when per_line is 2.
+void refresh_line_energy(HokTeam& team, const HumanSquad& human);
 
 LineValues line_strength(const HokTeam& team, const HumanSquad& human, int line, int kind, bool in_play,
                          int man_advantage);
@@ -81,7 +106,11 @@ int playing_strength(const HokTeam& team, StrengthMode mode, int minute, int man
 
 struct MatchResult {
     int home = 0, away = 0;
-    bool shootout = false;  // decided by penalty shoot-out (the goals include the shoot-out)
+    bool shootout = false;  // known shoot-out; imported marker 30 alone cannot classify the decision
+    // Native score marker: 30 for overtime or a quick-path shoot-out, 60 for
+    // a shoot-out after overtime. Preserve it separately: 30 alone is ambiguous.
+    int decision_marker = 0;
+    int shootout_goals[2] = {};  // additions to the result, excluded from normal scorer goals
 };
 
 // DS:76B2 = 1 (play-offs) halves the goal points (+1); knock-out matches go to overtime (61-70)
@@ -100,6 +129,11 @@ MatchResult quick_match(const HokTeam& home, const HokTeam& away, GameRandom& rn
 MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
                            GameRandom& rng, int level = 0);
 
+// Same ovl06_161d fast event path; group matches permit draws and omit the
+// shoot-out. Its postprocessing can add away goals even after a zero-strength 0:0.
+MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
+                                    GameRandom& rng, int level, bool knockout);
+
 // A league match as the matchday loop ovl06_2522 plays it: for every minute 1..60 the goal points
 // of FUN_162c_1e9c (with the fatigue of that minute, capped at 10) give chances (1 in 20 per
 // point; a home chance sets the event value to 1, every away chance adds 2, so two away chances
@@ -112,20 +146,37 @@ MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_g
 // ahead ... high deficit), minus (50 - energy) if the lines on the ice have less than 50, clamped to
 // 0..100; offence (flags bits 4-6) = offence base + value for the situation.
 void apply_effort(HokTeam& team, int own_goals, int opponent_goals);
-void apply_effort(HokTeam& team, int own_goals, int opponent_goals, const std::vector<HokSquadPlayer>* squad);
+void apply_effort(HokTeam& team, int own_goals, int opponent_goals, const std::vector<HokSquadPlayer>* squad,
+                  int effort_control = 0, int offence_control = 0);
 
 // FUN_162c_02a5: match set-up of a computer team against `opponent` - neutral strengths decide
 // effort (60 / 0 25 20 30 0 if the doubled strengths differ by less than 25, else 40 / 20 20 15 20 0,
 // DS:4912) and offence (stronger 4 5 6 7 4, weaker 5 6 4 4 0, DS:491C), 5 skaters, no penalties.
-void setup_computer_team(HokTeam& team, const HokTeam& opponent);
+// For a human side only AUTOM. components are replaced; SEMI/MANUAL values survive.
+void setup_computer_team(HokTeam& team, const HokTeam& opponent, const HumanSquad* human = nullptr,
+                         const HumanSquad* opponent_human = nullptr);
 
 // Optional counters of a league_match run (index 0 = home, 1 = away).
-struct MatchStats {
+struct MatchStats : PenaltyOpportunities {
+    int forfeit_side = 0;  // 1 home / 2 away; no minute simulation, separate career fine
+    int initial_load[2] = {-1, -1};  // native manager +0xF0, before the minute simulation
     int penalties[2] = {};
+    int penalty_minutes[2] = {};  // all assessed penalties, including expiry/replacement in one minute
     int power_play_goals[2] = {};
     int short_handed_goals[2] = {};  // goals scored with fewer skaters on the ice
     int line_minutes[2][4] = {};  // home team: minutes per defence / forward line
+    std::array<HokTeam, 2> final_teams;  // completed live tactic values of both working copies
+    std::array<std::vector<HokSquadPlayer>, 2> final_squads;  // human working copies after the match
 };
+
+// ovl06_33b6(..., 0xFF, 0): a selected role AND a nonzero line, first 29 slots.
+int selected_match_players(const HumanSquad& human);
+// FUN_162c_146c(..., 1): cumulative line skill1 minus skill2, /5 +20,
+// clamped to 0..40, or 100 for fewer than nine selected players.
+int squad_match_load(const HokTeam& team, const HumanSquad& human);
+
+// FUN_162c_0417: exact preparation/interval energy, including its unconditional decrement.
+void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval = false);
 
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0,
                          const HumanSquad* home_human = nullptr, const HumanSquad* away_human = nullptr,

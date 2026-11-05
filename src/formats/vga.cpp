@@ -71,13 +71,11 @@ Image decode_vga(const Bytes& d) {
 
 Palette decode_palette(const Bytes& d, size_t offset) {
     if (offset + kPaletteBytes > d.size()) throw FormatError("palette: block too short");
-    bool six_bit = std::all_of(d.begin() + offset, d.begin() + offset + kPaletteBytes,
-                               [](uint8_t v) { return v <= 63; });
     Palette p;
     for (size_t i = 0; i < kPaletteBytes / 3; i++)
         for (size_t c = 0; c < 3; c++) {
-            uint8_t v = d[offset + i * 3 + c];
-            p.rgb[i][c] = six_bit ? uint8_t(v << 2 | v >> 4) : v;
+            const uint8_t v = d[offset + i * 3 + c] & 63;
+            p.rgb[i][c] = uint8_t(v << 2 | v >> 4);
         }
     return p;
 }

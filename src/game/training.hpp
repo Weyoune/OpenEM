@@ -32,8 +32,9 @@
 //   step(v, 0): v = clamp(v, 80, 120) - 100; |v| < 3 gives 0, else +-1 if rand(0, 100) <= |v|
 //   step(v, 1): v = clamp(v, 100, 300) - 200; |v| < 3 gives 0, else +-|v| / 5
 // Morale (146e:0c89): with chance 3/4 the morale moves by bits 4-6 of +0x14 (up if bit 7 is
-// set, down otherwise), the low nibble of +0x14 counts the weeks of that trend (at 0 a new one is
-// drawn by 1000:4cbd, open); morale is kept in 30..68.
+// set, down otherwise), the low nibble of +0x14 counts the updates of that trend. At 1 -> 0,
+// ovl11_307a replaces morale with rand(35,65) and draws a new trend: duration 1..13,
+// amount 1..3, direction 0..1. Otherwise morale is kept in 30..68.
 // Injuries (146e:1732): while +0x09 bit 1 is set, +0x0D counts down once a week; at 0 the
 // injury bits 0-1 are cleared.
 #include <array>
@@ -56,12 +57,17 @@ struct TrainingTables {
     std::array<int, 3> recovery_norm{};                                       // DS:48E5
     std::array<std::array<uint8_t, 2>, 8> free_units{};                       // DS:48EB (day, unit)
     int level = 2;                                                            // DS:0ED8
+    long recovery_cost_factor = 100;                                          // DS:02B8, percent
 };
 
 TrainingTables load_training_tables(const Bytes& exe);
 
 // 146e:0653
 TrainingPlan default_training_plan(const TrainingTables& t);
+
+// ovl15_293f: amount charged at each of the two weekly club updates. The
+// dialog shows twice this amount. Without paid recovery there is no base fee.
+long training_recovery_cost(const TrainingTables& t, const TrainingPlan& plan, int league);
 
 // The squad record fields the week changes.
 struct TrainingPlayer {

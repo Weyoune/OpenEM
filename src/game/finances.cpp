@@ -22,8 +22,15 @@ constexpr int kBankParty = 4;
 constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618;
 constexpr size_t kPlayers = 0x4FC6, kPlayerRecord = 0x21;
 constexpr int kPoolManager = 4;
+constexpr size_t kAdverts = 0xACFC, kAdvertRecord = 10, kAdvertBlock = 0x6E;
+constexpr size_t kAccrued = 0;  // DS:02A0; first block written by ovl16_11bd
+constexpr size_t kOtherCosts = 0x06C1, kOtherCostsStride = 0x15;  // DS:A07E, three i32 amounts per manager
 
 long sle32(const Bytes& b, size_t o) { return long(int32_t(le32(b, o))); }
+
+void put32(Bytes& b, size_t o, long v) {
+    for (int i = 0; i < 4; i++) b.at(o + size_t(i)) = uint8_t(uint32_t(v) >> (8 * i));
+}
 
 // ovl12_0d27(manager, 0): 29 slots (12 for the pool block 4), counting those with a player.
 int count_players(const Bytes& s, int m) {
@@ -34,7 +41,7 @@ int count_players(const Bytes& s, int m) {
     return n;
 }
 
-// Salary (+0x28) plus the signing-on long at +0x30 of squad slot i of block m.
+// Salary (+0x28) plus the monthly injury-insurance premium at +0x30.
 long slot_costs(const Bytes& s, int m, int i) {
     const size_t r = kSquad + size_t(m) * kSquadBlock + size_t(i) * kSquadRecord;
     return sle32(s, r + 0x28) + sle32(s, r + 0x30);
@@ -63,7 +70,17 @@ FinanceTables load_finance_tables(const Bytes& exe) {
     return t;
 }
 
+FinanceTables load_finance_tables(const Bytes& exe, const HokFile& save) {
+    FinanceTables tables = load_finance_tables(exe);
+    if (save.state.size() <= 0xAEB4 || save.state[0xAEB4] > 5)
+        throw FormatError("HOK: invalid saved game level");
+    tables.level = save.state[0xAEB4];  // DS:0ED8
+    tables.cost_factor = sle32(save.state, 0x06B0);  // DS:02BC
+    return tables;
+}
+
 ManagerBudget budget_from_save(const HokFile& h, int m) {
+    if (m < 0 || m >= 4) throw FormatError("HOK: invalid human manager index");
     const Bytes& s = h.state;
     const size_t blk = kManagerBlock + size_t(m) * kManagerSize;
     ManagerBudget b;
@@ -95,12 +112,53 @@ ManagerBudget budget_from_save(const HokFile& h, int m) {
     b.open_97ee = sle32(s, blk + kOpen97ee);
     b.stored_income = sle32(s, blk + kIncome);
     b.bank = sle32(s, blk + kDebts + 4 * kBankParty);
+    b.accrued = sle32(s, kAccrued + size_t(m) * 4);
+    for (size_t i = 0; i < 3; i++) b.open_a07e += sle32(s, kOtherCosts + size_t(m) * kOtherCostsStride + i * 4);
+    for (size_t i = 0; i < b.adverts.size(); i++) {
+        const size_t o = kAdverts + size_t(m) * kAdvertBlock + i * kAdvertRecord;
+        b.adverts[i] = {sle32(s, o), s.at(o + 5), s.at(o + 6), s.at(o + 4), s.at(o + 7), le16(s, o + 8)};
+    }
     return b;
+}
+
+void store_budget(HokFile& h, const ManagerBudget& b, int m) {
+    if (m < 0 || m >= 4) throw FormatError("HOK: invalid human manager index");
+    Bytes& s = h.state;
+    const size_t blk = kManagerBlock + size_t(m) * kManagerSize;
+    put32(s, blk + kBalance, b.balance);
+    put32(s, blk + kOpen97ee, b.open_97ee);
+    put32(s, blk + kIncome, b.stored_income);
+    put32(s, blk + kDebts + 4 * kBankParty, b.bank);
+    put32(s, kManagerBlock + kBankParty * kManagerSize + kDebts + 4 * size_t(m), -b.bank);
+    put32(s, kAccrued + size_t(m) * 4, b.accrued);
+    put32(s, blk + kAttendanceTotal, b.attendance_total);
+    put32(s, blk + kAttendanceRecord, b.attendance_record);
+    put32(s, blk + kAttendanceMin, b.attendance_min);
+    s.at(blk + kHomeGames) = uint8_t(b.home_games);
+    if (b.record_guest >= 0) s.at(blk + kRecordGuest) = uint8_t(b.record_guest);
+    if (b.min_guest >= 0) s.at(blk + kMinGuest) = uint8_t(b.min_guest);
+    s.at(blk + kTeamIndex) = uint8_t(b.team);
+    s.at(blk + kLeague) = uint8_t(b.league);
+    for (size_t i = 0; i < b.stadium.size(); i++) s.at(blk + kStadium + i * 2) = uint8_t(b.stadium[i]);
+    for (size_t i = 0; i < b.places.size(); i++) {
+        s.at(blk + kPlaces + i * 4) = uint8_t(b.places[i]);
+        s.at(blk + kPlaces + i * 4 + 1) = uint8_t(b.places[i] >> 8);
+    }
+    for (size_t i = 0; i < b.adverts.size(); i++) {
+        const size_t o = kAdverts + size_t(m) * kAdvertBlock + i * kAdvertRecord;
+        put32(s, o, b.adverts[i].amount);
+        s.at(o + 4) = uint8_t(b.adverts[i].board_owner);
+        s.at(o + 5) = uint8_t(b.adverts[i].months_left);
+        s.at(o + 6) = uint8_t(b.adverts[i].flags);
+        s.at(o + 7) = uint8_t(b.adverts[i].sponsor);
+        s.at(o + 8) = uint8_t(b.adverts[i].min_image);
+        s.at(o + 9) = uint8_t(b.adverts[i].min_image >> 8);
+    }
 }
 
 // Single-player view: only the bank is a party. The bank's own entry about the manager is
 // -bank; ovl08 reads that one, the result is the same.
-long savings_interest(const ManagerBudget& b) { return b.bank > 0 ? b.bank * 10 / 1000 : 0; }
+long savings_interest(const ManagerBudget& b) { return b.bank > 0 ? b.bank / 100 : 0; }  // native *1/100, no overflowing *10
 
 long loan_interest(const ManagerBudget& b) { return b.bank < 0 ? -(b.bank * 4 / 100) : 0; }
 
@@ -184,17 +242,20 @@ long home_attendance(const FinanceTables& t, ManagerBudget& b, const AttendanceM
     a = std::min(a, capacity);
 
     b.balance += long(b.ticket_price) * a * t.money_num / t.money_den;
-    // ovl14_2630: statistics (the per-game list at +0x0FE holds a / 1000; not kept here)
-    b.attendance_total += a;
-    if (a >= b.attendance_record) {
-        b.attendance_record = a;
-        b.record_guest = m.guest;
+    // ovl14_2630: non-league games still sell tickets, but do not enter
+    // the league-only totals, extrema, count or 22-byte attendance graph.
+    if (m.league_statistics) {
+        b.attendance_total += a;
+        if (a >= b.attendance_record) {
+            b.attendance_record = a;
+            b.record_guest = m.guest;
+        }
+        if (a <= b.attendance_min) {
+            b.attendance_min = a;
+            b.min_guest = m.guest;
+        }
+        b.home_games = uint8_t(b.home_games + 1);
     }
-    if (a <= b.attendance_min) {
-        b.attendance_min = a;
-        b.min_guest = m.guest;
-    }
-    b.home_games++;
     return a;
 }
 
@@ -206,14 +267,60 @@ void finance_day(const FinanceTables& t, ManagerBudget& b, int day, int month_da
     if (day == 1)
         for (AdvertContract& a : b.adverts) {
             if (a.amount == 0 || a.months_left == 0) continue;
-            if (--a.months_left == 0 && (a.flags & 0x7F) == 0) a = AdvertContract{};
+            // ovl08_1d61 clears only the amount; metadata survives until reused.
+            if (--a.months_left == 0 && (a.flags & 0x7F) == 0) a.amount = 0;
         }
 
     if (day == month_days) {
-        b.balance += monthly_income(b, false) - monthly_expenses(t, b, false, false) + b.accrued;
+        b.stored_income = monthly_income(b, false);  // ovl08_16b7(0), excludes savings interest
+        b.balance += b.stored_income - monthly_expenses(t, b, false, false) + b.accrued;
         b.balance = std::clamp(b.balance, -kBalanceLimit, kBalanceLimit);
         b.accrued = 0;
     }
+}
+
+int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng) {
+    if (manager < 0 || manager >= 4) throw FormatError("Stadium: invalid manager");
+    const size_t block = kManagerBlock + size_t(manager) * kManagerSize;
+    // ovl08_0000 returns after the first actual loss. Even an empty item
+    // consumes the preceding probability and division draws.
+    if (rng.range(0, t.level * 2 + 8) == 0) {
+        for (int item = 0; item < 11; item++) {
+            if (item < 9 && (item == 2 || item == 5) && t.level != 0) continue;
+            const int maximum = item >= 9 ? 3000 : (item == 3 || item == 4 ? 2500 : 5000);
+            if (rng.range(0, maximum) >= (5 - t.level) * 20 || b.league >= rng.range(1, 3)) continue;
+            if (item < 9) {
+                if (b.stadium[size_t(item)] == 0) continue;
+                b.stadium[size_t(item)]--;
+            } else {
+                int& places = b.places[size_t(item - 9)];
+                if (places == 0) continue;
+                const int loss = (rng.range(places / 20, places / 6) + 150) / 100 * 100;
+                places = uint16_t(places - loss);
+            }
+            break;
+        }
+    }
+    int completed = 0;
+    for (size_t item = 0; item < 11; item++) {
+        uint8_t& weeks = state.at(block + 0x128 + item);
+        if (weeks == 0 || --weeks != 0) continue;
+        if (item < 9) {
+            b.stadium[item] = state.at(block + 0x117 + item * 2);
+            state.at(block + 0x117 + item * 2) = 0;
+        } else {
+            const size_t planned = block + 0x135 + (item - 9) * 4;
+            b.places[item - 9] = le16(state, planned);
+            state.at(planned) = state.at(planned + 1) = 0;
+        }
+        completed++;
+    }
+    for (size_t i = 0; i < b.stadium.size(); i++) state.at(block + kStadium + i * 2) = uint8_t(b.stadium[i]);
+    for (size_t i = 0; i < b.places.size(); i++) {
+        state.at(block + kPlaces + i * 4) = uint8_t(b.places[i]);
+        state.at(block + kPlaces + i * 4 + 1) = uint8_t(b.places[i] >> 8);
+    }
+    return completed;
 }
 
 }  // namespace em

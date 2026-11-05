@@ -6,11 +6,11 @@
 // season review of each human manager and the player turnover. Amounts are raw (DM * 3).
 //
 // Prizes (ovl02_0000, added to the balance and to DS:E289[manager]):
-//   champion (achievement bit 0 of manager block +0xF3): 1,500,000 raw (500,000 DM) in the
+//   promotion (achievement bit 0 set and bit 1 clear): 1,500,000 raw (500,000 DM) in the
 //   first division, 900,000 raw (300,000 DM) below; every advertising contract then gets a
 //   renewal offer (+6 bit 7)
-//   cup winner, a second title (high / low byte of the caller's word) and ovl00 1000:0e20(0):
-//   300,000 raw (100,000 DM) each
+//   league's leading scorer, best goalkeeper and fair-play winner: 300,000 raw each.
+// The cup winner receives 1,500,000 raw earlier, before the license check (ovl14:3e43).
 // Players (all 199):
 //   every player gets one year older (+0x14)
 //   squad records: offer flags (+0x09 bits 6-7) cleared, contract years (+0x0B) minus one
@@ -25,6 +25,7 @@
 //   skills rand(base - 5, base + 5) each, +0x19 = 0, free (+0x1A = 6).
 #include <array>
 #include <cstdint>
+#include <vector>
 
 #include "formats/binary.hpp"
 #include "formats/hok.hpp"
@@ -33,10 +34,43 @@
 
 namespace em {
 
-constexpr long kChampionPrize = 1500000, kChampionPrizeLower = 900000, kTitlePrize = 300000;
+constexpr long kPromotionPrize = 1500000, kPromotionPrizeLower = 900000,
+               kTitlePrize = 300000, kCupPrize = 1500000;
 
 // Prize money of the season review (raw).
-long season_prizes(bool champion, int league, bool cup, bool second_title, bool third_title);
+long season_prizes(bool promoted, int league, bool scorer, bool goalkeeper, bool fair_play);
+
+struct SeasonScorer {
+    int team = -1, position = 0, goals = 0, assists_or_minutes = 0, games = 0;
+};
+// ovl01_0000(1): native exchange sort of all player records, followed by the
+// manager's league filter. Returns the clubs of the best skater and goalkeeper.
+std::array<int, 2> season_scoring_winners(const std::vector<SeasonScorer>& players,
+                                          int first_team, int last_team);
+
+struct CareerSeason {
+    int place = 1;  // 1..12, or first-division play-off code 51/52/53
+    int league = 0;
+    bool champion = false;
+    int cup_round = 0;
+    bool cup_winner = false;
+    int euro_phase = 0;
+    bool euro_winner = false;
+};
+// ovl14: annual four-byte manager history, capped at fifty visible seasons.
+// A nonparticipant's EuroCup byte is left untouched, including after a shift.
+void append_career_season(Bytes& state, int manager, int year, const CareerSeason& season);
+
+// ovl14_2e0f, 4087..4258: a season-end financial license withdrawal.
+// The two title flags protect the club; at most two cases per league are handled.
+bool financial_license_due(long balance, int league, uint8_t season_flags, int withdrawals);
+
+// Modify the first four bytes of the relegation working schedule (DS:CF20),
+// indexed by the saved table permutation. Original participant IDs stay intact.
+// withdrawals is the number of earlier license cases in this division (0 or 1).
+void insert_financial_relegation(std::array<int, 4>& working_teams,
+                                const std::array<int, 4>& ranking,
+                                int league, int team, int withdrawals);
 
 // Age above rand(37, 42)?
 bool player_retires(int age, BorlandRandom& rng);
