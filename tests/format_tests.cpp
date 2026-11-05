@@ -2451,22 +2451,26 @@ static void contract_expiry(const fs::path& em_dir, const fs::path& ref_dir) {
         return asked++ == 0 ? 0 : 2;
     });
     const size_t squad = g.save().squad.size();
-    int signed_up = 0, left = 0, disabled = 0;
+    int signed_up = 0, left = 0, disabled = 0, joined = 0;
     while (g.seasons_completed() < 2) {
         g.advance_day();
         for (const std::string& line : g.log()) {
             signed_up += line.find(" signs for 2 years") != std::string::npos;
             left += line.find(" leaves the club") != std::string::npos;
             disabled += line.find(" leaves after permanent injury") != std::string::npos;
+            joined += line.find(" joins from the youth team") != std::string::npos;  // annual youth intake refills the squad
         }
         g.clear_log();
     }
     CHECK(asked + disabled == int(squad) && left >= 1 && signed_up + left == asked);
-    CHECK(g.save().squad.size() == squad - size_t(left + disabled));
+    CHECK(g.save().squad.size() == squad - size_t(left + disabled) + size_t(joined));
+    int short_contracts = 0;  // youth joiners get 1..2 years, everybody else signed 2
     for (size_t i = 0; i < g.save().squad.size(); i++) {
         const uint8_t* r = g.save().state.data() + 0x696D + i * 0x34;
-        CHECK(r[0x0B] == 2 && r[0x0F] == g.save().squad[i].player + 1);
+        short_contracts += r[0x0B] == 1;
+        CHECK((r[0x0B] == 2 || r[0x0B] == 1) && r[0x0F] == g.save().squad[i].player + 1);
     }
+    CHECK(short_contracts <= joined);
     const HokFile again = decode_hok(g.save_bytes());
     CHECK(again.squad.size() == g.save().squad.size());
     std::printf("contracts: %d asked (about %ld DM each), %d signed, %d left\n", asked,

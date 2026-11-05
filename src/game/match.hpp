@@ -124,6 +124,9 @@ struct MatchOptions {
 };
 
 // FUN_162c_1e9c over the whole match (minute 0 to 60) for two computer teams.
+int minute_events(const HokTeam& home, const HokTeam& away, int minute, GameRandom& rng, int level,
+                  const HumanSquad* home_squad = nullptr, const HumanSquad* away_squad = nullptr, bool special = false);
+
 MatchResult quick_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0, bool playoff = false);
 
 // Knock-out match between computer teams without display (ovl06_161d quick path): whole-match

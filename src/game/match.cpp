@@ -205,17 +205,13 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     }
     // The whole-match call (0, 60) ignores DS:76B2 (REAL-CODE test, all values 0..11); halving applies to
     // the per-minute and overtime calls only.
-    if ((special && !whole) || minute > 60) {
+    if (minute > 60) {
         if (sh != 0) home = home / 2 + 1;
         if (sa != 0) away = away / 2 + 1;
     }
     if (h.skaters < a.skaters) home >>= 2;
     if (a.skaters < h.skaters) away >>= 2;
     if (minute < 58 && ((h.flags | a.flags) & 0x08)) home = away = 9;  // bit 3: goalkeeper pulled (ovl06_34f6)
-    if (!whole && (special || minute > 60)) {
-        home++;
-        away++;
-    }
     return {home, away};
 }
 
@@ -242,6 +238,19 @@ bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, Ga
     return rng.range(0, 6 - q) == 0;
 }
 }  // namespace
+
+// FUN_162c_1e9c(home, away, minute, 60) for one minute: the goal points give chances (1 in 20 per point);
+// a home chance sets the event value to 1, each away chance adds 2.
+int minute_events(const HokTeam& h, const HokTeam& a, int minute, GameRandom& rng, int level, const HumanSquad* hh,
+                  const HumanSquad* ha, bool special) {
+    const MatchResult pts = goal_points(h, a, minute, false, rng, level, hh, ha, special);
+    int events = 0;
+    for (int i = 0; i < pts.home; i++)
+        if (rng.range(1, 20) == 1) events = 1;
+    for (int i = 0; i < pts.away; i++)
+        if (rng.range(1, 20) == 1) events += 2;
+    return events;
+}
 
 MatchResult quick_match(const HokTeam& h, const HokTeam& a, GameRandom& rng, int level, bool playoff) {
     return goal_points(h, a, 0, true, rng, level, nullptr, nullptr, playoff);
@@ -603,12 +612,7 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
             prepare_match_energy(h, hp ? &hsq : nullptr, true);
             prepare_match_energy(a, ap ? &asq : nullptr, true);
         }
-        MatchResult pts = goal_points(h, a, minute, false, rng, level, hp, ap, opts.playoff);
-        int events = 0;  // FUN_162c_1e9c: a home chance sets the value to 1, each away chance adds 2
-        for (int i = 0; i < pts.home; i++)
-            if (rng.range(1, 20) == 1) events = 1;
-        for (int i = 0; i < pts.away; i++)
-            if (rng.range(1, 20) == 1) events += 2;
+        const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
         if ((events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap)) {
             score.home++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
