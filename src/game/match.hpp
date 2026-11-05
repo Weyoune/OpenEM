@@ -128,6 +128,8 @@ struct MatchOptions {
 void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, GameRandom& rng);
 // FUN_162c_0e32 for a computer team: lines on the ice and shift counters (REAL-CODE tests call it directly).
 void match_change_lines(HokTeam& team, const HokTeam& opponent, LineRotation& rotation);
+// FUN_162c_23c4 for two computer teams: does the chance of side 0 (home) or 1 (away) become a goal?
+bool match_chance_is_goal(const HokTeam& home, const HokTeam& away, int side, int minute, GameRandom& rng, int level);
 
 int minute_events(const HokTeam& home, const HokTeam& away, int minute, GameRandom& rng, int level,
                   const HumanSquad* home_squad = nullptr, const HumanSquad* away_squad = nullptr, bool special = false);

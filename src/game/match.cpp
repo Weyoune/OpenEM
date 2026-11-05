@@ -676,4 +676,8 @@ void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, Game
 
 void match_change_lines(HokTeam& team, const HokTeam& opponent, LineRotation& rotation) { change_lines(team, opponent, nullptr, rotation); }
 
+bool match_chance_is_goal(const HokTeam& home, const HokTeam& away, int side, int minute, GameRandom& rng, int level) {
+    return chance_is_goal(home, away, side, minute, rng, level, nullptr, nullptr);
+}
+
 }  // namespace em
