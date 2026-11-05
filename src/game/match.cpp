@@ -351,11 +351,15 @@ void change_lines(HokTeam& t, const HokTeam& opp, const HumanSquad* human, LineR
         const int current = t.current_line[kind];
         int next = current;
         const int lines = mode == 1 ? 2 : 3 + int(has_fourth_line(human, kind));
-        int best = 0, second = 1;
+        // best/runner-up in one pass (REAL-CODE test of FUN_162c_0e32): a new best pushes the old best down only if it
+        // beats the old runner-up strictly; ties keep the earlier runner-up
+        int best = 0, second = -1;
         for (int line = 1; line < lines; line++) {
-            if (line_energy(t, squad, kind, line) > line_energy(t, squad, kind, best)) {
-                second = best; best = line;
-            } else if (second == best || line_energy(t, squad, kind, line) > line_energy(t, squad, kind, second)) {
+            const int e = line_energy(t, squad, kind, line);
+            if (e > line_energy(t, squad, kind, best)) {
+                if (second < 0 || line_energy(t, squad, kind, best) > line_energy(t, squad, kind, second)) second = best;
+                best = line;
+            } else if (second < 0 || e > line_energy(t, squad, kind, second)) {
                 second = line;
             }
         }
@@ -669,5 +673,7 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
 }
 
 void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, GameRandom& rng) { energy_minute(team, squad, rng); }
+
+void match_change_lines(HokTeam& team, const HokTeam& opponent, LineRotation& rotation) { change_lines(team, opponent, nullptr, rotation); }
 
 }  // namespace em
