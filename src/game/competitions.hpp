@@ -50,6 +50,9 @@ std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandR
 // Native first round: 32 entrants from clubs 0..35; every human club is guaranteed a slot.
 std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng);
 
+// ovl05_52bf: pairs a list of clubs two by two and gives the first home game to the lower division.
+std::vector<HokPairing> cup_home_rights(const std::vector<int>& pool);
+
 // Team strength as the draws use it (ovl13_0026): skill 1, skill 2 and form of both kinds, / 6.
 int team_strength(const HokTeam& team);
 

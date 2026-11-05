@@ -52,6 +52,8 @@ std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::ve
     return out;
 }
 
+std::vector<HokPairing> cup_home_rights(const std::vector<int>& pool) { return cup_pairs(pool); }
+
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng) {
     std::vector<int> pool = winners;
     if (pool.empty()) return {};
