@@ -2710,12 +2710,6 @@ void Game::advance_day() {
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
-    // The share market moves once per day (ovl39_03ca; REAL-CODE test realcode_market). The finance view mirrors the state.
-    market_day(save_.state, brng_);
-    for (int c = 0; c < kHokShares; c++) {
-        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
-        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
-    }
     if (calendar_.league_day(day_)) {
         //6AF8:3178..3198 updates every club manager before the league games.
         //Game currently simulates manager0; all clubs use first-league DS07A9.
@@ -2750,6 +2744,13 @@ void Game::advance_day() {
     if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days)
         update_sponsors();
     if (finance_date.day == finance_month_days) clear_insurance_locks();
+    // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
+    // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
+    market_day(save_.state, brng_);
+    for (int c = 0; c < kHokShares; c++) {
+        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    }
     finance_day(finance_, budget_, finance_date.day, finance_month_days);
     if (finance_date.day == finance_month_days) {
         char line[128];
