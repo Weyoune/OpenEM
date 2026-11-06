@@ -133,6 +133,9 @@ public:
     Game(const Bytes& exe,const Bytes& save,uint32_t seed=1,const Game* previous=nullptr);
 
     void advance_day();
+    // Random generator states (Borland rand seed DS:5984, GameRandom state DS:E017) for the whole-program differential test.
+    uint32_t borland_state() const { return brng_.state(); }
+    uint32_t game_rng_state() const { return rng_.state(); }
     // The name database KB/23.vga; without it the season change keeps the player names.
     void set_database(const Database& db) { db_ = db; }
     // The game as a savegame (HOK): date and matchdays (the next day is the one to play), tables,
