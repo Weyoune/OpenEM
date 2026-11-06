@@ -2353,7 +2353,7 @@ static void manager_offers(const fs::path& em_dir, const fs::path& ref_dir) {
     std::unique_ptr<Game> candidate;
     int days = 0;
     uint32_t offered_seed = 0;
-    for (uint32_t seed = 1; seed <= 4; seed++) {
+    for (uint32_t seed = 1; seed <= 40; seed++) {  // the first seed whose first offer is an unlisted computer bid (the random stream decides)
         candidate = std::make_unique<Game>(exe, initial, seed);
         days = 0;
         while (candidate->offers().empty() && days < 232) {
@@ -2361,7 +2361,7 @@ static void manager_offers(const fs::path& em_dir, const fs::path& ref_dir) {
             candidate->clear_log();
             days++;
         }
-        if (!candidate->offers().empty()) {
+        if (!candidate->offers().empty() && !candidate->offers()[0].listed && candidate->offers()[0].amount == 0 && candidate->offers()[0].bidder >= 0 && candidate->offers()[0].bidder < 43 && candidate->offers()[0].bidder != candidate->human_team()) {
             offered_seed = seed;
             break;
         }

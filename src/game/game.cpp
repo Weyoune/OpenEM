@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/game.hpp"
+#include "game/market.hpp"
 #include "game/result_books.hpp"
 #include "game/youth_progress.hpp"
 #include "game/youth_intake.hpp"
@@ -2709,6 +2710,12 @@ void Game::advance_day() {
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
+    // The share market moves once per day (ovl39_03ca; REAL-CODE test realcode_market). The finance view mirrors the state.
+    market_day(save_.state, brng_);
+    for (int c = 0; c < kHokShares; c++) {
+        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    }
     if (calendar_.league_day(day_)) {
         //6AF8:3178..3198 updates every club manager before the league games.
         //Game currently simulates manager0; all clubs use first-league DS07A9.
