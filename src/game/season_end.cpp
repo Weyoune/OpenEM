@@ -114,17 +114,20 @@ RatingBounds load_rating_bounds(const Bytes& exe) {
     return b;
 }
 
-void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng) {
+void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode) {
     const auto& lim = b.bounds[size_t(std::clamp(team_class, 0, 2))];
-    const long r = rng.range(0, 6);
-    const long trend = rng.range(0, 2 * r + 6) - 6;
+    const int lo = mode == 3 ? lim[0] : 1, hi = mode == 3 ? lim[1] : 99;
+    const int step = mode == 3 ? 3 : 1;  // the original passes 1 or 3
+    const int plus = mode == 3 ? 3 : 1;
+    const long r = rng.range(0, 2 * step);
+    const long trend = rng.range(0, 2 * r + 2 * plus) - (step + plus);
     for (int k = 0; k < 2; k++)
-        team.skill1[k] = std::clamp(int(team.skill1[k] + rng.range(trend - 1, trend + 1)), lim[0], lim[1]);
+        team.skill1[k] = std::clamp(int(team.skill1[k] + rng.range(trend - 1, trend + 1)), lo, hi);
     for (int k = 0; k < 2; k++) {
         int v = team.skill2[k];
-        rng.range(0, 2);  // drawn but ignored in mode 3 (REAL-CODE test: `|| param_1 == 3`), the change always happens
-        v += int(rng.range(trend - 1, trend + 1));
-        team.skill2[k] = std::clamp(v, lim[0], lim[1]);
+        const bool change = rng.range(0, 2) == 0 || mode == 3;  // drawn but ignored in mode 3 (REAL-CODE test)
+        if (change) v += int(rng.range(trend - 1, trend + 1));
+        team.skill2[k] = std::clamp(v, lo, hi);
     }
     team.form[0] = int(rng.range(45, 55));
     team.form[1] = int(rng.range(45, 55));

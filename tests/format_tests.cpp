@@ -1001,7 +1001,8 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     for (int t = 0; t < 36; t++) {  // new season values in the class bounds (162c:1c5b)
         if (t == g.human_team()) continue;  // follows its squad (162c:146c)
         const HokTeam& tm = g.save().teams[size_t(t)];
-        const int lo = t < 12 ? 69 : t < 24 ? 39 : 15, hi = t < 12 ? 94 : t < 24 ? 73 : 43;
+        // the twice-weekly drift of the daily loop (162c:1c5b mode 1) lets the values wander over the season: only 1..99 holds
+        const int lo = 1, hi = 99;
         for (int k = 0; k < 2; k++)
             CHECK(tm.skill1[k] >= lo && tm.skill1[k] <= hi && tm.skill2[k] >= lo && tm.skill2[k] <= hi);
     }

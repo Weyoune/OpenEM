@@ -312,6 +312,7 @@ private:
     HokPlayer* player_by_exe_index(int exe_index);  // squad +0x0F = HOK player record + 1
     void remove_squad_record(int block, int slot, int end_slot);
     void refresh_human_team();
+    void weekly_team_drift();  // 162c:1c5b(1) for all 64 national and club teams, twice a week (ovl14)
     void refresh_menu_manager(int manager);
     void update_sponsors();
     int current_club_image();

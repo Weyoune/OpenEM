@@ -406,7 +406,7 @@ void Game::play_league_day() {
         day_league.push_back(l);
     }
     MatchStats stats;
-    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats);
+    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
     for (size_t d = 0; d < league_days.size(); d++) {
         const int l = day_league[d];
         const int md = league_days[d].matchday + 1;
@@ -1095,6 +1095,21 @@ void Game::prepare_human_lineup(bool restore_saved_mode) {
 // 162c:146c (called by the day loop): the human club's team record follows its squad. Per kind
 // the line strengths (FUN_162c_16bf, human branch, not in play, no man advantage) of lines 0..2
 // are summed and divided by 3. The monthly income (finances) uses these values.
+void Game::weekly_team_drift() {
+    // ovl14 day loop: on the two training days the original runs 162c:1c5b(1) over all clubs (skills with a small trend, bounds 1..99)
+    // and re-rolls the form of the 64 teams (national teams only the form); REAL-CODE test realcode_rerate (mode 1).
+    g_draw_scope = "team-drift";
+    for (int t = 0; t < 64; t++) {
+        if (t < kFirstNationalTeam) {
+            rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_, 1);
+        } else {
+            save_.teams[size_t(t)].form[0] = int(rng_.range(45, 55));
+            save_.teams[size_t(t)].form[1] = int(rng_.range(45, 55));
+            save_.teams[size_t(t)].energy[0][0] = int(rng_.range(45, 55));
+        }
+    }
+}
+
 void Game::refresh_human_team() {
     HokTeam& team = save_.teams[size_t(human_team_)];
     for (int kind = 0; kind < 2; kind++) {
@@ -2738,12 +2753,18 @@ g_draw_scope = "cup/euro/playoff/wm";
     if (event == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
         begin_world_championship();
 g_draw_scope = "match-injuries";
+    // After the matches of the day the original leaves every team of the 150 with fresh line energy 90 (whole-program test:
+    // even clubs that did not play); the weekly drift below overwrites the byte +0x1E afterwards.
+    for (HokTeam& team : save_.teams)
+        for (int kind = 0; kind < 2; kind++)
+            for (int line = 0; line < 4; line++) team.energy[kind][line] = 90;
     if (human_played_) match_injuries();
     const bool world_phase = wm_round_ > 0 || event == kEventWorldChampionship;
     // The WM branch selects manager 5 on a match date; 146e:0c89's
     // human-manager guard then excludes the club. Empty dates retain club
     // processing before the next date's finances (ovl14:3727..388f).
     if (world_phase && event == 0 && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
+        weekly_team_drift();
         squad_injuries(false, true);  // today's healing was already prepared
         make_offers();
         train_squad();
@@ -2783,6 +2804,7 @@ g_draw_scope = "image";
     // instead advances the stadium and healing without normal club training.
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
+        weekly_team_drift();
         squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_ + 1) == 0);
         make_offers();
         train_squad();

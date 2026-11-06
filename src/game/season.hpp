@@ -48,9 +48,9 @@ struct LeagueDay {
     League* league;
     int matchday;  // 0-based
 };
-std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, const std::vector<HokTeam>& teams,
+std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, std::vector<HokTeam>& teams,
                                                      const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human = nullptr,
-                                                     int human_team = -1, MatchStats* human_stats = nullptr);
+                                                     int human_team = -1, MatchStats* human_stats = nullptr, BorlandRandom* brng = nullptr);
 
 // Plays one league matchday (0-based) and books it; the club `human_team` (team index) plays with
 // the line strengths of its squad (`human`), all others as computer teams.

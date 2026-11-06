@@ -94,6 +94,8 @@ struct RatingBounds {
     std::array<std::array<int, 2>, 3> bounds{};  // [class] = {low, high}
 };
 RatingBounds load_rating_bounds(const Bytes& exe);
-void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng);
+// mode 3: new season (class bounds, the skill 2 step always happens); mode 1: the twice-weekly drift of the daily loop
+// (ovl14, 162c:1c5b(1)): smaller trend, bounds 1..99, skill 2 changes only if rand(0, 2) == 0.
+void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode = 3);
 
 }  // namespace em

@@ -710,6 +710,8 @@ MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, in
 MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
 MatchResult MatchRun::finish() { return p_->finish(); }
+const HokTeam& MatchRun::home_state() const { return p_->h; }
+const HokTeam& MatchRun::away_state() const { return p_->a; }
 
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
                          const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts) {

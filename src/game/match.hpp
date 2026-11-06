@@ -208,6 +208,8 @@ public:
     MatchRun& operator=(const MatchRun&) = delete;
     bool step();           // plays the next minute; false when no minute is left
     MatchResult finish();  // plays the remaining minutes and returns the result
+    const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
+    const HokTeam& away_state() const;
 
 private:
     struct Impl;
