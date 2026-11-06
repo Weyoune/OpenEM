@@ -25,6 +25,9 @@
 
 namespace em {
 
+// When set, every BorlandRandom::range call appends (lo, hi) (whole-program differential test).
+extern std::vector<std::pair<long, long>>* g_borland_log;
+
 class BorlandRandom {
 public:
     explicit BorlandRandom(uint32_t seed = 1) : seed_(seed) {}

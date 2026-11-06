@@ -10,7 +10,10 @@ int BorlandRandom::rand() {
     return int((seed_ >> 16) & 0x7FFF);
 }
 
+std::vector<std::pair<long, long>>* g_borland_log = nullptr;
+
 int BorlandRandom::range(int lo, int hi) {
+    if (g_borland_log) g_borland_log->push_back({lo, hi});  // differential tests: argument sequence of every draw
     if (hi < lo) std::swap(lo, hi);
     return lo + rand() % (hi + 1 - lo);
 }

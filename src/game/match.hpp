@@ -36,6 +36,9 @@ namespace em {
 
 class BorlandRandom;
 
+// When set, every GameRandom::range call appends (lo, hi) (whole-program differential test).
+extern std::vector<std::pair<long, long>>* g_game_log;
+
 class GameRandom {
 public:
     explicit GameRandom(uint32_t seed = 1) : s_(seed % kModulus) {}

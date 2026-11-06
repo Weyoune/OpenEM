@@ -27,7 +27,10 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 }
 }  // namespace
 
+std::vector<std::pair<long, long>>* g_game_log = nullptr;
+
 long GameRandom::range(long lo, long hi) {
+    if (g_game_log) g_game_log->push_back({lo, hi});
     s_ = uint32_t((uint64_t(s_) * 16 + 167) % kModulus);
     // 32-bit signed product that wraps like the original (REAL-CODE test): negative results appear when
     // state * (hi - lo + 1) exceeds 2^31, i.e. for ranges above roughly 540 at high states.
