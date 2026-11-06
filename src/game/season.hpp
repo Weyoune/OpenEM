@@ -42,6 +42,16 @@ void sort_league(League& league);
 // deliberately reaches the following native penalty-minutes byte.
 int fever_curve_position(const HokTableRow& row, int matchday);
 
+// Several league matchdays of one day, played minute by minute across all matches (the original interleaves them);
+// returns the results per entry and books them like play_matchday.
+struct LeagueDay {
+    League* league;
+    int matchday;  // 0-based
+};
+std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, const std::vector<HokTeam>& teams,
+                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human = nullptr,
+                                                     int human_team = -1, MatchStats* human_stats = nullptr);
+
 // Plays one league matchday (0-based) and books it; the club `human_team` (team index) plays with
 // the line strengths of its squad (`human`), all others as computer teams.
 std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam>& teams,

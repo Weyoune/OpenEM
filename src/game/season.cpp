@@ -103,4 +103,59 @@ std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam
     return results;
 }
 
+
+std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, const std::vector<HokTeam>& teams,
+                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human,
+                                                     int human_team, MatchStats* human_stats) {
+    // ovl06_2522 plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
+    struct Entry {
+        size_t day, pair;
+        int home, away;
+        MatchStats local;
+        MatchStats* stats = nullptr;
+        int before[2] = {0, 0};
+        std::unique_ptr<MatchRun> run;
+    };
+    std::vector<std::unique_ptr<Entry>> entries;
+    std::vector<std::vector<Pairing>> pairings;
+    for (size_t d = 0; d < days.size(); d++) {
+        pairings.push_back(round_robin_pairings(tables.teams12, days[d].matchday));
+        League& league = *days[d].league;
+        for (size_t k = 0; k < pairings[d].size(); k++) {
+            auto e = std::make_unique<Entry>();
+            e->day = d;
+            e->pair = k;
+            e->home = league.first_team + pairings[d][k].home;
+            e->away = league.first_team + pairings[d][k].away;
+            e->stats = (e->home == human_team || e->away == human_team) && human_stats ? human_stats : &e->local;
+            e->before[0] = e->stats->penalty_minutes[0];
+            e->before[1] = e->stats->penalty_minutes[1];
+            e->run = std::make_unique<MatchRun>(teams[size_t(e->home)], teams[size_t(e->away)], rng, 0, e->home == human_team ? human : nullptr,
+                                                e->away == human_team ? human : nullptr, e->stats);
+            entries.push_back(std::move(e));
+        }
+    }
+    for (bool more = true; more;) {
+        more = false;
+        for (auto& e : entries) more = e->run->step() || more;
+    }
+    std::vector<std::vector<MatchResult>> results(days.size());
+    for (auto& e : entries) {
+        League& league = *days[e->day].league;
+        const Pairing& p = pairings[e->day][e->pair];
+        const MatchResult r = e->run->finish();
+        book_result(league, p.home, p.away, r);
+        league.rows[size_t(p.home)].penalty_minutes = uint16_t(league.rows[size_t(p.home)].penalty_minutes + e->stats->penalty_minutes[0] - e->before[0]);
+        league.rows[size_t(p.away)].penalty_minutes = uint16_t(league.rows[size_t(p.away)].penalty_minutes + e->stats->penalty_minutes[1] - e->before[1]);
+        results[e->day].push_back(r);
+    }
+    for (size_t d = 0; d < days.size(); d++) {
+        League& league = *days[d].league;
+        sort_league(league);
+        if (days[d].matchday >= 0 && days[d].matchday < 44)  // the fever curve: position after this matchday
+            for (HokTableRow& row : league.rows) row.position_history[size_t(days[d].matchday)] = row.position;
+    }
+    return results;
+}
+
 }  // namespace em

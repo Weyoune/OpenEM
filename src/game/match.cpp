@@ -28,9 +28,10 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 }  // namespace
 
 std::vector<std::pair<long, long>>* g_game_log = nullptr;
+std::vector<const char*>* g_game_scopes = nullptr;
 
 long GameRandom::range(long lo, long hi) {
-    if (g_game_log) g_game_log->push_back({lo, hi});
+    if (g_game_log) { g_game_log->push_back({lo, hi}); if (g_game_scopes) g_game_scopes->push_back(g_draw_scope); }
     s_ = uint32_t((uint64_t(s_) * 16 + 167) % kModulus);
     // 32-bit signed product that wraps like the original (REAL-CODE test): negative results appear when
     // state * (hi - lo + 1) exceeds 2^31, i.e. for ranges above roughly 540 at high states.
@@ -563,61 +564,79 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human) {
     return std::clamp(difference / 5 + 20, 0, 40);
 }
 
-MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
-                         const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts) {
-    if (stats) {
-        stats->forfeit_side = 0;
-        stats->initial_load[0] = hh ? squad_match_load(home, *hh) : -1;
-        stats->initial_load[1] = ha ? squad_match_load(away, *ha) : -1;
-    }
-    const int forfeited = hh && hh->minimum_players > 0 && selected_match_players(*hh) < hh->minimum_players ? 1 :
-                          ha && ha->minimum_players > 0 && selected_match_players(*ha) < ha->minimum_players ? 2 : 0;
-    if (forfeited) {
-        if (stats) stats->forfeit_side = forfeited;
-        return {forfeited == 1 ? 0 : 2, forfeited == 1 ? 2 : 0};
-    }
-    // Working copies: the set-up (FUN_162c_02a5 for computer teams, 5 skaters for everybody), then
-    // per minute chances and goals, energy (0737), line changes (0e32), effort (12da) and
-    // penalties (ovl06_02d8, not in minute 60) as in the matchday loop ovl06_2522.
-    HokTeam h = home, a = away;
+// One league match as a sequence of minutes (ovl06_2522 plays all matches of the day minute by minute).
+struct MatchRun::Impl {
+    GameRandom& rng;
+    int level;
+    MatchStats* stats;
+    MatchOptions opts;
+    HokTeam h, a;
     std::vector<HokSquadPlayer> hsq, asq;
     HumanSquad hh2, ha2;
-    if (hh) {
-        hsq = *hh->squad;
-        hh2 = *hh;
-        hh2.squad = &hsq;
-    }
-    if (ha) {
-        asq = *ha->squad;
-        ha2 = *ha;
-        ha2.squad = &asq;
-    }
-    const HumanSquad* hp = hh ? &hh2 : nullptr;
-    const HumanSquad* ap = ha ? &ha2 : nullptr;
-    prepare_match_energy(h, hp ? &hsq : nullptr);
-    prepare_match_energy(a, ap ? &asq : nullptr);
-    // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
-    // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
-    // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
-    setup_computer_team(h, a, hp, ap);
-    setup_computer_team(a, h, ap, hp);
-    h.skaters = a.skaters = 5;
-    for (int kind = 0; kind < 2; kind++) {
-        h.shift[kind] = a.shift[kind] = 0;
-    }
+    const HumanSquad* hp = nullptr;
+    const HumanSquad* ap = nullptr;
     LineRotation hlocal, alocal;
-    LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
-    LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
     PenaltyBox hbox, abox;
-    BorlandRandom fallback_selection(1);
-    PenaltySide hpen{h, hbox, hp ? &hsq : nullptr, hp,
-                    hp && hp->selection_rng ? *hp->selection_rng : fallback_selection, stats, 0};
-    PenaltySide apen{a, abox, ap ? &asq : nullptr, ap,
-                    ap && ap->selection_rng ? *ap->selection_rng : fallback_selection, stats, 1};
+    BorlandRandom fallback_selection{1};
+    std::unique_ptr<PenaltySide> hpen, apen;
     MatchResult score;
-    // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     int last = 60;
-    for (int minute = 1; minute <= last; minute++) {
+    int minute = 0;
+    bool forfeit = false;
+    MatchResult forfeit_result;
+
+    Impl(const HokTeam& home, const HokTeam& away, GameRandom& r, int lvl, const HumanSquad* hh, const HumanSquad* ha, MatchStats* st,
+         const MatchOptions& o)
+        : rng(r), level(lvl), stats(st), opts(o), h(home), a(away) {
+        if (stats) {
+            stats->forfeit_side = 0;
+            stats->initial_load[0] = hh ? squad_match_load(home, *hh) : -1;
+            stats->initial_load[1] = ha ? squad_match_load(away, *ha) : -1;
+        }
+        const int forfeited = hh && hh->minimum_players > 0 && selected_match_players(*hh) < hh->minimum_players ? 1 :
+                              ha && ha->minimum_players > 0 && selected_match_players(*ha) < ha->minimum_players ? 2 : 0;
+        if (forfeited) {
+            if (stats) stats->forfeit_side = forfeited;
+            forfeit = true;
+            forfeit_result = {forfeited == 1 ? 0 : 2, forfeited == 1 ? 2 : 0};
+            return;
+        }
+        // Working copies: the set-up (FUN_162c_02a5 for computer teams, 5 skaters for everybody), then
+        // per minute chances and goals, energy (0737), line changes (0e32), effort (12da) and
+        // penalties (ovl06_02d8, not in minute 60) as in the matchday loop ovl06_2522.
+        if (hh) {
+            hsq = *hh->squad;
+            hh2 = *hh;
+            hh2.squad = &hsq;
+        }
+        if (ha) {
+            asq = *ha->squad;
+            ha2 = *ha;
+            ha2.squad = &asq;
+        }
+        hp = hh ? &hh2 : nullptr;
+        ap = ha ? &ha2 : nullptr;
+        prepare_match_energy(h, hp ? &hsq : nullptr);
+        prepare_match_energy(a, ap ? &asq : nullptr);
+        // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
+        // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
+        // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
+        setup_computer_team(h, a, hp, ap);
+        setup_computer_team(a, h, ap, hp);
+        h.skaters = a.skaters = 5;
+        for (int kind = 0; kind < 2; kind++) h.shift[kind] = a.shift[kind] = 0;
+        hpen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp,
+                                                          hp && hp->selection_rng ? *hp->selection_rng : fallback_selection, st, 0});
+        apen = std::make_unique<PenaltySide>(PenaltySide{a, abox, ap ? &asq : nullptr, ap,
+                                                          ap && ap->selection_rng ? *ap->selection_rng : fallback_selection, st, 1});
+    }
+
+    // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
+    bool step() {
+        if (forfeit || minute >= last) return false;
+        minute++;
+        LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
+        LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
         if (minute == 21 || minute == 41 || minute == 61 || minute == 66) {
             prepare_match_energy(h, hp ? &hsq : nullptr, true);
             prepare_match_energy(a, ap ? &asq : nullptr, true);
@@ -639,19 +658,21 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
             hbox.goal_against(h, hp ? &hsq : nullptr);
             if (stats) stats->after_goal(1, equal, a.skaters, h.skaters, ap != nullptr, hp != nullptr);
         }
-        energy_minute(h, hp ? &hsq : nullptr, rng);
-        energy_minute(a, ap ? &asq : nullptr, rng);
-        if (hp) refresh_line_energy(h, *hp);
-        if (ap) refresh_line_energy(a, *ap);
-        change_lines(h, a, hp, hrotation);
-        change_lines(a, h, ap, arotation);
-        apply_effort(h, score.home, score.away, hp ? &hsq : nullptr,
-                     hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
-        apply_effort(a, score.away, score.home, ap ? &asq : nullptr,
-                     ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
+        // ovl06_2522 (whole-program differential test): energy, line changes and effort only run for a match with a manager
+        // (var_F); computer against computer matches skip them (their draws do not appear in the original's stream).
+        if (hp || ap) {
+            energy_minute(h, hp ? &hsq : nullptr, rng);
+            energy_minute(a, ap ? &asq : nullptr, rng);
+            if (hp) refresh_line_energy(h, *hp);
+            if (ap) refresh_line_energy(a, *ap);
+            change_lines(h, a, hp, hrotation);
+            change_lines(a, h, ap, arotation);
+            apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
+            apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
+        }
         if (minute != 60 && minute != 70) {
-            penalty_minute(hpen, apen, true, rng);
-            penalty_minute(apen, hpen, true, rng);
+            penalty_minute(*hpen, *apen, true, rng);
+            penalty_minute(*apen, *hpen, true, rng);
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
@@ -661,20 +682,39 @@ MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& r
             last = 70;
             score.decision_marker = 30;  // ovl05_3573, before minutes 61-70
         }
+        return minute < last;
     }
-    hbox.finish(h, hp ? &hsq : nullptr);
-    abox.finish(a, ap ? &asq : nullptr);
-    if (opts.knockout && score.home == score.away) shootout(score, rng, true, hp || ap);
-    if (stats) {
-        stats->final_teams = {h, a};
-        stats->penalties[0] += hbox.started();
-        stats->penalties[1] += abox.started();
-        stats->penalty_minutes[0] += hbox.minutes_assessed();
-        stats->penalty_minutes[1] += abox.minutes_assessed();
-        stats->final_squads[0] = std::move(hsq);
-        stats->final_squads[1] = std::move(asq);
+
+    MatchResult finish() {
+        if (forfeit) return forfeit_result;
+        while (step()) {}
+        hbox.finish(h, hp ? &hsq : nullptr);
+        abox.finish(a, ap ? &asq : nullptr);
+        if (opts.knockout && score.home == score.away) shootout(score, rng, true, hp || ap);
+        if (stats) {
+            stats->final_teams = {h, a};
+            stats->penalties[0] += hbox.started();
+            stats->penalties[1] += abox.started();
+            stats->penalty_minutes[0] += hbox.minutes_assessed();
+            stats->penalty_minutes[1] += abox.minutes_assessed();
+            stats->final_squads[0] = std::move(hsq);
+            stats->final_squads[1] = std::move(asq);
+        }
+        return score;
     }
-    return score;
+};
+
+MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh, const HumanSquad* ha,
+                   MatchStats* stats, const MatchOptions& opts)
+    : p_(std::make_unique<Impl>(home, away, rng, level, hh, ha, stats, opts)) {}
+MatchRun::~MatchRun() = default;
+bool MatchRun::step() { return p_->step(); }
+MatchResult MatchRun::finish() { return p_->finish(); }
+
+MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
+                         const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts) {
+    MatchRun run(home, away, rng, level, hh, ha, stats, opts);
+    return run.finish();
 }
 
 void match_energy_minute(HokTeam& team, std::vector<HokSquadPlayer>* squad, GameRandom& rng) { energy_minute(team, squad, rng); }

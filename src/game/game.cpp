@@ -396,13 +396,23 @@ void Game::play_league_day() {
             save_.state.at(at)=uint8_t(home);save_.state.at(at+1)=uint8_t(away);
         }
     }
+    // ovl06_2522: all matches of all leagues are played at once, minute by minute (the random stream is shared)
+    std::vector<LeagueDay> league_days;
+    std::vector<int> day_league;
     for (int l = 0; l < 3; l++) {
         const int md = matchday_[size_t(l)];
         if (md < 1 || md > 4 * (kHokLeagueSize - 1)) continue;
-        League& lg = leagues_[size_t(l)];
+        league_days.push_back({&leagues_[size_t(l)], md - 1});
+        day_league.push_back(l);
+    }
+    MatchStats stats;
+    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats);
+    for (size_t d = 0; d < league_days.size(); d++) {
+        const int l = day_league[d];
+        const int md = league_days[d].matchday + 1;
+        League& lg = *league_days[d].league;
         const auto pairs = round_robin_pairings(schedule_.teams12, md - 1);
-        MatchStats stats;
-        const auto results = play_matchday(lg, save_.teams, schedule_, md - 1, rng_, &human_, human_team_, &stats);
+        const auto& results = day_results[d];
         matchday_[size_t(l)]++;
         for (size_t k = 0; k < pairs.size(); k++) {
             const int hi = lg.first_team + pairs[k].home, ai = lg.first_team + pairs[k].away;

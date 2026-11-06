@@ -27,6 +27,7 @@
 // Result for a goal chance of a live match: FUN_162c_23c4, see docs/logic/SPIELSIMULATION.md.
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "formats/hok.hpp"
@@ -38,6 +39,8 @@ class BorlandRandom;
 
 // When set, every GameRandom::range call appends (lo, hi) (whole-program differential test).
 extern std::vector<std::pair<long, long>>* g_game_log;
+extern std::vector<const char*>* g_game_scopes;
+extern const char* g_draw_scope;
 
 class GameRandom {
 public:
@@ -193,6 +196,23 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human);
 
 // FUN_162c_0417: exact preparation/interval energy, including its unconditional decrement.
 void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval = false);
+
+// One league match played minute by minute: the original plays all matches of a day interleaved (minute 1 of every
+// match, then minute 2 ...), see Game::play_league_day.
+class MatchRun {
+public:
+    MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0, const HumanSquad* home_human = nullptr,
+             const HumanSquad* away_human = nullptr, MatchStats* stats = nullptr, const MatchOptions& options = {});
+    ~MatchRun();
+    MatchRun(const MatchRun&) = delete;
+    MatchRun& operator=(const MatchRun&) = delete;
+    bool step();           // plays the next minute; false when no minute is left
+    MatchResult finish();  // plays the remaining minutes and returns the result
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> p_;
+};
 
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0,
                          const HumanSquad* home_human = nullptr, const HumanSquad* away_human = nullptr,
