@@ -27,6 +27,13 @@ namespace em {
 
 // When set, every BorlandRandom::range call appends (lo, hi) (whole-program differential test).
 extern std::vector<std::pair<long, long>>* g_borland_log;
+extern std::vector<const char*>* g_borland_scopes;  // parallel to g_borland_log: the DrawScope active at each draw
+extern const char* g_draw_scope;
+struct DrawScope {  // names the code section that draws (differential tests)
+    const char* prev;
+    explicit DrawScope(const char* name) : prev(g_draw_scope) { g_draw_scope = name; }
+    ~DrawScope() { g_draw_scope = prev; }
+};
 
 class BorlandRandom {
 public:

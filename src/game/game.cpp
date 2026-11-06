@@ -2706,6 +2706,7 @@ void Game::advance_day() {
     // the next menu, then disables automatic selection during this match.
     save_.state.at(0x078B)=save_.state.at(0x078A);
     save_.state.at(0x078A)=0;
+g_draw_scope = "transfer-list";
     if (brng_.range(0, kManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
     day_++;
     const uint8_t event = calendar_.event(day_);
@@ -2713,16 +2714,20 @@ void Game::advance_day() {
     if (calendar_.league_day(day_)) {
         //6AF8:3178..3198 updates every club manager before the league games.
         //Game currently simulates manager0; all clubs use first-league DS07A9.
+g_draw_scope = "youth";
         youth_fixture_day(save_.state,finance_,matchday_[0],0,[&](int lo,int hi){return brng_.range(lo,hi);});
+g_draw_scope = "league-day";
         play_league_day();
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;
     }
+g_draw_scope = "cup/euro/playoff/wm";
     if (event == kEventCup) play_cup_day();
     if (event == kEventEuroCup) play_euro_day();
     if (event == kEventPlayoff) play_playoff_day();
     if (event == kEventWorldChampionship) play_wm_day();
     if (event == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
         begin_world_championship();
+g_draw_scope = "match-injuries";
     if (human_played_) match_injuries();
     const bool world_phase = wm_round_ > 0 || event == kEventWorldChampionship;
     // The WM branch selects manager 5 on a match date; 146e:0c89's
@@ -2740,17 +2745,20 @@ void Game::advance_day() {
     const int finance_month_days = kMonthDays[size_t(finance_date.month - 1)];
     refresh_budget_roster();
     const long before = budget_.balance;
+g_draw_scope = "refusal-reset";
     stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
     if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days)
         update_sponsors();
     if (finance_date.day == finance_month_days) clear_insurance_locks();
     // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
     // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
+g_draw_scope = "market";
     market_day(save_.state, brng_);
     for (int c = 0; c < kHokShares; c++) {
         save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
         for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
     }
+g_draw_scope = "finance";
     finance_day(finance_, budget_, finance_date.day, finance_month_days);
     if (finance_date.day == finance_month_days) {
         char line[128];
@@ -2758,15 +2766,18 @@ void Game::advance_day() {
                       budget_.balance / 3, (budget_.balance - before) / 3);
         log_.push_back(line);
     }
+g_draw_scope = "image";
     image_ = current_club_image();  // ovl08_2893, after each daily finance booking
     // Club branch 6af8:3374..3443: advance date, finance, then the
     // twice-weekly training and finally stadium. The WM preparation branch
     // instead advances the stadium and healing without normal club training.
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
+g_draw_scope = "weekly-injuries-offers-training";
         squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_ + 1) == 0);
         make_offers();
         train_squad();
     }
+g_draw_scope = "stadium-week";
     if ((day_ + 1) % 7 == 0) stadium_week(finance_, budget_, save_.state, 0, brng_);
     if (world_phase) heal_squad((day_ + 1) % 7 == 0);
     prepare_human_lineup();

@@ -11,9 +11,11 @@ int BorlandRandom::rand() {
 }
 
 std::vector<std::pair<long, long>>* g_borland_log = nullptr;
+std::vector<const char*>* g_borland_scopes = nullptr;
+const char* g_draw_scope = "";
 
 int BorlandRandom::range(int lo, int hi) {
-    if (g_borland_log) g_borland_log->push_back({lo, hi});  // differential tests: argument sequence of every draw
+    if (g_borland_log) { g_borland_log->push_back({lo, hi}); if (g_borland_scopes) g_borland_scopes->push_back(g_draw_scope); }  // differential tests: argument sequence of every draw
     if (hi < lo) std::swap(lo, hi);
     return lo + rand() % (hi + 1 - lo);
 }
