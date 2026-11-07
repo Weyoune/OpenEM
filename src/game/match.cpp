@@ -259,13 +259,15 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
 
 // FUN_162c_23c4 for a computer match: does the chance of side 0 (home) or 1 (away) become a goal?
 bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, GameRandom& rng, int level,
-                    const HumanSquad* hh, const HumanSquad* ha, bool* shot = nullptr) {
+                    const HumanSquad* hh, const HumanSquad* ha, bool* shot = nullptr, const int* kinds_h = nullptr,
+                    const int* kinds_a = nullptr) {
     if (shot) *shot = false;
     const int ch = h.skaters - a.skaters, ca = a.skaters - h.skaters;
-    const int h_def = playing_strength(h, hh, StrengthMode::Defensive, minute, ch, h.current_line[0], h.current_line[1]);
-    const int a_off = playing_strength(a, ha, StrengthMode::Offensive, minute, ca, a.current_line[0], a.current_line[1]);
-    const int h_off = playing_strength(h, hh, StrengthMode::Offensive, minute, ch, h.current_line[0], h.current_line[1]);
-    const int a_def = playing_strength(a, ha, StrengthMode::Defensive, minute, ca, a.current_line[0], a.current_line[1]);
+    // ovl06_1371 without recomputation (23c4): the per-kind values come from the goal-point step of the same minute (DS:E06E)
+    const int h_def = kinds_h ? strength_from_kinds(h, kinds_h, StrengthMode::Defensive) : playing_strength(h, hh, StrengthMode::Defensive, minute, ch, h.current_line[0], h.current_line[1]);
+    const int a_off = kinds_a ? strength_from_kinds(a, kinds_a, StrengthMode::Offensive) : playing_strength(a, ha, StrengthMode::Offensive, minute, ca, a.current_line[0], a.current_line[1]);
+    const int h_off = kinds_h ? strength_from_kinds(h, kinds_h, StrengthMode::Offensive) : playing_strength(h, hh, StrengthMode::Offensive, minute, ch, h.current_line[0], h.current_line[1]);
+    const int a_def = kinds_a ? strength_from_kinds(a, kinds_a, StrengthMode::Defensive) : playing_strength(a, ha, StrengthMode::Defensive, minute, ca, a.current_line[0], a.current_line[1]);
     const int away_edge = (a_off - h_def) / 3, home_edge = (h_off - a_def) / 3;
     const int q = (h_def + a_off + a_def + h_off) < rng.range(550, 850) ? 1 : 0;
     int d;
@@ -777,7 +779,7 @@ struct MatchRun::Impl {
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
-        const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot);
+        const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
         if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h);  // 23c4 books every chance of a match with a manager
         if (home_goal) {
             score.home++;
@@ -787,7 +789,7 @@ struct MatchRun::Impl {
             abox.goal_against(a, ap ? &asq : nullptr);
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
-        const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot);
+        const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
         if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a);
         if (away_goal) {
             score.away++;

@@ -414,6 +414,7 @@ void Game::play_league_day() {
             if (hi != human_team_ && ai != human_team_) continue;
             if (human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players) break;  // forfeit: no gate
             human_plays = true;
+            save_.state.at(0x784) = uint8_t(hi);  // DS:A88D: the home team of the manager game (REAL-CODE)
             if (hi != human_team_) break;  // an away game: no gate, no stadium flag
             g_draw_scope = "gate";
             home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
@@ -2843,12 +2844,6 @@ void Game::advance_day() {
     // the next menu, then disables automatic selection during this match.
     save_.state.at(0x078B)=save_.state.at(0x078A);
     save_.state.at(0x078A)=0;
-g_draw_scope = "transfer-list";
-    // the roll belongs to the match preparation of the original (6AF8:313E..): days without a game skip it (whole-program test)
-    const uint8_t next_event = calendar_.event(day_ + 1);
-    const bool game_day = calendar_.league_day(day_ + 1) || next_event == kEventCup || next_event == kEventEuroCup ||
-                          next_event == kEventPlayoff || next_event == kEventWorldChampionship;
-    if (game_day && brng_.range(0, kHokManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
@@ -2861,7 +2856,7 @@ g_draw_scope = "league-day";
         play_league_day();
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;
     }
-g_draw_scope = "cup/euro/playoff/wm";
+g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d\n", day_, int(event), int(calendar_.league_day(day_)));
     if (event == kEventCup) play_cup_day();
     if (event == kEventEuroCup) play_euro_day();
     if (event == kEventPlayoff) play_playoff_day();
@@ -2936,6 +2931,27 @@ g_draw_scope = "stadium-week";
     if ((day_ + 1) % 7 == 0) stadium_week(finance_, budget_, save_.state, 0, brng_);
     if (world_phase) heal_squad((day_ + 1) % 7 == 0);
     prepare_human_lineup();
+    // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
+    // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
+    // (DS:E1A4, ovr034:1CD2). REAL-CODE: both draws end every period of the original.
+    const uint8_t next_event = calendar_.event(day_ + 1);
+    if (calendar_.league_day(day_ + 1) || next_event == kEventCup || next_event == kEventEuroCup || next_event == kEventPlayoff ||
+        next_event == kEventWorldChampionship) {
+        g_draw_scope = "play-step-end"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: play step end, next event %d (day %d)\n", int(next_event), day_ + 1);
+        if (brng_.range(0, 3) == 0) refresh_transfer_list();
+        daily_luck_ = brng_.range(85, 115);
+        // news items (25 entries of 0x71 bytes at DS:D294): the display timer drops by 16 per play step; the item ends at the next step (REAL-CODE)
+        for (int i = 0; i < 24; i++) {
+            uint8_t* m = save_.state.data() + 0xAEB7 + size_t(i) * 0x71;
+            if (m[0] == 0) continue;
+            if (m[0] >= 32) m[0] = uint8_t(m[0] - 16); else m[0] = m[1] = 0;  // 56, 40, 24 (gone) in three steps
+        }
+        // before a DEB cup day the original prepares the energies of the 28 cup clubs outside the three leagues (REAL-CODE)
+        if (next_event == kEventCup)
+            for (int t = 36; t < 64; t++)
+                for (auto& kind : save_.teams[size_t(t)].energy)
+                    for (auto& e : kind) e = 90;
+    }
 }
 
 }  // namespace em
