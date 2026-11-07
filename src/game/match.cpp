@@ -730,11 +730,13 @@ struct MatchRun::Impl {
         // (var_F); computer against computer matches skip them (their draws do not appear in the original's stream).
         // Order of the original minute (ovr030:2A47..2B64): energy, line-energy refresh, tactics mode (odd minutes, 162c:000b),
         // line changes, effort of the situation (even minutes), penalties.
+        bool swap_sides = false;
         if (hp || ap) {
             energy_minute(h, hp ? &hsq : nullptr, rng);
             energy_minute(a, ap ? &asq : nullptr, rng);
             if (hp) refresh_line_energy(h, *hp);
             if (ap) refresh_line_energy(a, *ap);
+            swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
             if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, score.home, score.away, minute);
             change_lines(h, a, hp, hrotation);
             change_lines(a, h, ap, arotation);
@@ -744,8 +746,8 @@ struct MatchRun::Impl {
             }
         }
         if (minute != 60 && minute != 70) {
-            penalty_minute(*hpen, *apen, true, rng);
-            penalty_minute(*apen, *hpen, true, rng);
+            penalty_minute(swap_sides ? *apen : *hpen, swap_sides ? *hpen : *apen, true, rng);
+            penalty_minute(swap_sides ? *hpen : *apen, swap_sides ? *apen : *hpen, true, rng);
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
