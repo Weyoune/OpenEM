@@ -416,6 +416,7 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     if (running > 1) return false;
     const int effort = side.human ? std::clamp(side.team.effort_current + side.human->penalty_effort_adjustment,
                                                0, 100) : side.team.effort_current;
+    if (std::getenv("EM_DEBUG_PEN")) std::fprintf(stderr, "pen effort %d (current %d) squad %d\n", effort, side.team.effort_current, side.squad != nullptr);
     if (rng.range(0, 12) != 0 && rng.range(0, 110 - effort) != 0) return false;
     if (side.squad && std::count_if(side.squad->begin(), side.squad->begin() + std::min(size_t(29), side.squad->size()), [](const auto& p) {
             return p.player >= 0 && p.role != 0 && p.line != 0;
@@ -464,7 +465,7 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
     const int own = playing_strength(t, nullptr, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
     const int other = playing_strength(opp, nullptr, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
     const bool stronger = other <= own;
-    if (human && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup human: own %d other %d (doubled playing strength), close=%d\n", own, other, std::abs(own - other) < 25);
+    if ((human || std::getenv("EM_DEBUG_ALL")) && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup %s: own %d other %d (doubled playing strength), effort before %d/%d, close=%d\n", human ? "human" : "cpu", own, other, t.effort_current, opp.effort_current, std::abs(own - other) < 25);
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);
     const bool close = std::abs(own - other) < 25;
     const bool automatic_effort = !human || human->effort_control == 0;
@@ -685,12 +686,14 @@ struct MatchRun::Impl {
             if (ap) refresh_line_energy(a, *ap);
             change_lines(h, a, hp, hrotation);
             change_lines(a, h, ap, arotation);
-            apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
-            apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
         }
         if (minute != 60 && minute != 70) {
             penalty_minute(*hpen, *apen, true, rng);
             penalty_minute(*apen, *hpen, true, rng);
+        }
+        if (hp || ap) {  // the effort of the minute is applied after its penalty draws (whole-program test)
+            apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
+            apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
