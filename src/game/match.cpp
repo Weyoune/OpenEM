@@ -621,13 +621,13 @@ struct MatchRun::Impl {
         }
         hp = hh ? &hh2 : nullptr;
         ap = ha ? &ha2 : nullptr;
-        prepare_match_energy(h, hp ? &hsq : nullptr);
-        prepare_match_energy(a, ap ? &asq : nullptr);
         // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
         // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
         // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
         setup_computer_team(h, a, hp, ap);
         setup_computer_team(a, h, ap, hp);
+        prepare_match_energy(h, hp ? &hsq : nullptr);
+        prepare_match_energy(a, ap ? &asq : nullptr);
         h.skaters = a.skaters = 5;
         for (int kind = 0; kind < 2; kind++) h.shift[kind] = a.shift[kind] = 0;
         hpen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp,
