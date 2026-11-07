@@ -4062,9 +4062,9 @@ static void match_energy() {
         p.role = 1; p.line = 0x81; p.skill_a = p.skill_b = p.form = 90; p.fitness = 90;
     }
     HumanSquad human{&squad, &players};
-    const int fresh = line_strength(team, human, 0, 1, true, 0).skill2;
+    const int fresh = line_strength(team, human, 0, 1, true, 0, 60).skill2;
     for (auto& p : squad) p.fitness = 0;
-    CHECK(line_strength(team, human, 0, 1, true, 0).skill2 < fresh);
+    CHECK(line_strength(team, human, 0, 1, true, 0, 60).skill2 < fresh);
     HokTeam cpu, other;
     cpu.current_line[0] = cpu.current_line[1] = 3;
     other.current_line[0] = other.current_line[1] = 3;

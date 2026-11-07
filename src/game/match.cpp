@@ -93,15 +93,16 @@ LineValues line_strength(const HokTeam& t, int line, int kind, bool in_play, int
     return v;
 }
 
-LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int kind, bool in_play, int man_advantage) {
+LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int kind, bool in_play, int man_advantage, int minute) {
     constexpr int kGoalieWeight[2] = {80, 140};  // DS:4946
     int s1 = 0, s2 = 0, f = 0, count = 0, lo_nibbles = 0, hi_nibbles = 0;
-    bool goalie_found = false;
+    bool goalie_found = false, goalie_present = false;
     const auto& squad = *hs.squad;
     const auto& players = *hs.players;
     for (const HokSquadPlayer& p : squad) {
         if (p.role == 0) continue;
         const int position_value = players[size_t(p.player)].position;
+        goalie_present = goalie_present || (p.line == 1 && position_value == 0);
         const bool goalie = p.line == 1 && position_value == 0 && kind == 0;
         goalie_found = goalie_found || goalie;
         const bool member = (((p.line - 1) & 0x7F) == line && (p.line >> 7) == kind) || goalie;
@@ -132,7 +133,12 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
         if (!goalie_found) s2 /= 3;
         s2 = std::max(0, s2);
     }
-    if (!goalie_found && in_play && kind == 0 && man_advantage < 1) s1 = s2 = 0;  // empty net
+    // 162C:1B41..1B83: the flag DS:DE16+manager is only rewritten by defence calls (kind 0); an attack call reads the one left by
+    // the preceding defence call. Empty net: everything 0 (attack: only before minute 58); form also before minute 58.
+    if (!goalie_present && in_play && man_advantage < 1 && (kind == 0 || minute < 58)) {
+        s1 = s2 = 0;
+        if (minute < 58) f = 0;
+    }
     if (kind != 0 && man_advantage > 0 && s2 != 0) s2 += hi_nibbles + (man_advantage - 1) * 16;
     if (in_play) s1 -= (100 - t.effort_current * s1 / 100) / 4;
     return {clamp_line(s1), clamp_line(s2), clamp_line(f)};
@@ -143,7 +149,7 @@ int playing_strength(const HokTeam& t, const HumanSquad* human, StrengthMode mod
     int sum = 0;
     for (int kind = 0; kind < 2; kind++) {
         const int line = kind == 0 ? defence_line : attack_line;
-        LineValues v = human ? line_strength(t, *human, line, kind, true, man_advantage)
+        LineValues v = human ? line_strength(t, *human, line, kind, true, man_advantage, minute)
                              : line_strength(t, line, kind, true, man_advantage);
         int tired = std::max(0, v.skill2 - minute * 10 / (v.skill2 + 1));
         int value = std::min(255, v.skill1 + v.form + tired);
@@ -447,14 +453,16 @@ void apply_effort(HokTeam& t, int own, int opp, const std::vector<HokSquadPlayer
         t.flags = (t.flags & 0x8F) | (((t.offence_base + t.offence[situation]) << 4) & 0x70);
 }
 
-void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human, const HumanSquad* opponent_human) {
+void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human, const HumanSquad* /*opponent_human*/) {
     // FUN_162c_02a5: neutral strengths (doubled) decide; tables DS:4912 (effort per situation) and
     // DS:491C (offence per situation)
     static constexpr int kEffortTable[2][kTacticSituations] = {{0, 25, 20, 30, 0}, {20, 20, 15, 20, 0}};
     static constexpr int kOffenceTable[2][kTacticSituations] = {{5, 6, 4, 4, 0}, {4, 5, 6, 7, 4}};
     // ovl06_1371 takes the lines on the ice from the team records (REAL-CODE test)
-    const int own = playing_strength(t, human, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
-    const int other = playing_strength(opp, opponent_human, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
+    // At the time of the setup the team is not yet in the match pair list DS:0233, so 162C:16bf takes its computer branch (team record)
+    // even for the human team (REAL-CODE: original strength of the own team 191 = C++ 382 doubled).
+    const int own = playing_strength(t, nullptr, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
+    const int other = playing_strength(opp, nullptr, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
     const bool stronger = other <= own;
     if (human && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup human: own %d other %d (doubled playing strength), close=%d\n", own, other, std::abs(own - other) < 25);
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);

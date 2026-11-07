@@ -103,7 +103,7 @@ void configure_human_tactics(HumanSquad& human, const HokFile& save, int manager
 void refresh_line_energy(HokTeam& team, const HumanSquad& human);
 
 LineValues line_strength(const HokTeam& team, const HumanSquad& human, int line, int kind, bool in_play,
-                         int man_advantage);
+                         int man_advantage, int minute = 0);
 
 enum class StrengthMode { Defensive = 0, Neutral = 1, Offensive = 2 };
 
