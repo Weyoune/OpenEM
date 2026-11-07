@@ -158,6 +158,9 @@ private:
     std::vector<std::string> pending_notices_;
     bool save_mode_=false, filename_focus_=false;
     std::optional<uint64_t> native_notice_until_;
+    std::optional<uint64_t> match_banner_until_; //native ovr030:081D "Ligaspiel" banner before the own league match
+    int match_banner_day_=-1;
+    void draw_banner(std::string_view text);
     bool native_notice_return_main_=false;
     std::string filename_;
     std::vector<FileEntry> files_;

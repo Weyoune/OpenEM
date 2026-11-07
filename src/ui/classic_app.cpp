@@ -20,6 +20,7 @@ namespace fs=std::filesystem;
 namespace em::ui {
 namespace {
 constexpr auto mini=ClassicFontId::Mini, flow=ClassicFontId::Flow;
+constexpr uint64_t kMatchBannerMs=900;
 bool inside(int x,int y,int l,int t,int r,int b) {return x>=l&&x<=r&&y>=t&&y<=b;}
 std::string upper(std::string s){for(char& c:s)c=char(std::toupper(static_cast<unsigned char>(c)));return s;}
 }
@@ -78,9 +79,18 @@ void ClassicApplication::tick(){
     }
     if(!advancing_)update_roster_hover();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
+    if(match_banner_until_){
+        if(SDL_GetTicks64()<*match_banner_until_)return;
+        match_banner_until_.reset();
+    }
     try{
-        if(!advance_first_&&session_.next_day_has_match()){
+        const bool match_day=session_.next_day_has_match();
+        if(!advance_first_&&match_day){
             advancing_=false;autosave();return;
+        }
+        // The original announces the own league match with a banner before the day is played.
+        if(match_day&&match_banner_day_!=session_.game().season_day()&&calendar_.league_day(session_.game().season_day()+1)){
+            match_banner_day_=session_.game().season_day();match_banner_until_=SDL_GetTicks64()+kMatchBannerMs;return;
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
         if(session_.advance_day()){advance_first_=false;invalidate();}
@@ -499,6 +509,11 @@ void ClassicApplication::text_input(std::string_view text){
     }
 }
 void ClassicApplication::draw(){
+    if(match_banner_until_){
+        draw_banner("Ligaspiel");
+        if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
+        return;
+    }
     switch(screen_){
         case ClassicScreen::Main:draw_main();break;case ClassicScreen::Files:draw_files();break;
         case ClassicScreen::Table:draw_table();break;case ClassicScreen::Totals:draw_totals();break;
@@ -586,6 +601,7 @@ void ClassicApplication::render_screen(std::string_view name){
     transfer_hover_={};pool_rules_=pool_help_visible_=false;
     if(name=="main")screen_=ClassicScreen::Main;
     else if(name=="youth")screen_=ClassicScreen::Youth;
+    else if(name=="match-banner"){match_banner_until_=UINT64_MAX;}
     else if(name=="settings"||name=="settings-rink"||name=="settings-slow"){
         open_settings();
         if(name=="settings-rink")action([](Game& game){game.toggle_setting(9,0);game.toggle_setting(9,0);return ActionResult{};});

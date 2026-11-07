@@ -326,6 +326,12 @@ void ClassicApplication::draw_training(){
         }
     }
 }
+// ovr030:081D: full-width window (4,92, 13x3), NewBold text centred over x 0..319 at baseline 127 in black and again at 126 in colour 11.
+void ClassicApplication::draw_banner(std::string_view text){
+    canvas_.background(22);canvas_.frame(4,92,13,3);
+    canvas_.text(ClassicFontId::NewBold,0,127,text,0,-1,319);
+    canvas_.text(ClassicFontId::NewBold,0,126,text,11,-1,319);
+}
 void ClassicApplication::open_settings(){hover_kind_.reset();screen_=ClassicScreen::Settings;}
 void ClassicApplication::draw_settings(){draw_classic_settings(canvas_,session_.game().settings(),0);}
 void ClassicApplication::click_settings(int x,int y,bool right){
