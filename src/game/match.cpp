@@ -174,6 +174,7 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     const int bonus_h = offence_bonus(h, rng), bonus_a = offence_bonus(a, rng);
     const int sh = playing_strength(h, hh, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1]);
     const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1]);
+    if (std::getenv("EM_DEBUG_GP2")) std::fprintf(stderr, "gp2 min %d flags %d/%d shift %d,%d/%d,%d\n", minute, h.flags, a.flags, h.shift[0], h.shift[1], a.shift[0], a.shift[1]);
     if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
     if (hh && minute == 2 && std::getenv("EM_DEBUG_GP")) {
         std::fprintf(stderr, "globals: level %d per %d/%d minute %d\n", hh->level, hh->per_line[0], hh->per_line[1], minute);
@@ -245,7 +246,8 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
 
 // FUN_162c_23c4 for a computer match: does the chance of side 0 (home) or 1 (away) become a goal?
 bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, GameRandom& rng, int level,
-                    const HumanSquad* hh, const HumanSquad* ha) {
+                    const HumanSquad* hh, const HumanSquad* ha, bool* shot = nullptr) {
+    if (shot) *shot = false;
     const int ch = h.skaters - a.skaters, ca = a.skaters - h.skaters;
     const int h_def = playing_strength(h, hh, StrengthMode::Defensive, minute, ch, h.current_line[0], h.current_line[1]);
     const int a_off = playing_strength(a, ha, StrengthMode::Offensive, minute, ca, a.current_line[0], a.current_line[1]);
@@ -256,9 +258,11 @@ bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, Ga
     int d;
     if (side == 0) {  // 162c:2632
         if (rng.range(0, 2 * q + 4) <= 1) return false;
+        if (shot) *shot = true;
         d = home_edge;
     } else {  // FUN_162c_26cf: the away side has the level in its first hurdle
         if (rng.range(0, 3 * level + 2 * q + 1) <= level) return false;
+        if (shot) *shot = true;
         d = away_edge;
     }
     if (d >= 0) return rng.range(0, (d >> 2) + q + 2) != 0;
@@ -478,7 +482,7 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     int slot = -1;
     bool selection_failed = false;
     if (side.human) {
-        slot = pick_penalized_player(side.team, *side.squad, *side.human->players, side.selection_rng);
+        slot = pick_penalized_player(side.team, *side.squad, *side.human->players, side.selection_rng, true);
         selection_failed = slot < 0;
         if (slot >= 0 && side.human->players->at(size_t(side.squad->at(size_t(slot)).player)).position == 0)
             slot = -1;  // the team penalty remains, but goalkeepers receive no personal counter
@@ -714,22 +718,25 @@ struct MatchRun::Impl {
         for (int side = 0; side < 2; side++) {
             const HumanSquad* m = side == 0 ? hp : ap;
             const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
-            if (m && m->on_minute) m->on_minute(minute, load);
+            if (m && m->on_minute) m->on_minute(minute, load, side == 0 ? h : a);
         }
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
-        if ((events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap)) {
+        bool home_shot = false, away_shot = false;
+        const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot);
+        if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h);  // 23c4 books every chance of a match with a manager
+        if (home_goal) {
             score.home++;
-            if (hp && hp->on_goal) hp->on_goal(false);  // the original credits scorer and assist at the moment of the goal
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters < a.skaters) stats->short_handed_goals[0]++;
             const bool equal = h.skaters == a.skaters;
             abox.goal_against(a, ap ? &asq : nullptr);
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
-        if ((events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap)) {
+        const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot);
+        if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a);
+        if (away_goal) {
             score.away++;
-            if (ap && ap->on_goal) ap->on_goal(false);  // the original credits scorer and assist at the moment of the goal
             if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
             if (stats && h.skaters + a.skaters != 11 && a.skaters < h.skaters) stats->short_handed_goals[1]++;
             const bool equal = h.skaters == a.skaters;
@@ -749,8 +756,13 @@ struct MatchRun::Impl {
             if (ap) refresh_line_energy(a, *ap);
             swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
             if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute);
-            change_lines(h, a, hp, hrotation);
-            change_lines(a, h, ap, arotation);
+            if (swap_sides) {  // ovr030:2AD9: the swapped side changes lines first (mode 3 follows the already changed line)
+                change_lines(a, h, ap, arotation);
+                change_lines(h, a, hp, hrotation);
+            } else {
+                change_lines(h, a, hp, hrotation);
+                change_lines(a, h, ap, arotation);
+            }
             if (minute % 2 == 0) {
                 apply_effort(h, shown_home, shown_away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
                 apply_effort(a, shown_away, shown_home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);

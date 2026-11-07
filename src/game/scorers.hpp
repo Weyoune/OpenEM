@@ -48,7 +48,7 @@ private:
 
 // ovl06_3191: index into `squad` of the chosen player.
 int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int kind,
-                bool goal, BorlandRandom& rng);
+                bool goal, BorlandRandom& rng, const HokTeam* on_ice = nullptr);
 
 struct GoalCredit {
     int scorer = -1, assist = -1;  // indices into the squad
@@ -59,7 +59,8 @@ struct GoalCredit {
 // A shoot-out still chooses both players (the native assist remains), but does not
 // increment normal goal fields. The copy of the player records is left to the caller.
 GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players,
-                       BorlandRandom& rng, int competition = 0, bool shootout = false);
+                       BorlandRandom& rng, int competition = 0, bool shootout = false, bool goal = true,
+                       const HokTeam* on_ice = nullptr);
 
 
 // Scorers of a computer club, 1000:3228 (segment 1238:0ea8), called by 1238:114f for both teams

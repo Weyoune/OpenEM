@@ -94,8 +94,8 @@ struct HumanSquad {
     LineRotation* rotation = nullptr;
     BorlandRandom* selection_rng = nullptr;  // separate native stream for individual player selection
     int minimum_players = 0;  // career policy: 9; 0 permits isolated small-squad physics simulations
-    std::function<void(bool shootout)> on_goal;  // scorer and assist of one goal of this manager's team
-    std::function<void(int minute, int load)> on_minute;  // per-minute injury check of the manager's match (ovr030:3706)
+    std::function<void(bool goal, const HokTeam& team)> on_chance;  // scorer and assist pick of one chance of this manager team (ovl14_2349)
+    std::function<void(int minute, int load, const HokTeam& team)> on_minute;  // per-minute injury check of the manager's match (ovr030:3706)
 };
 
 // Native independent control bytes DS:A6FB/A707 + manager (HOK 01FF/01F3).

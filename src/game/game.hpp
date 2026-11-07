@@ -292,7 +292,7 @@ private:
     bool book_forfeit(const MatchStats& stats, int manager = 0);
     void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0,
                          bool credit_goals = true);
-    void credit_human_goal(int competition, bool penalty);
+    void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr);
     void reset_wm();
     void new_season();
     void redistribute_players(int mode);
@@ -309,7 +309,7 @@ private:
     void clear_insurance_locks();
     void prepare_human_lineup(bool restore_saved_mode=true);
     void match_injuries();
-    void injury_minute(int load);  // ovl06_364f for one minute of the human club's match
+    void injury_minute(int load, const HokTeam* on_ice = nullptr);  // ovl06_364f for one minute of the human club's match
     void make_offers();
     void restore_offers();
     void expire_contracts();

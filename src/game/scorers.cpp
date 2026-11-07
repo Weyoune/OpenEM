@@ -21,13 +21,15 @@ int BorlandRandom::range(int lo, int hi) {
 }
 
 int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int kind,
-                bool goal, BorlandRandom& rng) {
+                bool goal, BorlandRandom& rng, const HokTeam* on_ice) {
     const int n = int(squad.size());
     if (n == 0) return -1;
     for (int attempt = 0; attempt < 250; attempt++) {
         const int slot = rng.range(0, n - 1);
         const HokSquadPlayer& p = squad[size_t(slot)];
         if (p.player < 0 || size_t(p.player) >= players.size() || p.role == 0 || p.role >= 12) continue;
+        // ovl06_3191 (3256..329a): for a team of the pair list only a player of the line on the ice counts
+        if (on_ice && on_ice->current_line[(p.line >> 7) & 1] != (p.line & 0x7F) - 1) continue;
         const int position_value = players[size_t(p.player)].position;
         if (position_value == 0) continue;
         int weight = (kind == 0 && !goal) ? rng.range(120, 170)
@@ -46,16 +48,17 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
 }
 
 GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players,
-                       BorlandRandom& rng, int competition, bool shootout) {
+                       BorlandRandom& rng, int competition, bool shootout, bool goal, const HokTeam* on_ice) {
     GoalCredit c;
     if (squad.size() < 4) return c;  // ovl14_2349 needs more than 3 players
-    c.scorer = pick_player(squad, players, 0, true, rng);
+    c.scorer = pick_player(squad, players, 0, goal, rng, on_ice);
     if (c.scorer < 0) return c;
     for (int attempt = 0; attempt < 250; attempt++) {
-        c.assist = pick_player(squad, players, 1, true, rng);
+        c.assist = pick_player(squad, players, 1, true, rng, on_ice);
         if (c.assist != c.scorer) break;
     }
     if (c.assist == c.scorer) c.assist = -1;  // a depleted squad may have only one outfield player
+    if (!goal) return c;  // a chance without a goal only picks the players (ovl14_2349 with arg_2 = 0)
     if (shootout) return c;  // ovl14_2349(param_3=1) still picks scorer/assist but suppresses goals
     HokSquadPlayer& s = squad[size_t(c.scorer)];
     int& goals = competition == 2 ? s.other_goals : competition == 1 ? s.cup_goals : s.league_goals;

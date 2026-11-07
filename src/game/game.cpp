@@ -443,11 +443,11 @@ void Game::play_league_day() {
     }
     g_draw_scope = "league-day";
     MatchStats stats;
-    human_.on_minute = [this](int, int load) { injury_minute(load); };  // the injury check of the original runs in the match minute
-    human_.on_goal = [this](bool shootout) { credit_human_goal(0, shootout); };  // scorer and assist are credited at the goal
+    human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
+    human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(0, false, goal, &team); };  // every chance picks scorer and assist
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
     human_.on_minute = nullptr;
-    human_.on_goal = nullptr;
+    human_.on_chance = nullptr;
     injuries_in_minutes_ = true;
     for (size_t d = 0; d < league_days.size(); d++) {
         const int l = day_league[d];
@@ -672,7 +672,7 @@ void Game::match_injuries() {
 }
 
 // One minute of the check (the original runs it inside the minute loop of the match, before the goal chances).
-void Game::injury_minute(int load) {
+void Game::injury_minute(int load, const HokTeam* on_ice) {
     int with_role = 0;
     for (const HokSquadPlayer& sp : save_.squad) with_role += sp.player >= 0 && sp.role != 0;
     if (with_role < 5) return;
@@ -682,6 +682,8 @@ void Game::injury_minute(int load) {
         const HokSquadPlayer& sp = save_.squad[slot];
         const uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
         if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
+        if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury pick slot %zu line %d role %d lines on ice %d/%d\n", slot, sp.line, sp.role, on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
+        if (on_ice && (sp.line & 0x7F) != on_ice->current_line[(sp.line >> 7) & 1] + 1) continue;  // ovr030:2444: only players on the ice
         const bool weaker = r[0x11] < r[0x10];
         if (brng_.range(0, 10) > (weaker ? 3 : 7)) continue;
         if (save_.players[size_t(sp.player)].position == 0 && brng_.range(0, 2) == 0) continue;
@@ -1690,15 +1692,15 @@ void Game::refresh_national_team() {
     }
 }
 
-void Game::credit_human_goal(int competition, bool penalty) {
+void Game::credit_human_goal(int competition, bool penalty, bool goal, const HokTeam* on_ice) {
     auto add_assists = [&](const HokPlayer& player, int count) {
         const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
         const int value = le16(save_.state, at) + count;
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
-    const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty);
-    if (credit.scorer < 0) return;
+    const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty, goal, on_ice);
+    if (!goal || credit.scorer < 0) return;
     auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];
     if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
     // ovl14_2349 also credits this assist for a successful penalty shot.
