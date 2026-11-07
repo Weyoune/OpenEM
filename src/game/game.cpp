@@ -456,6 +456,18 @@ void Game::play_league_day() {
         const auto pairs = round_robin_pairings(schedule_.teams12, md - 1);
         const auto& results = day_results[d];
         matchday_[size_t(l)]++;
+        // ovl13 table booking (sub_5C067, twice per game): the morale byte +0x17 follows the goal difference, clamped to 47..53;
+        // the original books all games of a league before the scorers of that league
+        for (size_t k = 0; k < pairs.size(); k++) {
+            const int hi = lg.first_team + pairs[k].home, ai = lg.first_team + pairs[k].away;
+            const int diff = results[k].home - results[k].away;
+            auto morale = [&](int team, int dd) {
+                const int step = int(brng_.range(0, 2 * std::abs(dd)));
+                save_.teams[size_t(team)].bonus = std::clamp(save_.teams[size_t(team)].bonus + (dd > 0 ? step : -step), 47, 53);
+            };
+            morale(hi, diff);
+            morale(ai, -diff);
+        }
         for (size_t k = 0; k < pairs.size(); k++) {
             const int hi = lg.first_team + pairs[k].home, ai = lg.first_team + pairs[k].away;
             const size_t result_offset = kLeagueResults + size_t(l) * 0x210 + size_t(md - 1) * 12 + k * 2;
@@ -2785,7 +2797,11 @@ void Game::advance_day() {
     save_.state.at(0x078B)=save_.state.at(0x078A);
     save_.state.at(0x078A)=0;
 g_draw_scope = "transfer-list";
-    if (brng_.range(0, kHokManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
+    // the roll belongs to the match preparation of the original (6AF8:313E..): days without a game skip it (whole-program test)
+    const uint8_t next_event = calendar_.event(day_ + 1);
+    const bool game_day = calendar_.league_day(day_ + 1) || next_event == kEventCup || next_event == kEventEuroCup ||
+                          next_event == kEventPlayoff || next_event == kEventWorldChampionship;
+    if (game_day && brng_.range(0, kHokManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
@@ -2832,16 +2848,20 @@ g_draw_scope = "match-injuries";
     const long before = budget_.balance;
 g_draw_scope = "refusal-reset";
     stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
-    if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days)
-        update_sponsors();
     if (finance_date.day == finance_month_days) clear_insurance_locks();
     // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
     // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
-g_draw_scope = "market";
+g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d\n", day_);
     market_day(save_.state, brng_);
     for (int c = 0; c < kHokShares; c++) {
         save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
         for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    }
+    if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days) {  // after the share market (whole-program test)
+        update_sponsors();
+        // ovr032:1F0B..1FAE: a coin flip; on heads the per-manager value DS:020D (state 0x18) is set to 60000 + 10000 * rand(0,10)
+        // and then rescaled; the stored value is overwritten again later in the day, so only the draws are modelled
+        if (brng_.range(0, 1) != 0) brng_.range(0, 10);
     }
 g_draw_scope = "finance";
     finance_day(finance_, budget_, finance_date.day, finance_month_days);

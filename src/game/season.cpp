@@ -167,7 +167,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             }
         }
         book_result(league, p.home, p.away, r);
-        if (brng) {  // ovl13 table booking (sub_5C067, twice): the morale byte +0x17 follows the goal difference, clamped to 47..53
+        if (false && brng) {  // moved to Game::play_league_day (per league, before the scorers)  // ovl13 table booking (sub_5C067, twice): the morale byte +0x17 follows the goal difference, clamped to 47..53
             const int diff = r.home - r.away;
             auto morale = [&](int team, int d) {
                 const int step = int(brng->range(0, 2 * std::abs(d)));

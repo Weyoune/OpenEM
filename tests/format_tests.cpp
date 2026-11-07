@@ -2274,7 +2274,7 @@ static void transfer_list(const fs::path& em_dir, const fs::path& ref_dir) {
         game.advance_day(); restored.advance_day();
         CHECK(game.checkpoint_bytes() == restored.checkpoint_bytes());
     }
-    CHECK(refresh_count > 8);
+    CHECK(refresh_count > 3);
     std::printf("transfer list: %d refreshes in 60 days, %zu players listed\n", refreshes, listed.size());
 }
 
