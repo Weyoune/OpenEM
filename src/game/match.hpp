@@ -25,6 +25,7 @@
 //   a team without strength scores 0 (and gives 9 if the other is above 20); a team with fewer
 //   skaters on the ice (+0x32) has its goals divided by 4.
 // Result for a goal chance of a live match: FUN_162c_23c4, see docs/logic/SPIELSIMULATION.md.
+#include <functional>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -93,6 +94,8 @@ struct HumanSquad {
     LineRotation* rotation = nullptr;
     BorlandRandom* selection_rng = nullptr;  // separate native stream for individual player selection
     int minimum_players = 0;  // career policy: 9; 0 permits isolated small-squad physics simulations
+    std::function<void(bool shootout)> on_goal;  // scorer and assist of one goal of this manager's team
+    std::function<void(int minute, int load)> on_minute;  // per-minute injury check of the manager's match (ovr030:3706)
 };
 
 // Native independent control bytes DS:A6FB/A707 + manager (HOK 01FF/01F3).

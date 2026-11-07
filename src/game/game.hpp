@@ -290,7 +290,9 @@ private:
     void book_national_match(int own_goals, const MatchStats& stats, int side, int shootout_goals = 0);
     void book_match_condition(const MatchStats& stats, int side, int manager);
     bool book_forfeit(const MatchStats& stats, int manager = 0);
-    void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0);
+    void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0,
+                         bool credit_goals = true);
+    void credit_human_goal(int competition, bool penalty);
     void reset_wm();
     void new_season();
     void redistribute_players(int mode);
@@ -307,6 +309,7 @@ private:
     void clear_insurance_locks();
     void prepare_human_lineup(bool restore_saved_mode=true);
     void match_injuries();
+    void injury_minute(int load);  // ovl06_364f for one minute of the human club's match
     void make_offers();
     void restore_offers();
     void expire_contracts();
@@ -335,7 +338,8 @@ private:
     InjuryTables injuries_;
     NationalTeamTables national_tables_;
     std::array<int, 30> injured_role_{};  // role (+0x0A) of an injured player before he got hurt
-    bool human_played_ = false;           // the human club played today
+    bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
+    bool human_played_ = false;          // the human club played today
     bool interactive_played_ = false;
     std::vector<ManagerOffer> manager_offers_;
     ContractDecider contract_decider_;

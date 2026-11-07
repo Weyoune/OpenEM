@@ -443,7 +443,12 @@ void Game::play_league_day() {
     }
     g_draw_scope = "league-day";
     MatchStats stats;
+    human_.on_minute = [this](int, int load) { injury_minute(load); };  // the injury check of the original runs in the match minute
+    human_.on_goal = [this](bool shootout) { credit_human_goal(0, shootout); };  // scorer and assist are credited at the goal
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
+    human_.on_minute = nullptr;
+    human_.on_goal = nullptr;
+    injuries_in_minutes_ = true;
     for (size_t d = 0; d < league_days.size(); d++) {
         const int l = day_league[d];
         const int md = league_days[d].matchday + 1;
@@ -475,7 +480,7 @@ void Game::play_league_day() {
                           results[k].shootout ? " (shoot-out)" : "");
             log_.push_back(line);
             const int own = hi == human_team_ ? results[k].home : results[k].away;
-            if (!forfeited) book_club_match(own, hi == human_team_ ? results[k].away : results[k].home, 0, true);
+            if (!forfeited) book_club_match(own, hi == human_team_ ? results[k].away : results[k].home, 0, true, 0, false);
         }
         // ovl13_3855 (after all games of the league day): the manager's series records follow his club's series
         update_series_records(save_.state, human_team_);
@@ -663,22 +668,25 @@ void Game::clear_insurance_locks() {
 void Game::match_injuries() {
     if (selected_match_players(human_) < 9) return;  // no minutes were played in a forfeit
     const int load = save_.state[kManagerBlock + 0xF0];
+    for (int minute = 0; minute < 60; minute++) injury_minute(load);
+}
+
+// One minute of the check (the original runs it inside the minute loop of the match, before the goal chances).
+void Game::injury_minute(int load) {
     int with_role = 0;
     for (const HokSquadPlayer& sp : save_.squad) with_role += sp.player >= 0 && sp.role != 0;
     if (with_role < 5) return;
-    for (int minute = 0; minute < 60; minute++) {
-        if (!match_injury_minute(load, finance_.level, brng_)) continue;
-        for (int tries = 0; tries < 150; tries++) {
-            const size_t slot = size_t(brng_.range(0, int(save_.squad.size()) - 1));
-            const HokSquadPlayer& sp = save_.squad[slot];
-            const uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
-            if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
-            const bool weaker = r[0x11] < r[0x10];
-            if (brng_.range(0, 10) > (weaker ? 3 : 7)) continue;
-            if (save_.players[size_t(sp.player)].position == 0 && brng_.range(0, 2) == 0) continue;
-            injure(slot, 1);
-            break;
-        }
+    if (!match_injury_minute(load, finance_.level, brng_)) return;
+    for (int tries = 0; tries < 150; tries++) {
+        const size_t slot = size_t(brng_.range(0, int(save_.squad.size()) - 1));
+        const HokSquadPlayer& sp = save_.squad[slot];
+        const uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
+        if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
+        const bool weaker = r[0x11] < r[0x10];
+        if (brng_.range(0, 10) > (weaker ? 3 : 7)) continue;
+        if (save_.players[size_t(sp.player)].position == 0 && brng_.range(0, 2) == 0) continue;
+        injure(slot, 1);
+        break;
     }
 }
 
@@ -1682,7 +1690,23 @@ void Game::refresh_national_team() {
     }
 }
 
-void Game::book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals) {
+void Game::credit_human_goal(int competition, bool penalty) {
+    auto add_assists = [&](const HokPlayer& player, int count) {
+        const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
+        const int value = le16(save_.state, at) + count;
+        save_.state.at(at) = uint8_t(value);
+        save_.state.at(at + 1) = uint8_t(value >> 8);
+    };
+    const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty);
+    if (credit.scorer < 0) return;
+    auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];
+    if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
+    // ovl14_2349 also credits this assist for a successful penalty shot.
+    if (credit.assist >= 0) add_assists(save_.players[size_t(save_.squad[size_t(credit.assist)].player)], 1);
+}
+
+void Game::book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals,
+                           bool credit_goals) {
     interactive_played_ = true;
     const bool cup = competition == 1;
     auto add_assists = [&](const HokPlayer& player, int count) {
@@ -1691,15 +1715,7 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
-    for (int goal = 0; goal < own_goals; goal++) {
-        const bool penalty = goal >= own_goals - shootout_goals;
-        const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty);
-        if (credit.scorer < 0) continue;
-        auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];
-        if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
-        // ovl14_2349 also credits this assist for a successful penalty shot.
-        if (credit.assist >= 0) add_assists(save_.players[size_t(save_.squad[size_t(credit.assist)].player)], 1);
-    }
+    for (int goal = 0; credit_goals && goal < own_goals; goal++) credit_human_goal(competition, goal >= own_goals - shootout_goals);
     bool goalkeeper_booked = false;
     for (size_t slot = 0; slot < save_.squad.size(); slot++) {
         auto& sp = save_.squad[slot];
@@ -2793,7 +2809,8 @@ g_draw_scope = "match-injuries";
     for (HokTeam& team : save_.teams)
         for (int kind = 0; kind < 2; kind++)
             for (int line = 0; line < 4; line++) team.energy[kind][line] = 90;
-    if (human_played_) match_injuries();
+    if (human_played_ && !injuries_in_minutes_) match_injuries();
+    injuries_in_minutes_ = false;
     const bool world_phase = wm_round_ > 0 || event == kEventWorldChampionship;
     // The WM branch selects manager 5 on a match date; 146e:0c89's
     // human-manager guard then excludes the club. Empty dates retain club

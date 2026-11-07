@@ -465,7 +465,7 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     if (running > 1) return false;
     const int effort = side.human ? std::clamp(side.team.effort_current + side.human->penalty_effort_adjustment,
                                                0, 100) : side.team.effort_current;
-    if (std::getenv("EM_DEBUG_PEN")) std::fprintf(stderr, "pen effort %d (current %d) squad %d\n", effort, side.team.effort_current, side.squad != nullptr);
+    if (std::getenv("EM_DEBUG_PEN")) std::fprintf(stderr, "pen effort %d (current %d) squad %d at draw %zu skaters %d\n", effort, side.team.effort_current, side.squad != nullptr, g_game_log ? g_game_log->size() : size_t(0), side.team.skaters);
     if (rng.range(0, 12) != 0 && rng.range(0, 110 - effort) != 0) return false;
     if (side.squad && std::count_if(side.squad->begin(), side.squad->begin() + std::min(size_t(29), side.squad->size()), [](const auto& p) {
             return p.player >= 0 && p.role != 0 && p.line != 0;
@@ -709,9 +709,18 @@ struct MatchRun::Impl {
             prepare_match_energy(h, hp ? &hsq : nullptr, true);
             prepare_match_energy(a, ap ? &asq : nullptr, true);
         }
+        // ovr030:3680..3772 (called by the minute loop for a match with a manager): one draw rand(0, 200 + 200 * level + 20 * v) per
+        // human manager of the match, v = min(40, 60 - byte); a zero starts an interactive event (not simulated)
+        for (int side = 0; side < 2; side++) {
+            const HumanSquad* m = side == 0 ? hp : ap;
+            const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
+            if (m && m->on_minute) m->on_minute(minute, load);
+        }
+        const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
         if ((events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap)) {
             score.home++;
+            if (hp && hp->on_goal) hp->on_goal(false);  // the original credits scorer and assist at the moment of the goal
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters < a.skaters) stats->short_handed_goals[0]++;
             const bool equal = h.skaters == a.skaters;
@@ -720,6 +729,7 @@ struct MatchRun::Impl {
         }
         if ((events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap)) {
             score.away++;
+            if (ap && ap->on_goal) ap->on_goal(false);  // the original credits scorer and assist at the moment of the goal
             if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
             if (stats && h.skaters + a.skaters != 11 && a.skaters < h.skaters) stats->short_handed_goals[1]++;
             const bool equal = h.skaters == a.skaters;
@@ -731,18 +741,19 @@ struct MatchRun::Impl {
         // Order of the original minute (ovr030:2A47..2B64): energy, line-energy refresh, tactics mode (odd minutes, 162c:000b),
         // line changes, effort of the situation (even minutes), penalties.
         bool swap_sides = false;
+        if (hp && std::getenv("EM_DEBUG_SCORE")) std::fprintf(stderr, "minute %d score %d:%d draws %zu\n", minute, score.home, score.away, g_game_log ? g_game_log->size() : size_t(0));
         if (hp || ap) {
             energy_minute(h, hp ? &hsq : nullptr, rng);
             energy_minute(a, ap ? &asq : nullptr, rng);
             if (hp) refresh_line_energy(h, *hp);
             if (ap) refresh_line_energy(a, *ap);
             swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
-            if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, score.home, score.away, minute);
+            if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute);
             change_lines(h, a, hp, hrotation);
             change_lines(a, h, ap, arotation);
             if (minute % 2 == 0) {
-                apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
-                apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
+                apply_effort(h, shown_home, shown_away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
+                apply_effort(a, shown_away, shown_home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
             }
         }
         if (minute != 60 && minute != 70) {
