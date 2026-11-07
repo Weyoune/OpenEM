@@ -150,6 +150,7 @@ HokFile decode_hok(const Bytes& d) {
             team.shift[kind] = r[0x2F + 2 * kind];
         }
         team.skaters = r[0x32];
+        team.penalty_code = r[0x33];
         team.effort_base = r[0x2D];
         team.offence_base = r[0x35];
         for (int s = 0; s < kTacticSituations; s++) {
@@ -269,6 +270,7 @@ void store_hok(HokFile& h) {
         r[0x26] = uint8_t(team.effort_current);
         r[0x2C] = uint8_t(team.flags);
         r[0x32] = uint8_t(team.skaters);
+        r[0x33] = uint8_t(team.penalty_code);
         r[0x2D] = uint8_t(team.effort_base);
         r[0x35] = uint8_t(team.offence_base);
         for (int i = 0; i < kTacticSituations; i++) {

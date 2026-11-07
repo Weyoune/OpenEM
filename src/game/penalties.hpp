@@ -39,6 +39,7 @@ public:
     void goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad);
     void finish(HokTeam& team, std::vector<HokSquadPlayer>* squad);
     int started() const { return started_; }
+    int code() const;  // team record byte +0x33 for the running penalties
     int minutes_assessed() const { return assessed_; }
 
 private:

@@ -742,6 +742,7 @@ struct MatchRun::Impl {
         prepare_match_energy(h, hp ? &hsq : nullptr);
         prepare_match_energy(a, ap ? &asq : nullptr);
         h.skaters = a.skaters = 5;
+        h.penalty_code = a.penalty_code = 0;
         for (int kind = 0; kind < 2; kind++) h.shift[kind] = a.shift[kind] = 0;
         hpen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp,
                                                           hp && hp->selection_rng ? *hp->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 0});
@@ -840,8 +841,9 @@ struct MatchRun::Impl {
     MatchResult finish() {
         if (forfeit) return forfeit_result;
         while (step()) {}
-        hbox.finish(h, hp ? &hsq : nullptr);
-        abox.finish(a, ap ? &asq : nullptr);
+        // the original leaves running penalties of a team without manager on the record (skaters, +0x33)
+        if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
+        if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
         if (opts.knockout && score.home == score.away) shootout(score, rng, true, hp || ap);
         if (stats) {
             stats->final_teams = {h, a};

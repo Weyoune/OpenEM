@@ -154,15 +154,16 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         League& league = *days[e->day].league;
         const Pairing& p = pairings[e->day][e->pair];
         const MatchResult r = e->run->finish();
-        if (e->home != human_team && e->away != human_team) {  // the original plays on the real team records: the match state stays there
+        {  // the original plays on the real team records: the match state stays there (the human club is booked by the game)
             for (int side = 0; side < 2; side++) {
+                if ((side == 0 ? e->home : e->away) == human_team) continue;
                 HokTeam& t = teams[size_t(side == 0 ? e->home : e->away)];
                 const HokTeam& m = side == 0 ? e->run->home_state() : e->run->away_state();
                 t.effort_current = m.effort_current;
                 t.flags = m.flags;
                 t.effort_base = m.effort_base;
-                for (int k = 0; k < 2; k++) { t.current_line[k] = m.current_line[k]; t.shift[k] = m.shift[k]; }
-                t.skaters = m.skaters;
+                for (int k = 0; k < 2; k++) { t.current_line[k] = m.current_line[k]; t.shift[k] = m.shift[k]; for (int line = 0; line < 4; line++) t.energy[k][line] = m.energy[k][line]; }
+                t.skaters = m.skaters; t.penalty_code = m.penalty_code;
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
             }
         }

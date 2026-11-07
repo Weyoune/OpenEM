@@ -1438,12 +1438,12 @@ static void contract_cooldowns(const fs::path& em_dir, const fs::path& ref_dir) 
     Game game(exe, encode_hok(source), 6);
     for (int day = 0; day < 2; day++) game.advance_day();
     for (size_t slot = 0; slot < 5; slot++) CHECK(game.save().state[0x696D + slot * 0x34 + 0x18] == initial[slot]);
-    game.advance_day();  // preparation of season day 4
-    constexpr uint8_t once[] = {0, 1, 126, 128, 255};
+    game.advance_day();  // preparation of season day 4 (a mood marker above 99 is not counted down: 146e:119D)
+    constexpr uint8_t once[] = {0, 1, 127, 128, 255};
     for (size_t slot = 0; slot < 5; slot++) CHECK(game.save().state[0x696D + slot * 0x34 + 0x18] == once[slot]);
     Game resumed(exe, game.checkpoint_bytes(), 999);
     for (int day = 0; day < 3; day++) { game.advance_day(); resumed.advance_day(); }
-    constexpr uint8_t twice[] = {0, 0, 125, 128, 255};
+    constexpr uint8_t twice[] = {0, 0, 127, 128, 255};
     for (size_t slot = 0; slot < 5; slot++) CHECK(game.save().state[0x696D + slot * 0x34 + 0x18] == twice[slot]);
     CHECK(game.checkpoint_bytes() == resumed.checkpoint_bytes());
 }

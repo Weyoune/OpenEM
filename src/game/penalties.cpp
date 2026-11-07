@@ -61,6 +61,13 @@ int pick_penalized_player(const HokTeam& team, const std::vector<HokSquadPlayer>
 
 int PenaltyBox::running() const { return (entries_[0].minutes != 0) + (entries_[1].minutes != 0); }
 
+int PenaltyBox::code() const {
+    int code = 0;
+    for (int i = 0; i < 2; i++)
+        if (entries_[i].minutes) code |= ((entries_[i].minutes & 7) | (entries_[i].major ? 8 : 0)) << (4 * i);
+    return code;
+}
+
 bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSquadPlayer>* squad) {
     compact();
     const int next = running();

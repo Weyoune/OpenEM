@@ -179,6 +179,7 @@ struct HokTeam {
     int shift[2] = {};         // +0x2F / +0x31: minutes of the current shift
     int skaters = 0;      // +0x32: skaters on the ice (5; fewer while penalised, 6 with the goalkeeper
                           // pulled - ovl06_34f6); fewer skaters than the opponent divide the goals by 4
+    int penalty_code = 0;  // +0x33: running penalties (low nibble first: minutes left | 8 for a major, high nibble second)
     int effort_base = 0, offence_base = 0;
     int effort[kTacticSituations] = {}, offence[kTacticSituations] = {};
     const uint8_t* raw = nullptr;  // 61 bytes inside HokFile::state

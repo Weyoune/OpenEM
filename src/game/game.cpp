@@ -652,12 +652,60 @@ void Game::heal_squad(bool weekly) {
 }
 
 // 146e:0c89 runs on season_day % 7 == 0 or (season_day + 3) % 7 == 0.
+// Phase A (transfer-list entries of manager 0) and the per-slot player mood loop (injury roll, wish to leave, mood decay,
+// contract wish) of the original daily manager routine; the messages that accompany these events are not modelled
+// (player byte +0x1E, the message index, is read but never created).
 void Game::squad_injuries(bool weekly, bool no_match_today) {
+    uint8_t* st = save_.state.data();
+    // phase A: the entries of the transfer list: exhaustion decay, ownership toggle, interest expiry
+    for (int slot = 0; slot < kTransferListSlots; slot++) {
+        uint8_t* r = st + kSquad + 4 * 0x618 + size_t(slot) * kSquadRecord;
+        if (!r[0x0F]) break;  // sub_24D56(4, 0): the occupied prefix
+        if (r[0x13] > 0x38) r[0x13] = uint8_t(r[0x13] - 10);
+        if ((r[0x1A] & 0x7F) == 1 && brng_.range(0, 2) == 0) r[0x1A] ^= 1;
+        uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+        if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
+            r[0x09] &= 0x1F;
+            pl[0x1E] = 0;
+        }
+    }
     heal_squad(weekly);
     for (size_t i = 0; i < save_.squad.size() && i < size_t(kHokSquadSlots); i++) {
         if (save_.squad[i].player < 0) continue;
-        const uint8_t* r = save_.state.data() + kSquad + i * kSquadRecord;
+        uint8_t* r = st + kSquad + i * kSquadRecord;
         if (r[0x0D] == 0 && r[0x09] == 0 && training_injury(r[0x13], no_match_today, finance_.level, brng_)) injure(i, 0);
+        if (day_ >= 233) continue;
+        uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+        // the wish to leave: older players with a good record, checked against rand(350,450)
+        int cx = 100 - (pl[0x18] == 0 ? 15 : 0);
+        const int diff = int(r[0x11]) - int(r[0x10]);
+        if (diff > 0) cx -= diff >> 1;
+        const int limit = int(pl[0x14]) * cx / 10;
+        if (brng_.range(350, 450) < limit && !(r[0x18] & 0x80) && r[0x18] < 100) r[0x18] |= 0x80;
+        if (r[0x0D] != 0) r[0x0A] = 0;  // an injured player loses his role
+        if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
+            r[0x09] &= 0x1F;
+            pl[0x1E] = 0;
+        }
+        if (r[0x18] > 99 && !(r[0x18] & 0x80)) {
+            if (brng_.range(0, 5) == 0 && pl[0x1E] != 0) {
+                r[0x18] = uint8_t(brng_.range(9, 17));
+                pl[0x1E] = 0;
+            }
+        } else if (r[0x18] != 0 && !(r[0x18] & 0x80)) {
+            r[0x18]--;
+        }
+        if (r[0x0C] != 0) continue;
+        const int skill = (r[0x10] + r[0x11] + r[0x12]) / 3;
+        int age_term = std::min(std::abs(25 - int(pl[0x14])), 8);
+        age_term = 100 - age_term * 100 / 8;
+        const int games = std::min(int((r[0x1C] | r[0x1D] << 8) + (r[0x1E] | r[0x1F] << 8) + (r[0x20] | r[0x21] << 8)) / 36, 5);
+        int wish = (skill * 60 + age_term * 40) / 100;
+        wish -= wish * games * 10 / 100;
+        if (brng_.range(0, wish) == 0 && brng_.range(0, 3) == 0 && pl[0x1E] == 0 && !(r[0x18] & 0x80) && r[0x0B] == 1) {
+            const int c = brng_.range(0, 100);
+            r[0x18] = uint8_t((c > 90 ? 4 : c > 70 ? 3 : 2) + 100);  // the new-contract wish; the message index is not created
+        }
     }
 }
 
@@ -1127,9 +1175,6 @@ void Game::train_squad() {
         r[0x13] = uint8_t(p.exhaustion);
         r[0x0E] = uint8_t(p.morale);
         r[0x14] = uint8_t(p.trend);
-        // 146e:1205..1216: negotiation cooldown ticks on these squad
-        // updates; the high-bit contract marker never counts down.
-        if (r[0x18] != 0 && (r[0x18] & 0x80) == 0) r[0x18]--;
         sp.skill_a = p.condition;
         sp.skill_b = p.technique;
         sp.nibbles = p.nibbles;
@@ -2824,6 +2869,7 @@ g_draw_scope = "cup/euro/playoff/wm";
 g_draw_scope = "match-injuries";
     // After the matches of the day the original leaves every team of the 150 with fresh line energy 90 (whole-program test:
     // even clubs that did not play); the weekly drift below overwrites the byte +0x1E afterwards.
+    if (std::getenv("EM_OLD_ENERGY90"))
     for (HokTeam& team : save_.teams)
         for (int kind = 0; kind < 2; kind++)
             for (int line = 0; line < 4; line++) team.energy[kind][line] = 90;
@@ -2851,7 +2897,7 @@ g_draw_scope = "refusal-reset";
     if (finance_date.day == finance_month_days) clear_insurance_locks();
     // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
     // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
-g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d\n", day_);
+g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d md %d,%d,%d\n", day_, matchday_[0], matchday_[1], matchday_[2]);
     market_day(save_.state, brng_);
     for (int c = 0; c < kHokShares; c++) {
         save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
