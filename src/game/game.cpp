@@ -419,6 +419,24 @@ void Game::play_league_day() {
             break;
         }
     }
+    if (gate_booked) {
+        // ovr038:2630 (sub_60D60), after the gate: the squad bookkeeping draws one rand(0, 4) per squad slot (a hit stores the
+        // skill-based home line, +2 := +0x15 & 0x7F) and one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag; sub_33CE9 then
+        // spins the game random stream rand(100, 300) times (REAL-CODE probe of the original).
+        g_draw_scope = "manager-day";
+        const size_t squad_at = 0x696D;
+        int slots = 0;
+        for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_at + size_t(s) * 0x34 + 0x0F) != 0;
+        for (int s = 0; s < slots; s++)
+            if (brng_.range(0, 4) == 0) save_.state.at(squad_at + size_t(s) * 0x34 + 2) = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
+        const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
+        int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
+        x = std::clamp(x, 0, 30);
+        if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
+        g_draw_scope = "randomize";
+        const int spin = brng_.range(100, 300);
+        for (int i = 0; i < spin; i++) rng_.range(0, 1);
+    }
     g_draw_scope = "league-day";
     MatchStats stats;
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
