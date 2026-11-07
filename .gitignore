@@ -3,3 +3,4 @@
 /snapshots/
 *.log
 /tmp/
+.claude/worktrees/
