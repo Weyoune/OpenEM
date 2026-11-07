@@ -405,6 +405,21 @@ void Game::play_league_day() {
         league_days.push_back({&leagues_[size_t(l)], md - 1});
         day_league.push_back(l);
     }
+    // ovl14: the gate of the human home game is booked before the matches are played (REAL-CODE whole-program test)
+    bool gate_booked = false;
+    for (size_t d = 0; d < league_days.size() && !gate_booked; d++) {
+        const auto pre_pairs = round_robin_pairings(schedule_.teams12, league_days[d].matchday);
+        for (const auto& p : pre_pairs) {
+            const int hi = league_days[d].league->first_team + p.home, ai = league_days[d].league->first_team + p.away;
+            if (hi != human_team_) continue;
+            if (human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players) break;  // forfeit: no gate
+            g_draw_scope = "gate";
+            home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
+            gate_booked = true;
+            break;
+        }
+    }
+    g_draw_scope = "league-day";
     MatchStats stats;
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
     for (size_t d = 0; d < league_days.size(); d++) {
@@ -439,8 +454,6 @@ void Game::play_league_day() {
             log_.push_back(line);
             const int own = hi == human_team_ ? results[k].home : results[k].away;
             if (!forfeited) book_club_match(own, hi == human_team_ ? results[k].away : results[k].home, 0, true);
-            if (!forfeited && hi == human_team_)
-                home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
         }
         // ovl13_3855 (after all games of the league day): the manager's series records follow his club's series
         update_series_records(save_.state, human_team_);
@@ -2732,7 +2745,7 @@ void Game::advance_day() {
     save_.state.at(0x078B)=save_.state.at(0x078A);
     save_.state.at(0x078A)=0;
 g_draw_scope = "transfer-list";
-    if (brng_.range(0, kManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
+    if (brng_.range(0, kHokManagers + 2) == 0) refresh_transfer_list();  // ovl14_2e0f, DS:0386 managers
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
@@ -2740,7 +2753,7 @@ g_draw_scope = "transfer-list";
         //6AF8:3178..3198 updates every club manager before the league games.
         //Game currently simulates manager0; all clubs use first-league DS07A9.
 g_draw_scope = "youth";
-        youth_fixture_day(save_.state,finance_,matchday_[0],0,[&](int lo,int hi){return brng_.range(lo,hi);});
+        youth_fixture_day(save_.state,finance_,std::max(0, matchday_[0] - 1),0,[&](int lo,int hi){return brng_.range(lo,hi);});
 g_draw_scope = "league-day";
         play_league_day();
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;
