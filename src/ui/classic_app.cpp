@@ -120,7 +120,7 @@ void ClassicApplication::route_submenu(int item){
             if(item==4){open_euro(euro_page_);return;}
             if(item==5){open_wm(wm_table_page_);return;}
             break;
-        case 6:if(item<2){open_files(item==1);return;}break;
+        case 6:if(item<2){open_files(item==1);return;}if(item==2){open_settings();return;}break;
         case 5:if(item<4){open_strengths(item==3?4:item);return;}break;
         case 4:if(item<3){if(league_page_==7)open_league_fixtures(item);else open_league_competition(item);return;}if(item==3){open_cup();return;}if(item==5){open_wm(wm_fixture_page_);return;}break;
     }
@@ -220,6 +220,7 @@ void ClassicApplication::click(int x,int y,bool right){
     if(screen_==ClassicScreen::Advertising){click_advertising(x,y,right);return;}
     if(screen_==ClassicScreen::Stadium){click_stadium(x,y,right);return;}
     if(screen_==ClassicScreen::Youth){click_youth(x,y,right);return;}
+    if(screen_==ClassicScreen::Settings){click_settings(x,y,right);return;}
     if(fee_editor_)return;
     if(file_preview_)return;
     if(player_detail_){
@@ -512,6 +513,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::Advertising:draw_advertising();break;
         case ClassicScreen::Stadium:draw_stadium();break;
         case ClassicScreen::Youth:draw_classic_youth(canvas_,snapshot(),session_.finance_tables());break;
+        case ClassicScreen::Settings:draw_settings();break;
     }
     draw_roster_hover();
     if(sale_quote_)draw_sale_offer();
@@ -584,6 +586,11 @@ void ClassicApplication::render_screen(std::string_view name){
     transfer_hover_={};pool_rules_=pool_help_visible_=false;
     if(name=="main")screen_=ClassicScreen::Main;
     else if(name=="youth")screen_=ClassicScreen::Youth;
+    else if(name=="settings"||name=="settings-rink"||name=="settings-slow"){
+        open_settings();
+        if(name=="settings-rink")action([](Game& game){game.toggle_setting(9,0);game.toggle_setting(9,0);return ActionResult{};});
+        if(name=="settings-slow")action([](Game& game){game.set_game_speed(20);return ActionResult{};});
+    }
     else if(name=="stadium"||name=="stadium-planned"||name=="stadium-quote"||name=="stadium-pending"||name=="stadium-built"||name=="stadium-condition"||name=="stadium-condition-pending"){
         open_stadium();stadium_selection_.planned=name!="stadium";
         if(name=="stadium-built")stadium_selection_.numberWidth=1;

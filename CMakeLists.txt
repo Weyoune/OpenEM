@@ -75,6 +75,7 @@ add_library(em_game STATIC
     src/game/native_roster.cpp
     src/game/purchase.cpp
     src/game/reporting.cpp
+    src/game/settings.cpp
     src/game/penalties.cpp
     src/game/schedule.cpp
     src/game/scorers.cpp
@@ -125,7 +126,8 @@ add_library(em_classic STATIC
     src/ui/classic_playoff.cpp
     src/ui/classic_advertising.cpp
     src/ui/classic_stadium.cpp
-    src/ui/classic_youth.cpp)
+    src/ui/classic_youth.cpp
+    src/ui/classic_settings.cpp)
 target_link_libraries(em_classic PUBLIC em_game)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
@@ -138,6 +140,8 @@ if(EM_BUILD_GUI)
     target_link_libraries(em_classic_app_tests PRIVATE em_classic_app)
     add_executable(em_classic_raster_tests tests/classic_raster_tests.cpp)
     target_link_libraries(em_classic_raster_tests PRIVATE em_classic_app)
+    add_executable(em_classic_settings_tests tests/classic_settings_tests.cpp)
+    target_link_libraries(em_classic_settings_tests PRIVATE em_classic_app)
 endif()
 
 enable_testing()
@@ -273,6 +277,10 @@ if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME stock_actions COMMAND em_stock_tests "${EM_DATA}" "${EM_REFERENCE}")
     if(EM_BUILD_GUI)
         add_test(NAME classic_input COMMAND em_classic_app_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
+        set(EM_UI_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/ui_20261107/raster_goldens" CACHE PATH "Native DOSBox RGB captures of the later UI pages")
+        if(EXISTS "${EM_UI_REFERENCE}/settings-start.rgb")
+            add_test(NAME classic_settings COMMAND em_classic_settings_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_UI_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-settings-work")
+        endif()
         set(EM_CLASSIC_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/raster_goldens" CACHE PATH "Native DOSBox RGB reference captures")
         if(EXISTS "${EM_CLASSIC_REFERENCE}/main-start.rgb")
             add_test(NAME classic_raster COMMAND em_classic_raster_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_CLASSIC_REFERENCE}")
