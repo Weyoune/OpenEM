@@ -632,6 +632,11 @@ struct MatchRun::Impl {
         // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
         // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
         // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
+        // SETUPDUMP of the original: both team records hold line energy 90 when 02a5 runs (a human team's tired values from the
+        // previous day are already refreshed); the strength comparison of the set-up reads them.
+        for (HokTeam* r : {&h, &a})
+            for (auto& kind : r->energy)
+                for (auto& e : kind) e = 90;
         setup_computer_team(h, a, hp, ap);
         setup_computer_team(a, h, ap, hp);
         prepare_match_energy(h, hp ? &hsq : nullptr);
