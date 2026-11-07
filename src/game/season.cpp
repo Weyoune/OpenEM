@@ -137,9 +137,17 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             entries.push_back(std::move(e));
         }
     }
+    int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
         for (auto& e : entries) more = e->run->step() || more;
+        // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
+        minute_number++;
+        if (minute_number == 20) for (auto& e : entries) e->run->set_watched(true);
+        if (brng && (minute_number == 20 || minute_number == 40)) {
+            const int spin = brng->range(100, 300);
+            for (int i = 0; i < spin; i++) rng.range(0, 1);
+        }
     }
     std::vector<std::vector<MatchResult>> results(days.size());
     for (auto& e : entries) {

@@ -176,13 +176,13 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1]);
     if (std::getenv("EM_DEBUG_GP2")) std::fprintf(stderr, "gp2 min %d flags %d/%d shift %d,%d/%d,%d\n", minute, h.flags, a.flags, h.shift[0], h.shift[1], a.shift[0], a.shift[1]);
     if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
-    if (hh && minute == 2 && std::getenv("EM_DEBUG_GP")) {
+    if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP")) {
         std::fprintf(stderr, "globals: level %d per %d/%d minute %d\n", hh->level, hh->per_line[0], hh->per_line[1], minute);
         std::fprintf(stderr, "team11: flags %d effort %d lines %d/%d energy %d %d %d %d %d %d %d %d skill1 %d/%d skill2 %d/%d form %d/%d bonus %d\n", h.flags, h.effort_current,
                      h.current_line[0], h.current_line[1], h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3],
                      h.skill1[0], h.skill1[1], h.skill2[0], h.skill2[1], h.form[0], h.form[1], h.bonus);
     }
-    if (hh && minute == 2 && std::getenv("EM_DEBUG_GP"))
+    if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP"))
         for (size_t s = 0; s < hh->squad->size() && s < 26; s++) {
             const auto& p = (*hh->squad)[s];
             std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness);
@@ -453,6 +453,37 @@ void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const Hum
     finish_side(b, hb, mode_b, skaters_b, score_b, score_a);
 }
 
+// ovr030:34F6 (sub_46386), called by the match minute for a team with a manager: the players on the ice per category
+// (goalies counted on any line, skaters only on the current line of their kind) set DS:CC35+ (per line counts) and the
+// skaters; running penalties take attackers away (total limit 6, or 5 without a goalie and fewer than six skaters).
+void recount_on_ice(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int penalties,
+                    int per_line[2]) {
+    const auto end = squad.begin() + std::min(size_t(29), squad.size());
+    const size_t occupied = size_t(std::count_if(squad.begin(), end, [](const auto& p) { return p.player >= 0; }));
+    if (std::count_if(squad.begin(), end, [](const auto& p) { return p.player >= 0 && p.role != 0; }) < 9) return;  // synthetic or depleted squads keep their counts
+    int goalies = 0, defenders = 0, attackers = 0;
+    for (size_t slot = 0; slot < occupied; slot++) {
+        const auto& p = squad[slot];
+        if (p.player < 0 || p.role == 0) continue;
+        const bool goalie = players[size_t(p.player)].position == 0;
+        const int kind = (p.line >> 7) & 1, line = (p.line & 0x7F);
+        if (goalie) {
+            if (kind == 0 && line != 0) goalies++;
+        } else if (kind == 0 && line - 1 == t.current_line[0]) {
+            defenders++;
+        } else if (kind == 1 && line - 1 == t.current_line[1]) {
+            attackers++;
+        }
+    }
+    if (goalies == 0) t.current_line[0] = 0;
+    int limit = 6;
+    if (goalies == 0 && defenders + attackers < 6) limit = 5;
+    const int total = defenders + attackers + goalies + penalties;
+    if (total > limit) attackers = 3 - (total - limit);
+    per_line[0] = defenders;
+    per_line[1] = attackers;
+}
+
 struct PenaltySide {
     HokTeam& team;
     PenaltyBox& box;
@@ -704,6 +735,7 @@ struct MatchRun::Impl {
     }
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
+    bool watched = false;
     bool step() {
         if (forfeit || minute >= last) return false;
         minute++;
@@ -721,6 +753,8 @@ struct MatchRun::Impl {
             if (m && m->on_minute) m->on_minute(minute, load, side == 0 ? h : a);
         }
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
+        if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
+        if (ap) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line);
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot);
@@ -749,13 +783,16 @@ struct MatchRun::Impl {
         // line changes, effort of the situation (even minutes), penalties.
         bool swap_sides = false;
         if (hp && std::getenv("EM_DEBUG_SCORE")) std::fprintf(stderr, "minute %d score %d:%d draws %zu\n", minute, score.home, score.away, g_game_log ? g_game_log->size() : size_t(0));
-        if (hp || ap) {
+        if (hp || ap || watched) {
             energy_minute(h, hp ? &hsq : nullptr, rng);
             energy_minute(a, ap ? &asq : nullptr, rng);
             if (hp) refresh_line_energy(h, *hp);
             if (ap) refresh_line_energy(a, *ap);
             swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
-            if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute);
+            if (minute % 2 != 0) {  // the swapped side is team A of the routine (its rules are not symmetric)
+                if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute);
+                else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute);
+            }
             if (swap_sides) {  // ovr030:2AD9: the swapped side changes lines first (mode 3 follows the already changed line)
                 change_lines(a, h, ap, arotation);
                 change_lines(h, a, hp, hrotation);
@@ -807,6 +844,7 @@ MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, in
     : p_(std::make_unique<Impl>(home, away, rng, level, hh, ha, stats, opts)) {}
 MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
+void MatchRun::set_watched(bool on) { p_->watched = on; }
 MatchResult MatchRun::finish() { return p_->finish(); }
 const HokTeam& MatchRun::home_state() const { return p_->h; }
 const HokTeam& MatchRun::away_state() const { return p_->a; }

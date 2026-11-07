@@ -214,6 +214,7 @@ public:
     MatchResult finish();  // plays the remaining minutes and returns the result
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
+    void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
 
 private:
     struct Impl;
