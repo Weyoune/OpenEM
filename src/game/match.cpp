@@ -734,9 +734,11 @@ struct MatchRun::Impl {
         // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.
         // SETUPDUMP of the original: both team records hold line energy 90 when 02a5 runs (a human team's tired values from the
         // previous day are already refreshed); the strength comparison of the set-up reads them.
-        for (HokTeam* r : {&h, &a})
+        for (HokTeam* r : {&h, &a}) {
+            if (r->flags & 0x08) r->current_line[0] = 2;  // a goalkeeper pulled at the end of the last game starts on line 2 (REAL-CODE)
             for (auto& kind : r->energy)
                 for (auto& e : kind) e = 90;
+        }
         setup_computer_team(h, a, hp, ap);
         setup_computer_team(a, h, ap, hp);
         prepare_match_energy(h, hp ? &hsq : nullptr);

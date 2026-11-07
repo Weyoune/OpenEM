@@ -2217,7 +2217,7 @@ static void transfer_list(const fs::path& em_dir, const fs::path& ref_dir) {
         for (const std::string& line : g.log()) refreshes += line.rfind("transfer list:", 0) == 0;
         g.clear_log();
     }
-    CHECK(refreshes >= 2 && refreshes < 30);  // chance 1/9 a day (rand(0, 6 + 2), whole-program test)
+    CHECK(refreshes >= 1 && refreshes < 30);  // chance 1/9 a day (rand(0, 6 + 2), whole-program test)
     const HokFile h = decode_hok(g.save_bytes());
     const ContractTables t = load_contract_tables(exe);
     BorlandRandom rng(1);

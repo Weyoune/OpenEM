@@ -143,7 +143,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         for (auto& e : entries) more = e->run->step() || more;
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
-        if (minute_number == 20) for (auto& e : entries) e->run->set_watched(true);
+        if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const auto& e) { return e->home == human_team; }))
+            for (auto& e : entries) e->run->set_watched(true);  // only after a home game of the human club (REAL-CODE: away games keep the short list)
         if (brng && (minute_number == 20 || minute_number == 40)) {
             const int spin = brng->range(100, 300);
             for (int i = 0; i < spin; i++) rng.range(0, 1);

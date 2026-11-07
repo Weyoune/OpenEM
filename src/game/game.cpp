@@ -406,20 +406,22 @@ void Game::play_league_day() {
         day_league.push_back(l);
     }
     // ovl14: the gate of the human home game is booked before the matches are played (REAL-CODE whole-program test)
-    bool gate_booked = false;
-    for (size_t d = 0; d < league_days.size() && !gate_booked; d++) {
+    bool gate_booked = false, human_plays = false;
+    for (size_t d = 0; d < league_days.size() && !human_plays; d++) {
         const auto pre_pairs = round_robin_pairings(schedule_.teams12, league_days[d].matchday);
         for (const auto& p : pre_pairs) {
             const int hi = league_days[d].league->first_team + p.home, ai = league_days[d].league->first_team + p.away;
-            if (hi != human_team_) continue;
+            if (hi != human_team_ && ai != human_team_) continue;
             if (human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players) break;  // forfeit: no gate
+            human_plays = true;
+            if (hi != human_team_) break;  // an away game: no gate, no stadium flag
             g_draw_scope = "gate";
             home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
             gate_booked = true;
             break;
         }
     }
-    if (gate_booked) {
+    if (human_plays) {
         // ovr038:2630 (sub_60D60), after the gate: the squad bookkeeping draws one rand(0, 4) per squad slot (a hit stores the
         // skill-based home line, +2 := +0x15 & 0x7F) and one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag; sub_33CE9 then
         // spins the game random stream rand(100, 300) times (REAL-CODE probe of the original).
@@ -436,7 +438,7 @@ void Game::play_league_day() {
         const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
         int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
         x = std::clamp(x, 0, 30);
-        if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
+        if (gate_booked && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
         g_draw_scope = "randomize";
         const int spin = brng_.range(100, 300);
         for (int i = 0; i < spin; i++) rng_.range(0, 1);
@@ -2925,7 +2927,8 @@ g_draw_scope = "image";
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
         weekly_team_drift();
-        squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_ + 1) == 0);
+        if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: weekly at day %d event(today) %d event(next) %d league_day(next) %d\n", day_, int(calendar_.event(day_)), int(calendar_.event(day_ + 1)), int(calendar_.league_day(day_ + 1)));
+        squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_) == 0);  // the flag is the calendar byte of the current day (146e:0f5a)
         make_offers();
         train_squad();
     }
