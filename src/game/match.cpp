@@ -626,9 +626,9 @@ struct MatchRun::Impl {
         h.skaters = a.skaters = 5;
         for (int kind = 0; kind < 2; kind++) h.shift[kind] = a.shift[kind] = 0;
         hpen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp,
-                                                          hp && hp->selection_rng ? *hp->selection_rng : fallback_selection, st, 0});
+                                                          hp && hp->selection_rng ? *hp->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 0});
         apen = std::make_unique<PenaltySide>(PenaltySide{a, abox, ap ? &asq : nullptr, ap,
-                                                          ap && ap->selection_rng ? *ap->selection_rng : fallback_selection, st, 1});
+                                                          ap && ap->selection_rng ? *ap->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 1});
     }
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
