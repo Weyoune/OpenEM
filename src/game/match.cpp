@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/match.hpp"
+#include <cstdio>
+#include <cstdlib>
 #include "game/penalties.hpp"
 #include "game/scorers.hpp"
 
@@ -454,6 +456,7 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
     const int own = playing_strength(t, human, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
     const int other = playing_strength(opp, opponent_human, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
     const bool stronger = other <= own;
+    if (human && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup human: own %d other %d (doubled playing strength), close=%d\n", own, other, std::abs(own - other) < 25);
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);
     const bool close = std::abs(own - other) < 25;
     const bool automatic_effort = !human || human->effort_control == 0;
