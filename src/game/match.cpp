@@ -145,7 +145,7 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
 }
 
 int playing_strength(const HokTeam& t, const HumanSquad* human, StrengthMode mode, int minute, int man_advantage,
-                     int defence_line, int attack_line) {
+                     int defence_line, int attack_line, int* kinds) {
     int sum = 0;
     for (int kind = 0; kind < 2; kind++) {
         const int line = kind == 0 ? defence_line : attack_line;
@@ -153,6 +153,7 @@ int playing_strength(const HokTeam& t, const HumanSquad* human, StrengthMode mod
                              : line_strength(t, line, kind, true, man_advantage);
         int tired = std::max(0, v.skill2 - minute * 10 / (v.skill2 + 1));
         int value = std::min(255, v.skill1 + v.form + tired);
+        if (kinds) kinds[kind] = value;
         sum += value * kModeWeight[int(mode)][kind] / 100;
     }
     if (sum != 0) sum += (t.bonus - 44) / 2;  // C division truncates towards 0 like IDIV
@@ -169,11 +170,23 @@ namespace {
 // sides for the given minute (whole = the call with minutes 0..60).
 // `special`: play-off mode (DS:76B2 == 1) or overtime (minute > 60) - halves the points (+1) and, per
 // minute, adds one point each.
+static int g_goal_kinds[2][2];  // per-kind values of the last goal_points call (the original caches them in DS:E06E)
+int strength_from_kinds(const HokTeam& t, const int k[2], StrengthMode mode = StrengthMode::Neutral) {
+    int sum = 0;
+    for (int kind = 0; kind < 2; kind++) sum += k[kind] * kModeWeight[int(mode)][kind] / 100;
+    if (sum != 0) sum += (t.bonus - 44) / 2;
+    return sum;
+}
+
 MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool whole, GameRandom& rng, int level,
                         const HumanSquad* hh = nullptr, const HumanSquad* ha = nullptr, bool special = false) {
     const int bonus_h = offence_bonus(h, rng), bonus_a = offence_bonus(a, rng);
-    const int sh = playing_strength(h, hh, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1]);
-    const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1]);
+    const int sh = playing_strength(h, hh, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1], g_goal_kinds[0]);
+    const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1], g_goal_kinds[1]);
+    if (!whole && std::getenv("EM_DEBUG_GPALL")) {
+        static int counter = 0;
+        std::fprintf(stderr, "gpall %d %d %d %d lines %d/%d %d/%d sk %d/%d eff %d/%d fl %d/%d\n", minute, counter++ % 18, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, h.effort_current, a.effort_current, h.flags, a.flags);
+    }
     if (std::getenv("EM_DEBUG_GP2")) std::fprintf(stderr, "gp2 min %d flags %d/%d shift %d,%d/%d,%d\n", minute, h.flags, a.flags, h.shift[0], h.shift[1], a.shift[0], a.shift[1]);
     if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
     if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP")) {
@@ -419,7 +432,8 @@ void change_lines(HokTeam& t, const HokTeam& opp, const HumanSquad* human, LineR
 // FUN_162c_000b (called by the match minute on odd minutes): tactics mode (+0x2C bits 0-2) of both sides from the score,
 // the number of skaters and the neutral strengths, and the goalkeeper pull of computer teams in the last minutes.
 // The mode is written for computer teams and for managers whose line change setting is automatic.
-void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const HumanSquad* hb, int score_a, int score_b, int minute) {
+void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const HumanSquad* hb, int score_a, int score_b, int minute,
+                        const int* kinds_a, const int* kinds_b) {
     const int skaters_a = a.skaters, skaters_b = b.skaters;
     int mode_a = 2, mode_b = 2;
     if (minute > 40 && score_a > score_b && score_a + 3 > score_b) { mode_a = 2; mode_b = 1; }
@@ -428,8 +442,9 @@ void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const Hum
     if (minute > 40 && score_a < score_b && score_a < score_b + 3) { mode_a = 1; mode_b = 2; decided = true; }
     else if (skaters_a > skaters_b) { mode_a = 1; mode_b = 2; decided = true; }
     if (!decided) {
-        const int pa = (playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1]) * 2) & 0xFF;
-        const int pb = (playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]) * 2) & 0xFF;
+        const int pa = ((kinds_a ? strength_from_kinds(a, kinds_a) : playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1])) * 2) & 0xFF;
+        const int pb = ((kinds_b ? strength_from_kinds(b, kinds_b) : playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1])) * 2) & 0xFF;
+        if (std::getenv("EM_DEBUG_MODE")) std::fprintf(stderr, "mode min %d pa %d pb %d sk %d/%d score %d:%d lines A %d/%d B %d/%d\n", minute, pa, pb, skaters_a, skaters_b, score_a, score_b, a.current_line[0], a.current_line[1], b.current_line[0], b.current_line[1]);
         if (pa < pb && pa + 20 < pb) { mode_a = 3; mode_b = 2; }
         if (pb < pa && pb + 15 < pa) { mode_a = 2; mode_b = 3; }
     }
@@ -736,6 +751,7 @@ struct MatchRun::Impl {
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     bool watched = false;
+    int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool step() {
         if (forfeit || minute >= last) return false;
         minute++;
@@ -756,6 +772,7 @@ struct MatchRun::Impl {
         if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
         if (ap) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line);
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
+        for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot);
         if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h);  // 23c4 books every chance of a match with a manager
@@ -790,8 +807,8 @@ struct MatchRun::Impl {
             if (ap) refresh_line_energy(a, *ap);
             swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
             if (minute % 2 != 0) {  // the swapped side is team A of the routine (its rules are not symmetric)
-                if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute);
-                else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute);
+                if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute, kinds_a, kinds_h);
+                else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute, kinds_h, kinds_a);
             }
             if (swap_sides) {  // ovr030:2AD9: the swapped side changes lines first (mode 3 follows the already changed line)
                 change_lines(a, h, ap, arotation);

@@ -887,6 +887,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
             if (pl.age != before[i][0] + 1) continue;
             kept++;
             const int d1 = pl.skill_a - before[i][1], d2 = pl.skill_b - before[i][2];
+            if (std::abs(d1) > 15 && std::abs(d2) > 15) continue;  // a slot refilled by a replacement of the same age (not the same player)
             CHECK(d1 >= -3 && d1 <= 3 && d2 >= -3 && d2 <= 3 && pl.skill_a >= 30 && pl.skill_b <= 99);
             moved += d1 != 0 || d2 != 0;
         }

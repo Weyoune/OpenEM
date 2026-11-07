@@ -113,7 +113,7 @@ enum class StrengthMode { Defensive = 0, Neutral = 1, Offensive = 2 };
 // ovl06_1371 with the given lines on the ice (0 = first line); `human` = the squad if a human manager
 // leads the team (nullptr for computer teams).
 int playing_strength(const HokTeam& team, const HumanSquad* human, StrengthMode mode, int minute, int man_advantage,
-                     int defence_line = 0, int attack_line = 0);
+                     int defence_line = 0, int attack_line = 0, int* kinds = nullptr);
 int playing_strength(const HokTeam& team, StrengthMode mode, int minute, int man_advantage, int defence_line = 0,
                      int attack_line = 0);
 
