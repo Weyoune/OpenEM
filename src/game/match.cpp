@@ -174,6 +174,18 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     const int bonus_h = offence_bonus(h, rng), bonus_a = offence_bonus(a, rng);
     const int sh = playing_strength(h, hh, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1]);
     const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1]);
+    if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
+    if (hh && minute == 2 && std::getenv("EM_DEBUG_GP")) {
+        std::fprintf(stderr, "globals: level %d per %d/%d minute %d\n", hh->level, hh->per_line[0], hh->per_line[1], minute);
+        std::fprintf(stderr, "team11: flags %d effort %d lines %d/%d energy %d %d %d %d %d %d %d %d skill1 %d/%d skill2 %d/%d form %d/%d bonus %d\n", h.flags, h.effort_current,
+                     h.current_line[0], h.current_line[1], h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3],
+                     h.skill1[0], h.skill1[1], h.skill2[0], h.skill2[1], h.form[0], h.form[1], h.bonus);
+    }
+    if (hh && minute == 2 && std::getenv("EM_DEBUG_GP"))
+        for (size_t s = 0; s < hh->squad->size() && s < 26; s++) {
+            const auto& p = (*hh->squad)[s];
+            std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness);
+        }
     int d = sh / 3 - sa / 3;
     int away = (level == 0 || d > 18) ? 0 : int(rng.range(1, 2));
     int home = (d < -18) ? 0 : int(rng.range(1, 2));
@@ -400,6 +412,43 @@ void change_lines(HokTeam& t, const HokTeam& opp, const HumanSquad* human, LineR
         t.current_line[kind] = next;
     }
 }
+// FUN_162c_000b (called by the match minute on odd minutes): tactics mode (+0x2C bits 0-2) of both sides from the score,
+// the number of skaters and the neutral strengths, and the goalkeeper pull of computer teams in the last minutes.
+// The mode is written for computer teams and for managers whose line change setting is automatic.
+void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const HumanSquad* hb, int score_a, int score_b, int minute) {
+    const int skaters_a = a.skaters, skaters_b = b.skaters;
+    int mode_a = 2, mode_b = 2;
+    if (minute > 40 && score_a > score_b && score_a + 3 > score_b) { mode_a = 2; mode_b = 1; }
+    else if (skaters_a < skaters_b) { mode_a = 2; mode_b = 1; }
+    bool decided = false;
+    if (minute > 40 && score_a < score_b && score_a < score_b + 3) { mode_a = 1; mode_b = 2; decided = true; }
+    else if (skaters_a > skaters_b) { mode_a = 1; mode_b = 2; decided = true; }
+    if (!decided) {
+        const int pa = (playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1]) * 2) & 0xFF;
+        const int pb = (playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]) * 2) & 0xFF;
+        if (pa < pb && pa + 20 < pb) { mode_a = 3; mode_b = 2; }
+        if (pb < pa && pb + 15 < pa) { mode_a = 2; mode_b = 3; }
+    }
+    auto finish_side = [&](HokTeam& t, const HumanSquad* h, int mode, int own_skaters, int own_score, int other_score) {
+        const bool automatic = !h || h->line_control == 0;
+        if (automatic) t.flags = uint8_t((t.flags & 0xF8) | mode);
+        if (h) return;  // the goalkeeper pull is a computer decision
+        if (minute == 58 || minute == 59 || minute == 68 || minute == 69) {
+            if (own_skaters == 5 && own_score < other_score && own_score + 1 == other_score) {
+                t.flags |= 0x08;
+                t.skaters = 6;
+                return;
+            }
+        }
+        if (t.flags & 0x08) {
+            t.flags &= 0xF7;
+            t.skaters--;
+        }
+    };
+    finish_side(a, ha, mode_a, skaters_a, score_a, score_b);
+    finish_side(b, hb, mode_b, skaters_b, score_b, score_a);
+}
+
 struct PenaltySide {
     HokTeam& team;
     PenaltyBox& box;
@@ -679,21 +728,24 @@ struct MatchRun::Impl {
         }
         // ovl06_2522 (whole-program differential test): energy, line changes and effort only run for a match with a manager
         // (var_F); computer against computer matches skip them (their draws do not appear in the original's stream).
+        // Order of the original minute (ovr030:2A47..2B64): energy, line-energy refresh, tactics mode (odd minutes, 162c:000b),
+        // line changes, effort of the situation (even minutes), penalties.
         if (hp || ap) {
             energy_minute(h, hp ? &hsq : nullptr, rng);
             energy_minute(a, ap ? &asq : nullptr, rng);
             if (hp) refresh_line_energy(h, *hp);
             if (ap) refresh_line_energy(a, *ap);
+            if (minute % 2 != 0) update_tactics_mode(h, a, hp, ap, score.home, score.away, minute);
             change_lines(h, a, hp, hrotation);
             change_lines(a, h, ap, arotation);
+            if (minute % 2 == 0) {
+                apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
+                apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
+            }
         }
         if (minute != 60 && minute != 70) {
             penalty_minute(*hpen, *apen, true, rng);
             penalty_minute(*apen, *hpen, true, rng);
-        }
-        if (hp || ap) {  // the effort of the minute is applied after its penalty draws (whole-program test)
-            apply_effort(h, score.home, score.away, hp ? &hsq : nullptr, hp ? hp->effort_control : 0, hp ? hp->offence_control : 0);
-            apply_effort(a, score.away, score.home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
