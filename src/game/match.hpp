@@ -39,6 +39,7 @@ class BorlandRandom;
 
 // When set, every GameRandom::range call appends (lo, hi) (whole-program differential test).
 extern std::vector<std::pair<long, long>>* g_game_log;
+extern std::vector<uint32_t>* g_game_states;
 extern std::vector<const char*>* g_game_scopes;
 extern const char* g_draw_scope;
 

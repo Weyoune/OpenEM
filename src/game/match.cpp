@@ -29,8 +29,10 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 
 std::vector<std::pair<long, long>>* g_game_log = nullptr;
 std::vector<const char*>* g_game_scopes = nullptr;
+std::vector<uint32_t>* g_game_states = nullptr;
 
 long GameRandom::range(long lo, long hi) {
+    if (g_game_states) g_game_states->push_back(s_);  // state before the draw (differential tests)
     if (g_game_log) { g_game_log->push_back({lo, hi}); if (g_game_scopes) g_game_scopes->push_back(g_draw_scope); }
     s_ = uint32_t((uint64_t(s_) * 16 + 167) % kModulus);
     // 32-bit signed product that wraps like the original (REAL-CODE test): negative results appear when
