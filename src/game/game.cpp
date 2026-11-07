@@ -428,7 +428,11 @@ void Game::play_league_day() {
         int slots = 0;
         for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_at + size_t(s) * 0x34 + 0x0F) != 0;
         for (int s = 0; s < slots; s++)
-            if (brng_.range(0, 4) == 0) save_.state.at(squad_at + size_t(s) * 0x34 + 2) = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
+            if (brng_.range(0, 4) == 0) {
+                const uint8_t line = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
+                save_.state.at(squad_at + size_t(s) * 0x34 + 2) = line;
+                if (size_t(s) < save_.squad.size()) save_.squad[size_t(s)].home_line = line;  // human_.squad points at this vector
+            }
         const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
         int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
         x = std::clamp(x, 0, 30);
