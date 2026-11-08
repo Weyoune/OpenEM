@@ -297,6 +297,7 @@ private:
     void update_records(int home, int away, int home_goals, int away_goals);
     void book_special_teams(const MatchStats& stats, int side, int manager = 0);
     void play_cup_day();
+    bool human_in_next_cup() const;
     void play_euro_day();
     void play_playoff_day();
     void store_playoff_state(int stage, int completed_days);

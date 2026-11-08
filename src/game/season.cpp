@@ -2,6 +2,7 @@
 #include "game/season.hpp"
 #include "game/scorers.hpp"
 #include <cstdlib>
+#include <cstdio>
 
 #include <algorithm>
 #include <numeric>
@@ -143,6 +144,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         for (auto& e : entries) more = e->run->step() || more;
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
+        if (minute_number == 20 && std::getenv("EM_DEBUG_WATCH"))
+            for (auto& e : entries) std::fprintf(stderr, "watch: day %zu pair %zu %d-%d human %d\n", e->day, e->pair, e->home, e->away, human_team);
         if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const auto& e) { return e->home == human_team; }))
             for (auto& e : entries) e->run->set_watched(true);  // only after a home game of the human club (REAL-CODE: away games keep the short list)
         if (brng && (minute_number == 20 || minute_number == 40)) {

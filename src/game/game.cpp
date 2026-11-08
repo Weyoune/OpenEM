@@ -505,6 +505,16 @@ void Game::play_league_day() {
     }
 }
 
+// The human club still plays in the current cup round (an open series of the round, or a pair of a fresh draw).
+bool Game::human_in_next_cup() const {
+    if (cup_draw_.empty() || cup_winner_ >= 0) return false;
+    if (cup_game_ == 0)
+        return std::any_of(cup_draw_.begin(), cup_draw_.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; });
+    return std::any_of(cup_series_.begin(), cup_series_.end(), [&](const Series& s) {
+        return s.wins_higher < 2 && s.wins_lower < 2 && (s.higher == human_team_ || s.lower == human_team_);
+    });
+}
+
 void Game::play_cup_day() {
     cup_day_++;
     if (cup_draw_.empty() || cup_winner_ >= 0) return;
@@ -547,6 +557,12 @@ void Game::play_cup_day() {
             }
             break;
         }
+    if (live && std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
+        // without the human club the live round still starts with the stream spin of the day (REAL-CODE period 7)
+        g_draw_scope = "randomize";
+        const int spin = brng_.range(100, 300);
+        for (int i = 0; i < spin; i++) rng_.range(0, 1);
+    }
     if (live) {
         human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
         human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
@@ -621,6 +637,18 @@ void Game::play_cup_day() {
                     save_.squad[slot].fitness = f;
                 }
             }
+        }
+        if (!human_in) {  // a round without the human club rests it like every club outside the round, squad fitness included (REAL-CODE period 7)
+            HokTeam& own = save_.teams[size_t(human_team_)];
+            const int mode = own.flags & 0x07;  // the managed club keeps its line mode
+            prepare_match_energy(own, nullptr);
+            own.flags |= mode;
+            for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                if (save_.state.at(kSquad + slot * kSquadRecord + 0x0F) == 0) continue;
+                save_.state.at(kSquad + slot * kSquadRecord + 0x1B) = 90;
+                save_.squad[slot].fitness = 90;
+            }
+            save_.state.at(0x784) = 0xFF;
         }
         if (human_in)
             save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == human_team_ || p.away == human_team_) return p.home; return 0; }());
@@ -3028,6 +3056,15 @@ g_draw_scope = "stadium-week";
         next_event == kEventWorldChampionship) {
         g_draw_scope = "play-step-end"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: play step end, next event %d (day %d)\n", int(next_event), day_ + 1);
         if (brng_.range(0, 3) == 0) refresh_transfer_list();
+        // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
+        // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
+        if (next_event == kEventCup && !calendar_.league_day(day_ + 1) && !human_in_next_cup()) {
+            if (next_event == kEventCup && cup_game_ == 0)
+                for (int t = 36; t < 64; t++)
+                    for (auto& kind : save_.teams[size_t(t)].energy)
+                        for (auto& e : kind) e = 90;
+            return;
+        }
         daily_luck_ = brng_.range(85, 115);
         // news items (25 entries of 0x71 bytes at DS:D294): the display timer drops by 16 per play step; the item ends at the next step (REAL-CODE)
         for (int i = 0; i < 24; i++) {
