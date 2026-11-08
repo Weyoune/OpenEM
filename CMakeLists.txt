@@ -78,6 +78,7 @@ add_library(em_game STATIC
     src/game/talent.cpp
     src/game/reporting.cpp
     src/game/settings.cpp
+    src/game/highscore.cpp
     src/game/penalties.cpp
     src/game/schedule.cpp
     src/game/scorers.cpp
@@ -129,14 +130,16 @@ add_library(em_classic STATIC
     src/ui/classic_advertising.cpp
     src/ui/classic_stadium.cpp
     src/ui/classic_youth.cpp
-    src/ui/classic_settings.cpp)
+    src/ui/classic_settings.cpp
+    src/ui/classic_misc_highscore.cpp
+    src/ui/classic_misc_newmanager.cpp)
 target_link_libraries(em_classic PUBLIC em_game)
 # Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM)
 target_sources(em_classic PRIVATE src/ui/classic_stats_players.cpp src/ui/classic_stats_history.cpp src/ui/classic_stats_club.cpp src/ui/classic_stats_wm.cpp src/ui/classic_stats_fairplay.cpp)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
 if(EM_BUILD_GUI)
-    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_loan.cpp src/ui/classic_scout.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp)
+    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_loan.cpp src/ui/classic_scout.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp src/ui/classic_misc_input.cpp)
     target_link_libraries(em_classic_app PUBLIC em_frontend em_classic ${EM_SDL_TARGET})
     target_sources(em_classic_app PRIVATE src/ui/classic_stats_app.cpp)
     add_executable(openem WIN32 src/ui/classic_main.cpp)
@@ -149,6 +152,8 @@ if(EM_BUILD_GUI)
     target_link_libraries(em_classic_raster_tests PRIVATE em_classic_app)
     add_executable(em_classic_settings_tests tests/classic_settings_tests.cpp)
     target_link_libraries(em_classic_settings_tests PRIVATE em_classic_app)
+    add_executable(em_classic_misc_tests tests/classic_misc_tests.cpp)
+    target_link_libraries(em_classic_misc_tests PRIVATE em_classic_app)
     add_executable(em_classic_match_tests tests/classic_match_tests.cpp)
     target_link_libraries(em_classic_match_tests PRIVATE em_classic_app)
 endif()
@@ -297,6 +302,10 @@ if(IS_DIRECTORY "${EM_DATA}")
             add_test(NAME classic_settings COMMAND em_classic_settings_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_UI_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-settings-work")
         endif()
         add_test(NAME classic_loan_scout COMMAND em_classic_loan_scout_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
+        set(EM_MISC_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/ui_20261108/raster_goldens" CACHE PATH "Native DOSBox RGB captures of Gemischtes, Neuer and Highscore")
+        if(EXISTS "${EM_MISC_REFERENCE}/highscore-start.rgb")
+            add_test(NAME classic_misc COMMAND em_classic_misc_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_MISC_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/highscore" "${CMAKE_CURRENT_BINARY_DIR}/classic-misc-work")
+        endif()
         set(EM_CLASSIC_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/raster_goldens" CACHE PATH "Native DOSBox RGB reference captures")
         if(EXISTS "${EM_CLASSIC_REFERENCE}/main-start.rgb")
             add_test(NAME classic_raster COMMAND em_classic_raster_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_CLASSIC_REFERENCE}")

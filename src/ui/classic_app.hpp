@@ -10,8 +10,9 @@
 #include "ui/classic_youth.hpp"
 
 namespace em::ui {
-enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics };
+enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
 
+struct ClassicMiscState;  // classic_misc_input.cpp
 class ClassicApplication {
 public:
     ClassicApplication(std::filesystem::path data, std::filesystem::path saves, const std::filesystem::path& initial);
@@ -87,6 +88,14 @@ private:
     void open_settings();
     void draw_settings();
     void click_settings(int x,int y,bool right);
+    // Manager -> Highscore and Neuer (classic_misc_input.cpp)
+    void open_highscore();
+    void open_new_manager();
+    void draw_misc();
+    void click_misc(int x,int y,bool right);
+    void key_misc(int key);
+    void text_misc(std::string_view text);
+    std::shared_ptr<ClassicMiscState> misc_; // incomplete here; shared_ptr keeps the deleter
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);

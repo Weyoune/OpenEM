@@ -54,6 +54,9 @@
 
 namespace em {
 
+struct HighscoreRecord;
+struct HighscoreTables;
+
 // An offer of a computer club for a player of manager 0 (146e:0c89, see transfers.hpp).
 struct ManagerOffer {
     int player = -1;      // index into HokFile::players
@@ -231,6 +234,8 @@ public:
     GameSettings settings() const;
     int toggle_setting(int widget,int manager);
     void set_game_speed(int speed);
+    // Highscore page entry (highscore.hpp): stores a fresh image and values the squad, both drawing random numbers.
+    HighscoreRecord highscore_record(int manager, const HighscoreTables& tables);
     // Positive raw amount: deposit/repay. Negative: withdraw/borrow. The bank
     // permits withdrawal of all savings, or 6,000,000 raw minus existing debt,
     // whichever is greater (the savings are not added to the credit allowance).
