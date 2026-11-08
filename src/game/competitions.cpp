@@ -201,7 +201,7 @@ namespace em {
 // exactly like a league day, with the knock-out rules (overtime, shoot-out); the stream reseeding after the periods and the
 // watched list after a home game of the human club are the same (REAL-CODE whole-program test).
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
-                                     const HumanSide& human, BorlandRandom* brng) {
+                                     const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer) {
     struct Entry {
         int home, away;
         std::unique_ptr<MatchRun> run;
@@ -215,12 +215,18 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, 0, hh, ha,
                                                                          hh || ha ? human.stats : nullptr, opts)});
     }
+    std::vector<LiveMatch> live;  // the match display only observes (no draws, no state changes)
+    if (observer) {
+        for (auto& e : entries) live.push_back({e.home, e.away, e.run.get()});
+        (*observer)(0, live);
+    }
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
         if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
             for (auto& e : entries) e.run->overtime_break();
         for (auto& e : entries) more = e.run->step() || more;
+        if (observer) (*observer)(minute_number + 1, live);
         minute_number++;
         if (brng && (minute_number == 20 || minute_number == 40)) {
             const int spin = brng->range(100, 300);

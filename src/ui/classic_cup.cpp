@@ -142,7 +142,9 @@ ClassicCupHit classic_cup_hit(const ClassicCupView& view,int x,int y) {
 }
 
 void draw_classic_cup(ClassicCanvas& c,const HokFile& h,const SeasonCalendar& calendar) {
-    const auto view=classic_cup(h,calendar);
+    draw_classic_cup_view(c,classic_cup(h,calendar));
+}
+void draw_classic_cup_view(ClassicCanvas& c,const ClassicCupView& view) {
     //Native main caller2BF6 restores wallpaper before invoking38F3.
     c.background(22);
     c.frame(5,view.frame_top,13,view.frame_rows);

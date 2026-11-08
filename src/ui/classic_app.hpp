@@ -8,6 +8,7 @@
 #include "ui/classic_advertising.hpp"
 #include "ui/classic_stadium.hpp"
 #include "ui/classic_youth.hpp"
+#include "ui/classic_match_view.hpp"
 
 namespace em::ui {
 enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
@@ -184,6 +185,15 @@ private:
     std::optional<uint64_t> native_notice_until_;
     std::optional<uint64_t> match_banner_until_; //native ovr030:081D "Ligaspiel" banner before the own league match
     int match_banner_day_=-1;
+    // Match display (classic_match_view): frames observed while Session::advance_day plays the day, replayed minute by minute
+    std::vector<ClassicMatchFrame> match_frames_, pending_match_frames_;
+    size_t match_frame_=0;
+    uint64_t match_frame_until_=0;
+    bool pending_human_match_=false, pending_league_day_=false;
+    std::unique_ptr<HokFile> match_before_; // state before the day: draw and series for the cup table (ovl07_0eba)
+    void prepare_match_view(bool human_match);
+    void begin_match_view();
+    bool tick_match_view();
     void draw_banner(std::string_view text);
     bool native_notice_return_main_=false;
     std::string filename_;

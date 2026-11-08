@@ -27,6 +27,13 @@ std::string upper(std::string s){for(char& c:s)c=char(std::toupper(static_cast<u
 
 ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::path& initial)
     :data_(std::move(data)),saves_(std::move(saves)),session_(data_),canvas_(data_),roster_help_(read_file(data_/"EM.EXE")),transfer_help_(read_file(data_/"EM.EXE")),calendar_(load_season_calendar(read_file(data_/"EM.EXE"))),schedule_(load_schedule_tables(read_file(data_/"EM.EXE"))) {
+    session_.set_match_observer([this](const Game& game,int minute,const std::vector<LiveMatch>& matches){
+        pending_match_frames_.push_back(classic_match_frame(game,minute,matches,game.match_attendance(),game.match_sold_out()));
+        if(!pending_league_day_&&(minute==60||minute==65||minute==70)){  // ovl06_2522 -> ovl07_0eba after the regular time and each overtime part
+            ClassicMatchFrame table=pending_match_frames_.back();table.cup_table=minute;table.cup=classic_cup_live(minute,matches);
+            pending_match_frames_.push_back(std::move(table));
+        }
+    });
     if(!initial.empty())session_.load(initial);
     if(session_.loaded())table_order_=session_.game().league(division_).ranking;
     if(!session_.loaded())open_files(false);
@@ -72,12 +79,37 @@ void ClassicApplication::start_advance(){
     if(!session_.loaded())return;
     advancing_=true;advance_first_=true;advanced_days_=0;category_=-1;
 }
+// The match display (ovl06_2522): the day is computed at once by Session::advance_day, the observed minutes are shown afterwards.
+// The original shows them when the human club plays or the display switch of the competition is on (ovl06_161d).
+void ClassicApplication::prepare_match_view(bool human_match){
+    pending_match_frames_.clear();pending_human_match_=human_match;
+    pending_league_day_=session_.loaded()&&calendar_.league_day(session_.game().season_day()+1);
+    if(session_.loaded()&&!pending_league_day_)match_before_=std::make_unique<HokFile>(clone_hok(snapshot()));
+}
+void ClassicApplication::begin_match_view(){
+    auto frames=std::move(pending_match_frames_);pending_match_frames_.clear();
+    if(frames.empty()||!classic_match_display_wanted(session_.game(),pending_human_match_,!pending_league_day_))return;
+    match_frames_=std::move(frames);match_frame_=0;
+    match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_minute_ms(session_.game().settings().speed));
+}
+bool ClassicApplication::tick_match_view(){
+    if(match_frames_.empty())return false;
+    const uint64_t now=SDL_GetTicks64();
+    if(match_frames_[match_frame_].cup_table)return true;  // the cup table waits for a click (FUN_199f_0118)
+    if(now<match_frame_until_)return true;
+    if(match_frame_+1>=match_frames_.size()){match_frames_.clear();return false;}
+    match_frame_++;
+    // the last minute stays a moment (the original waits for the period end, FUN_199f_0118)
+    match_frame_until_=now+uint64_t(classic_match_minute_ms(session_.game().settings().speed))+(match_frame_+1==match_frames_.size()?1000u:0u);
+    return true;
+}
 void ClassicApplication::tick(){
     if(native_notice_until_){
         if(SDL_GetTicks64()<*native_notice_until_)return;
         finish_timed_native_notice();
     }
     if(!advancing_)update_roster_hover();
+    if(tick_match_view())return;
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
     if(match_banner_until_){
         if(SDL_GetTicks64()<*match_banner_until_)return;
@@ -93,7 +125,8 @@ void ClassicApplication::tick(){
             match_banner_day_=session_.game().season_day();match_banner_until_=SDL_GetTicks64()+kMatchBannerMs;return;
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
-        if(session_.advance_day()){advance_first_=false;invalidate();show_manager_news();}
+        prepare_match_view(match_day);
+        if(session_.advance_day()){advance_first_=false;invalidate();show_manager_news();begin_match_view();}
     }catch(const std::exception& e){notice(e.what());}
 }
 void ClassicApplication::request_exit(){
@@ -202,6 +235,17 @@ void ClassicApplication::open_player(int slot,int manager){
     }catch(const std::exception& e){notice(e.what());}
 }
 void ClassicApplication::click(int x,int y,bool right){
+    if(!match_frames_.empty()){
+        // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
+        size_t next=match_frame_+1;
+        if(!match_frames_[match_frame_].cup_table){
+            if(!right)return;
+            while(next<match_frames_.size()&&!match_frames_[next].cup_table)next++;
+        }
+        if(next>=match_frames_.size()){match_frames_.clear();return;}
+        match_frame_=next;match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_minute_ms(session_.game().settings().speed));
+        return;
+    }
     if(native_notice_until_)return;
     if(!notice_.empty()){
         if(!right){notice_.clear();if(advert_renewal_refused_)resolve_advert_renewal(false);if(!pending_notices_.empty()){notice_=pending_notices_.front();pending_notices_.erase(pending_notices_.begin());}}
@@ -226,7 +270,7 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(session_.contract_question()){
         if(!right&&(inside(x,y,96,167,151,177)||inside(x,y,166,167,221,177))){
-            try{session_.answer_contract(x<160);invalidate();advance_first_=false;}
+            try{pending_match_frames_.clear();if(session_.answer_contract(x<160))begin_match_view();invalidate();advance_first_=false;}
             catch(const std::exception&e){notice(e.what());}
         }
         return;
@@ -518,6 +562,13 @@ void ClassicApplication::text_input(std::string_view text){
     }
 }
 void ClassicApplication::draw(){
+    if(!match_frames_.empty()){
+        const ClassicMatchFrame& frame=match_frames_[match_frame_];
+        if(frame.cup_table&&match_before_)draw_classic_cup_minute(canvas_,*match_before_,calendar_,frame.cup_table,frame.cup);
+        else draw_classic_match_view(canvas_,frame);
+        if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
+        return;
+    }
     if(match_banner_until_){
         draw_banner("Ligaspiel");
         if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);

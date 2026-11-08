@@ -54,6 +54,9 @@ public:
     ActionResult apply(const std::function<ActionResult(Game&)>& action);
     bool advance_day();  // false means a contract decision is pending; game remains unchanged
     bool next_day_has_match() const;  // checkpoint preview, no state or random-stream changes
+    // Observer of the minute loops of the next advance_day (match display); called with the staged game, read-only.
+    using MatchObserver = std::function<void(const Game& game, int minute, const std::vector<LiveMatch>& matches)>;
+    void set_match_observer(MatchObserver observer) { match_observer_ = std::move(observer); }
     bool answer_contract(bool renew);
     void cancel_advance();
 
@@ -72,6 +75,7 @@ private:
     uint64_t revision_ = 0;
     std::vector<int> contract_answers_;
     std::optional<ContractQuestion> contract_question_;
+    MatchObserver match_observer_;
 };
 
 // Publish a complete new save atomically. Existing destinations are never

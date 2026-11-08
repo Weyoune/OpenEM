@@ -768,6 +768,7 @@ struct MatchRun::Impl {
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     bool watched = false;
     bool shootout_done = false;
+    MatchProgress shown;  // display bookkeeping only (ovl14_1dc7), never read by the simulation
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool step() {
         if (forfeit || minute >= last) return false;
@@ -797,6 +798,7 @@ struct MatchRun::Impl {
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
         if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
         if ((events & 1) && ap && ap->on_opponent_chance) ap->on_opponent_chance(home_goal, h);
+        if ((events & 1) && minute <= 60) { shown.period_chances[(minute - 1) / 20][0]++; if (home_goal) shown.period_goals[(minute - 1) / 20][0]++; }
         if (home_goal) {
             score.home++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
@@ -809,6 +811,7 @@ struct MatchRun::Impl {
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
         if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a, asq);
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
+        if ((events & 2) && minute <= 60) { shown.period_chances[(minute - 1) / 20][1]++; if (away_goal) shown.period_goals[(minute - 1) / 20][1]++; }
         if (away_goal) {
             score.away++;
             if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
@@ -898,6 +901,16 @@ MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, in
 MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
 void MatchRun::set_watched(bool on) { p_->watched = on; }
+MatchProgress MatchRun::progress() const {
+    MatchProgress m = p_->shown;
+    m.minute = p_->minute;
+    m.score = p_->forfeit && p_->minute == 0 ? MatchResult{} : p_->score;
+    m.penalty_minutes[0] = p_->hbox.minutes_assessed();
+    m.penalty_minutes[1] = p_->abox.minutes_assessed();
+    m.penalty_code[0] = p_->hbox.code();
+    m.penalty_code[1] = p_->abox.code();
+    return m;
+}
 void MatchRun::overtime_break() { if (p_->hp || p_->ap) return; prepare_match_energy(p_->h, nullptr, true); prepare_match_energy(p_->a, nullptr, true); }
 MatchResult MatchRun::finish() { return p_->finish(); }
 const HokTeam& MatchRun::home_state() const { return p_->h; }

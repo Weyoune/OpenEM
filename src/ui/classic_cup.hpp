@@ -45,5 +45,7 @@ ClassicCupView classic_cup(const HokFile& h, const SeasonCalendar& calendar);
 ClassicCupHit classic_cup_hit(const ClassicCupView& view, int x, int y);
 //Complete subordinate page on original wallpaper22; native frame/icons/text.
 void draw_classic_cup(ClassicCanvas& canvas, const HokFile& h, const SeasonCalendar& calendar);
+// The same page from a prepared view (used by the cup table during the match display, ui/classic_match_view).
+void draw_classic_cup_view(ClassicCanvas& canvas, const ClassicCupView& view);
 
 } // namespace em::ui

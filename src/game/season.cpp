@@ -109,7 +109,8 @@ std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam
 
 std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, std::vector<HokTeam>& teams,
                                                      const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human,
-                                                     int human_team, MatchStats* human_stats, BorlandRandom* brng) {
+                                                     int human_team, MatchStats* human_stats, BorlandRandom* brng,
+                                                     const MatchMinuteObserver* observer) {
     // ovl06_2522 plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
     struct Entry {
         size_t day, pair;
@@ -138,10 +139,16 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             entries.push_back(std::move(e));
         }
     }
+    std::vector<LiveMatch> live;  // the match display only observes (no draws, no state changes)
+    if (observer) {
+        for (auto& e : entries) live.push_back({e->home, e->away, e->run.get()});
+        (*observer)(0, live);
+    }
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
         for (auto& e : entries) more = e->run->step() || more;
+        if (observer) (*observer)(minute_number + 1, live);
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
         if (brng && (minute_number == 20 || minute_number == 40)) {

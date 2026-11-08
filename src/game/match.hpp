@@ -202,6 +202,18 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human);
 // FUN_162c_0417: exact preparation/interval energy, including its unconditional decrement.
 void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval = false);
 
+// What the original's match display shows of one running match (ovl14_1dc7 / ovl14_0d46): pure bookkeeping of the minute,
+// no random numbers. Chances and goals per period count only in the regular time (ovl14_1dc7 checks minute < 61; the
+// overtime keeps the third period slot DS:4E28 = 2 but books nothing there); penalty_code is the live team byte +0x33.
+struct MatchProgress {
+    int minute = 0;
+    MatchResult score;
+    int period_goals[3][2] = {};
+    int period_chances[3][2] = {};
+    int penalty_minutes[2] = {};
+    int penalty_code[2] = {};
+};
+
 // One league match played minute by minute: the original plays all matches of a day interleaved (minute 1 of every
 // match, then minute 2 ...), see Game::play_league_day.
 class MatchRun {
@@ -217,11 +229,20 @@ public:
     const HokTeam& away_state() const;
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
     void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
+    MatchProgress progress() const;  // display state after the last played minute (read-only observer)
 
 private:
     struct Impl;
     std::unique_ptr<Impl> p_;
 };
+
+// Observer of a day played minute by minute (match display of the original, ovl06_2522 -> ovl14_0d46). Called before
+// minute 1 (minute 0) and after every minute with all matches of the day; it must not change the game.
+struct LiveMatch {
+    int home = -1, away = -1;
+    const MatchRun* run = nullptr;
+};
+using MatchMinuteObserver = std::function<void(int minute, const std::vector<LiveMatch>& matches)>;
 
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0,
                          const HumanSquad* home_human = nullptr, const HumanSquad* away_human = nullptr,

@@ -105,6 +105,7 @@ void Session::add_news(std::string text) {
 void Session::commit(std::unique_ptr<Game> next, const Bytes& before) {
     const bool changed = next->checkpoint_bytes() != before;
     next->set_contract_decider({});  // never retain callbacks referring to a staged stack frame
+    next->set_match_observer({});
     game_ = std::move(next);
     save_history_=game_->native_save_history();
     dirty_ = dirty_ || changed;
@@ -139,6 +140,10 @@ bool Session::advance_day() {
         contract_question_ = std::move(q);
         throw NeedContract{};
     });
+    if (match_observer_) {
+        Game* staged = next.get();
+        next->set_match_observer([this, staged](int minute, const std::vector<LiveMatch>& matches) { match_observer_(*staged, minute, matches); });
+    }
     try {
         next->advance_day();
     } catch (const NeedContract&) {
