@@ -290,6 +290,10 @@ public:
     // (raw) and returns the years offered (0 = let him go). Without one the club offers 2 years.
     using ContractDecider = std::function<int(const ContractPlayer& player, long demand)>;
     void set_contract_decider(ContractDecider d) { contract_decider_ = std::move(d); }
+    // Match display (ui/classic_match_view): observes the minute loops of league and cup days; never changes the game.
+    void set_match_observer(MatchMinuteObserver o) { match_observer_ = std::move(o); }
+    long match_attendance() const { return match_attendance_; }  // the last home game of the human club (ovl08_21e5)
+    bool match_sold_out() const { return match_sold_out_; }
     void decline_offer(size_t i);
     const std::vector<std::string>& log() const { return log_; }
     void clear_log() { log_.clear(); }
@@ -372,6 +376,9 @@ private:
     std::vector<ManagerOffer> manager_offers_;
     std::vector<std::string> manager_news_;
     ContractDecider contract_decider_;
+    MatchMinuteObserver match_observer_;
+    long match_attendance_ = 0;
+    bool match_sold_out_ = false;
     RatingBounds rating_;
     TrainingPlan plan_{};
     GameRandom rng_;

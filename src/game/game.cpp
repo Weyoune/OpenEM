@@ -356,6 +356,8 @@ void Game::home_game(int guest, int kind, int home_class, int guest_class, int h
     m.league_statistics = league_statistics;
     const uint8_t previous_home_games = uint8_t(budget_.home_games);
     const long spectators = home_attendance(finance_, budget_, m, brng_);
+    match_attendance_ = spectators;
+    match_sold_out_ = spectators == long(budget_.places[0]) + budget_.places[1];
     if (league_statistics)
         save_.state.at(kManagerBlock + 0xFE + previous_home_games) = uint8_t(spectators / 1000);
     char line[160];
@@ -455,7 +457,8 @@ void Game::play_league_day() {
     human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
     human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(0, false, goal, &team); };  // every chance picks scorer and assist
     human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
-    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
+    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_,
+                                           match_observer_ ? &match_observer_ : nullptr);
     human_.on_minute = nullptr;
     human_.on_chance = nullptr;
     human_.on_opponent_chance = nullptr;
@@ -573,7 +576,7 @@ void Game::play_cup_day() {
         human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
         human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
     }
-    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_) : play_cup_round(save_.teams, draw, rng_, side);
+    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr) : play_cup_round(save_.teams, draw, rng_, side);
     if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
     human_.on_minute = nullptr;
     human_.on_chance = nullptr;
