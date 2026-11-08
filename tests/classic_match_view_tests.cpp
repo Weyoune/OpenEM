@@ -54,6 +54,24 @@ static size_t differences(const ClassicCanvas& canvas, const fs::path& golden, c
     return count;
 }
 
+// Compares the rows y0..239 with the golden (the goal flash captures show a board whose live values are not modelled here).
+static size_t differences_below(const ClassicCanvas& canvas, const fs::path& golden, int y0, const std::string& name) {
+    const auto expected = read_file(golden);
+    require(expected.size() == 320 * 240 * 3, "golden size " + name);
+    const auto actual = canvas.argb();
+    size_t count = 0;
+    int x0 = 320, y1 = -1, x1 = -1, top = 240;
+    for (size_t p = size_t(y0) * 320; p < actual.size(); p++) {
+        const uint32_t rgb = uint32_t(expected[p * 3]) << 16 | uint32_t(expected[p * 3 + 1]) << 8 | expected[p * 3 + 2];
+        if ((actual[p] & 0xFFFFFF) == rgb) continue;
+        count++;
+        const int x = int(p % 320), y = int(p / 320);
+        x0 = std::min(x0, x); x1 = std::max(x1, x); top = std::min(top, y); y1 = std::max(y1, y);
+    }
+    if (count) std::fprintf(stderr, "%s: %zu pixels differ in %d,%d..%d,%d\n", name.c_str(), count, x0, top, x1, y1);
+    return count;
+}
+
 // Development aid: EM_MATCH_DUMP="name x y w h" prints the golden (G) and the render (M) as palette indices.
 static void dump(const ClassicCanvas& canvas, const fs::path& goldens, const std::string& name) {
     const char* spec = std::getenv("EM_MATCH_DUMP");
@@ -233,6 +251,77 @@ int main(int argc, char** argv) {
             draw_classic_cup_minute(later, before, calendar, 65, live);
             later.cursor(160, 44);
             check(later, "cup-minute-65");
+        }
+        {
+            // Goal flash of FUN_162c_23c4 (dosbox-automation capture of a new game, 2. Spieltag 13.09.1993, minute 1: the own
+            // EC Hedos München - EHC Freiburg on a board, every other club with reporting mode 1): EV Landsberg - Augsburger EV
+            // 0:1, first the names (goal-flash-teams), after delay(50) with the score (goal-flash-score). Compared from the
+            // message panel row downwards; the board above holds live values of the capture.
+            for (const bool with_score : {false, true}) {
+                ClassicCanvas canvas(data);
+                ClassicMatchFrame f;
+                f.minute = 1;
+                f.boards.push_back(board("EC HEDOS MÜNCHEN", 89, "EHC FREIBURG", 86));
+                f.flash = ClassicGoalFlash{"EV LANDSBERG", "AUGSBURGER EV", {0, 1}, with_score};
+                draw_classic_match_view(canvas, f);
+                const std::string name = with_score ? "goal-flash-score" : "goal-flash-teams";
+                dump(canvas, goldens, name);
+                if (!fs::exists(goldens / (name + ".rgb"))) { std::fprintf(stderr, "missing golden %s\n", name.c_str()); failures++; continue; }
+                if (differences_below(canvas, goldens / (name + ".rgb"), 0xB4, name)) failures++;
+            }
+            require(classic_match_frame_ms(ClassicMatchFrame{}, 70) == classic_match_minute_ms(70), "a minute frame lasts a minute");
+            ClassicMatchFrame flash;
+            flash.flash = ClassicGoalFlash{};
+            require(classic_match_frame_ms(flash, 0) == 878, "delay(50): 16 BIOS ticks with the names");
+            flash.flash->score = true;
+            require(classic_match_frame_ms(flash, 70) == 1263, "delay(70): 23 BIOS ticks with the score");
+        }
+        {
+            // classic_goal_flashes: two stages per goal before the minute of the goal, home goals first, drawn over the previous
+            // minute with the new minute; no flashes without a board ("Spiele laufen"); cup tables stay untouched.
+            auto minute = [](int m, int home, int away, bool with_board) {
+                ClassicMatchFrame f;
+                f.minute = std::max(1, m);
+                if (with_board) f.boards.push_back(board("A", 80, "B", 81));
+                ClassicReportedMatch r;
+                r.home = 5; r.away = 7; r.names[0] = "HOME"; r.names[1] = "AWAY"; r.goals[0] = home; r.goals[1] = away;
+                f.reported.push_back(r);
+                return f;
+            };
+            std::vector<ClassicMatchFrame> frames{minute(0, 0, 0, true), minute(1, 0, 0, true), minute(2, 1, 1, true), minute(3, 1, 1, true)};
+            ClassicMatchFrame table = frames.back();
+            table.cup_table = 60;
+            frames.push_back(table);
+            frames.push_back(minute(4, 1, 2, true));
+            const auto shown = classic_goal_flashes(frames);
+            require(shown.size() == 6 + 6, "three goals give six flash frames");
+            require(!shown[1].flash && shown[1].minute == 1, "minute 1 unchanged");
+            require(shown[2].flash && !shown[2].flash->score && shown[2].minute == 2 && shown[2].flash->home == "HOME", "names first, minute 2 shown");
+            require(shown[2].flash->goals[0] == 1 && shown[2].flash->goals[1] == 0, "the home goal comes first");
+            require(shown[3].flash && shown[3].flash->score, "then the score");
+            require(shown[4].flash->goals[0] == 1 && shown[4].flash->goals[1] == 1 && shown[5].flash->score, "then the away goal");
+            require(!shown[6].flash && shown[6].minute == 2, "the minute frame follows");
+            require(shown[8].cup_table == 60, "the cup table stays");
+            require(shown[9].flash && shown[9].minute == 4 && shown[9].flash->goals[1] == 2 && !shown[11].flash, "a flash after the cup table");
+            std::vector<ClassicMatchFrame> running{minute(0, 0, 0, false), minute(1, 2, 0, false)};
+            require(classic_goal_flashes(running).size() == 2, "no flash with \"Spiele laufen\"");
+        }
+        {
+            // The frames list the reported matches without a board: START with every other club on mode 1 (headphones).
+            Session s(data);
+            s.load(references / "START.HOK", 7);
+            for (int team = 0; team < 48; team++)
+                if (team != s.game().human_team()) s.apply([&](Game& g) { g.set_team_reporting(team, 1); return ActionResult{}; });
+            std::vector<ClassicMatchFrame> frames;
+            s.set_match_observer([&](const Game& g, int minute, const std::vector<LiveMatch>& m) {
+                frames.push_back(classic_match_frame(g, minute, m, g.match_attendance(), g.match_sold_out()));
+            });
+            for (int day = 0; day < 6 && frames.empty(); day++) require(s.advance_day(), "days advance");
+            require(!frames.empty() && frames.back().boards.size() == 1, "the own match on the board");
+            size_t goals = 0;
+            for (const auto& r : frames.back().reported) goals += size_t(r.goals[0] + r.goals[1]);
+            const auto shown = classic_goal_flashes(frames);
+            require(goals > 0 && shown.size() == frames.size() + 2 * goals, "every reported goal flashes once");
         }
         {
             // The display only observes: the same days with and without the observer give byte-identical games (CAM.HOK-like

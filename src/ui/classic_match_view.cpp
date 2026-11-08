@@ -119,6 +119,27 @@ void board_live(ClassicCanvas& c, const ClassicBoard& b, int index) {
         if (side == 0) copy(c, work, 0x4B, 0, 0x99, y + 4, 0xE, 0x17);
     }
 }
+// 1902:0885 (sub_198A5) centred on a single column: x = centre - width / 2, moved to 0 when the text would leave the screen.
+void centred(ClassicCanvas& c, int centre, int y, const std::string& text) {
+    int x = centre - c.font().measure(kMini, text) / 2;
+    if (x + c.font().measure(kMini, text) > 0x13F || x < 0) x = 0;
+    c.text(kMini, x, y, text, 1, 0);
+}
+
+// FUN_162c_23c4 seg003:2B52..2C7C: the goal flash over the message panel (font 3 selected by 1902:06DD).
+void goal_flash(ClassicCanvas& c, const ClassicGoalFlash& f) {
+    centred(c, 0xF5, 0xC0, f.home);
+    centred(c, 0x127, 0xC0, "-");  // DS:495C
+    centred(c, 0x10D, 0xC7, f.away);
+    for (int a = 0; a < 4; a += 3) {  // the colon: a 2 x 2 dot in colour 4 on a black shadow, twice (1902:0800 fills boxes)
+        c.rect(0x101, 0xCF + a, 0x102, 0xD0 + a, 0);
+        c.rect(0x100, 0xCE + a, 0x101, 0xCF + a, 4);
+    }
+    if (!f.score) return;  // delay(50) before the digits
+    int home = f.goals[0];
+    while (home > 0x1D) home -= 0x1E;  // only the home goals lose their +30 marker (seg003:2B48)
+    score(c, home, f.goals[1], 0xEF, 0xCC);
+}
 }  // namespace
 
 void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
@@ -141,6 +162,7 @@ void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
     minute_panel(c, false, frame.minute);
     lamp(c, 10, 0xE4, frame.settings_lamp);
     c.blit(kSpriteKb, 0x9A, 0xCB, frame.blink ? 0x80 : 0x50, 0, 0xC, 4, true, kKey);
+    if (frame.flash) goal_flash(c, *frame.flash);
 }
 
 void draw_classic_cup_minute(ClassicCanvas& c, const HokFile& before_day, const SeasonCalendar& calendar, int minute,
@@ -182,17 +204,64 @@ int classic_match_minute_ms(int speed) {
     return kDrawing + (30 - speed / 2) * 55 / 3;
 }
 
+int classic_match_frame_ms(const ClassicMatchFrame& frame, int speed) {
+    // 2115:019E waits value / 3 BIOS ticks of 54.925 ms
+    if (frame.flash) return (frame.flash->score ? 70 / 3 : 50 / 3) * 54925 / 1000;
+    return classic_match_minute_ms(speed);
+}
+
+std::vector<ClassicMatchFrame> classic_goal_flashes(std::vector<ClassicMatchFrame> frames) {
+    std::vector<ClassicMatchFrame> out;
+    std::optional<ClassicMatchFrame> last;  // the last minute frame (cup tables are copies of it)
+    for (ClassicMatchFrame& frame : frames) {
+        if (frame.cup_table) { out.push_back(std::move(frame)); continue; }
+        if (last && !frame.boards.empty()) {
+            const ClassicMatchFrame* previous = &*last;
+            for (const ClassicReportedMatch& m : frame.reported) {
+                const auto before = std::find_if(previous->reported.begin(), previous->reported.end(),
+                                                 [&](const ClassicReportedMatch& p) { return p.home == m.home && p.away == m.away; });
+                int goals[2] = {};
+                if (before != previous->reported.end()) { goals[0] = before->goals[0]; goals[1] = before->goals[1]; }
+                for (int side = 0; side < 2; side++)
+                    while (goals[side] < m.goals[side]) {
+                        goals[side]++;
+                        ClassicMatchFrame f = *previous;
+                        f.minute = frame.minute;
+                        f.cup_table = 0;
+                        f.cup.clear();
+                        f.flash = ClassicGoalFlash{m.names[0], m.names[1], {goals[0], goals[1]}, false};
+                        out.push_back(f);
+                        f.flash->score = true;
+                        out.push_back(std::move(f));
+                    }
+            }
+        }
+        last = frame;
+        out.push_back(std::move(frame));
+    }
+    return out;
+}
+
 ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::vector<LiveMatch>& matches, long attendance,
                                       bool sold_out) {
     ClassicMatchFrame frame;
     frame.minute = std::max(1, minute);
     const HokFile& h = game.save();
     for (const LiveMatch& m : matches) {
-        if (frame.boards.size() >= 4) break;
-        const auto reported = [&](int team) { return (h.state.at(0x17E7 + size_t(team) * 61 + 0x34) & 0x80) != 0; };
-        if (!reported(m.home) && !reported(m.away)) continue;
-        ClassicBoard b;
+        const auto mode = [&](int team) { return team < 150 ? h.state.at(0x17E7 + size_t(team) * 61 + 0x34) & 0xC0 : 0; };
         const MatchProgress p = m.run->progress();
+        if (frame.boards.size() >= 4 || !((mode(m.home) | mode(m.away)) & 0x80)) {
+            if (!(mode(m.home) | mode(m.away))) continue;
+            ClassicReportedMatch r;  // FUN_162c_23c4 flashes the goals of this match
+            r.home = m.home; r.away = m.away;
+            r.names[0] = m.run->home_state().name;
+            r.names[1] = m.run->away_state().name;
+            r.goals[0] = p.score.home - p.score.shootout_goals[0];
+            r.goals[1] = p.score.away - p.score.shootout_goals[1];
+            frame.reported.push_back(std::move(r));
+            continue;
+        }
+        ClassicBoard b;
         b.goals[0] = p.score.home;
         b.goals[1] = p.score.away;
         for (int k = 0; k < 3; k++) for (int s = 0; s < 2; s++) b.period_goals[k][s] = p.period_goals[k][s];
