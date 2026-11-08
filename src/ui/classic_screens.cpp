@@ -16,6 +16,7 @@
 #include "ui/classic_league_fixtures.hpp"
 #include "ui/classic_playoff.hpp"
 #include "ui/classic_cup.hpp"
+#include "ui/classic_settings.hpp"
 #include <algorithm>
 #include <cstdio>
 
@@ -324,6 +325,26 @@ void ClassicApplication::draw_training(){
             canvas_.line(x+1,93,x+1,94-height,uint8_t(colors[bar][1]));x+=2;
         }
     }
+}
+// ovr030:081D: full-width window (4,92, 13x3), NewBold text centred over x 0..319 at baseline 127 in black and again at 126 in colour 11.
+void ClassicApplication::draw_banner(std::string_view text){
+    canvas_.background(22);canvas_.frame(4,92,13,3);
+    canvas_.text(ClassicFontId::NewBold,0,127,text,0,-1,319);
+    canvas_.text(ClassicFontId::NewBold,0,126,text,11,-1,319);
+}
+void ClassicApplication::open_settings(){hover_kind_.reset();screen_=ClassicScreen::Settings;}
+void ClassicApplication::draw_settings(){draw_classic_settings(canvas_,session_.game().settings(),0);}
+void ClassicApplication::click_settings(int x,int y,bool right){
+    if(right){screen_=ClassicScreen::Main;return;}
+    const auto hit=classic_settings_hit(x,y);
+    if(hit.widget>=0){
+        int value=0;
+        action([&](Game& game){value=game.toggle_setting(hit.widget,0);return ActionResult{};});
+        if(hit.widget==9&&value==2&&!settings_rink_hint_shown_){
+            settings_rink_hint_shown_=true;
+            notice("Neuer Spielmodus:\nDas Eisfeld bleibt während des\ngesamten Spieles an. Keine\nTeamveränderungen möglich.");
+        }
+    }else if(hit.speed>=0)action([&](Game& game){game.set_game_speed(hit.speed);return ActionResult{};});
 }
 void ClassicApplication::draw_transfer(){draw_classic_transfer(canvas_,purchase_backdrop_?*purchase_backdrop_:snapshot(),session_.game().budget());}
 } // namespace em::ui
