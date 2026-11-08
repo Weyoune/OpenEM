@@ -222,8 +222,6 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             for (auto& e : entries) e.run->overtime_break();
         for (auto& e : entries) more = e.run->step() || more;
         minute_number++;
-        if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const Entry& e) { return e.home == human.team; }))
-            for (auto& e : entries) e.run->set_watched(true);
         if (brng && (minute_number == 20 || minute_number == 40)) {
             const int spin = brng->range(100, 300);
             for (int i = 0; i < spin; i++) rng.range(0, 1);

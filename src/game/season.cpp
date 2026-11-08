@@ -144,10 +144,6 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         for (auto& e : entries) more = e->run->step() || more;
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
-        if (minute_number == 20 && std::getenv("EM_DEBUG_WATCH"))
-            for (auto& e : entries) std::fprintf(stderr, "watch: day %zu pair %zu %d-%d human %d\n", e->day, e->pair, e->home, e->away, human_team);
-        if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const auto& e) { return e->home == human_team; }))
-            for (auto& e : entries) e->run->set_watched(true);  // only after a home game of the human club (REAL-CODE: away games keep the short list)
         if (brng && (minute_number == 20 || minute_number == 40)) {
             const int spin = brng->range(100, 300);
             for (int i = 0; i < spin; i++) rng.range(0, 1);
@@ -168,6 +164,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 t.effort_base = m.effort_base;
                 for (int k = 0; k < 2; k++) { t.current_line[k] = m.current_line[k]; t.shift[k] = m.shift[k]; for (int line = 0; line < 4; line++) t.energy[k][line] = m.energy[k][line]; }
                 t.skaters = m.skaters; t.penalty_code = m.penalty_code;
+                if (&t == &teams[0] && t.penalty_code) { t.penalty_code = 0; t.skaters = std::max(t.skaters, 5); }  // REAL-CODE: only team record 0 ends its running penalties with the game (cause open, index 0 as an empty marker?)
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
             }
         }

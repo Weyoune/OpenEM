@@ -618,10 +618,11 @@ void Game::play_cup_day() {
             if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);  // energy 90, no mode bits, shifts 0
         }
         if (human_in) {
-            // REAL-CODE: after the game the managed match recovers 2 x 19, less what its overtime breaks (61, 66) gave already
+            // REAL-CODE: on the twice-weekly squad day the managed match recovers 2 x 19 after the game, less the overtime breaks (61, 66)
             int played = 0;
             for (int line = 0; line < 4; line++) played += stats.line_minutes[0][line];
-            const int recover = 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0);  // the rest after the game is worth 2 x 19 in all, minus the breaks taken inside the overtime (REAL-CODE)
+            const bool squad_day = (day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0;  // REAL-CODE after the emulator cache fix: the rest comes only on the twice-weekly squad day
+            const int recover = squad_day ? 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0) : 0;
             if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d\n", played, recover);
             if (recover > 0) {
                 int opponent = -1;
@@ -3019,8 +3020,11 @@ g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stder
     if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days) {  // after the share market (whole-program test)
         update_sponsors();
         // ovr032:1F0B..1FAE: a coin flip; on heads the per-manager value DS:020D (state 0x18) is set to 60000 + 10000 * rand(0,10)
-        // and then rescaled; the stored value is overwritten again later in the day, so only the draws are modelled
-        if (brng_.range(0, 1) != 0) brng_.range(0, 10);
+        // stored raw (x3); it is the talent scout price (REAL-CODE after the emulator cache fix: 0x6DDD0 = 3 * (60000 + 10000 * 9))
+        if (brng_.range(0, 1) != 0) {
+            const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
+            for (int n = 0; n < 4; n++) save_.state.at(0x18 + size_t(n)) = uint8_t(price >> (8 * n));
+        }
     }
 g_draw_scope = "finance";
     finance_day(finance_, budget_, finance_date.day, finance_month_days);

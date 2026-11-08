@@ -2,6 +2,8 @@
 #include "game/scorers.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 namespace em {
 
@@ -32,6 +34,9 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
         if (on_ice && on_ice->current_line[(p.line >> 7) & 1] != (p.line & 0x7F) - 1) continue;
         const int position_value = players[size_t(p.player)].position;
         if (position_value == 0) continue;
+        if (std::getenv("EM_DEBUG_PICK"))
+            std::fprintf(stderr, "pick kind %d slot %d role %d line %02x lines on ice %d/%d\n", kind, slot, p.role, p.line,
+                         on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
         int weight = (kind == 0 && !goal) ? rng.range(120, 170)
                                           : p.skill_b * 3 / (5 - 3 * kind) + p.skill_a / 5 + p.form / 5;
         weight += std::min(2, position_value / 25) * (72 - 17 * kind);

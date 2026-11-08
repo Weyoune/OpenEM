@@ -868,6 +868,8 @@ struct MatchRun::Impl {
         if (forfeit) return forfeit_result;
         while (step()) {}
         // the original leaves running penalties of a team without manager on the record (skaters, +0x33)
+        if (std::getenv("EM_DEBUG_FIN"))
+            std::fprintf(stderr, "finish %s - %s: code %d/%d skaters %d/%d score %d:%d\n", h.name.c_str(), a.name.c_str(), hbox.code(), abox.code(), h.skaters, a.skaters, score.home, score.away);
         if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
         if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
         if (stats) {

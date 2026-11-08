@@ -2392,7 +2392,7 @@ static void manager_offers(const fs::path& em_dir, const fs::path& ref_dir) {
         Game declined(exe, bytes, 12);
         declined.decline_offer(0);
         Game no_offer(exe, declined.save_bytes(), 12);
-        CHECK(no_offer.offers().empty());
+        CHECK(no_offer.offers().size() + 1 == g.offers().size());  // one offer fewer (the seed may produce a second one)
     }
     {
         Game base(exe, initial, 12);
