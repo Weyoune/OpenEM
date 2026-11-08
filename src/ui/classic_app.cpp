@@ -115,7 +115,7 @@ void ClassicApplication::route_submenu(int item){
     hover_kind_.reset();roster_hover_={};roster_rules_=false;
     transfer_hover_={};pool_rules_=pool_help_visible_=false;
     switch(category_){
-        case 0:if(item==0){screen_=ClassicScreen::Bank;bank_party_=4;bank_amount_=0;bank_selected_=false;return;}if(item==1){open_advertising();return;}if(item==2){open_stadium();return;}if(item==3){screen_=ClassicScreen::Youth;return;}break;
+        case 0:if(item==0){screen_=ClassicScreen::Bank;bank_party_=4;bank_amount_=0;bank_selected_=false;return;}if(item==1){open_advertising();return;}if(item==2){open_stadium();return;}if(item==3){screen_=ClassicScreen::Youth;return;}if(item==4){open_new_manager();return;}if(item==5){open_highscore();return;}break;
         case 1:
             if(item==0){open_lineup();return;}
             if(item==1){open_tactics();return;}
@@ -231,6 +231,7 @@ void ClassicApplication::click(int x,int y,bool right){
     if(screen_==ClassicScreen::Stadium){click_stadium(x,y,right);return;}
     if(screen_==ClassicScreen::Youth){click_youth(x,y,right);return;}
     if(screen_==ClassicScreen::Settings){click_settings(x,y,right);return;}
+    if(screen_==ClassicScreen::Highscore||screen_==ClassicScreen::NewManager){click_misc(x,y,right);return;}
     if(fee_editor_)return;
     if(file_preview_)return;
     if(player_detail_){
@@ -461,6 +462,7 @@ void ClassicApplication::motion(int x,int y){
 }
 void ClassicApplication::key(int key){
     if(native_notice_until_||sale_quote_)return;
+    if(screen_==ClassicScreen::NewManager){key_misc(key);return;}
     if(screen_==ClassicScreen::Youth)return; //087B is mouse-driven, including Escape
     if(screen_==ClassicScreen::Stadium){if(!notice_.empty())notice_.clear();return;}
     if(advertising_info_||advert_renewal_)return;
@@ -492,6 +494,7 @@ void ClassicApplication::key(int key){
 }
 void ClassicApplication::text_input(std::string_view text){
     if(native_notice_until_)return;
+    if(screen_==ClassicScreen::NewManager){text_misc(text);return;}
     //Text input may clear diagnostic errors. Native timed notices above and
     //pending construction questions retain their own completion rules.
     if(screen_==ClassicScreen::Stadium){if(!text.empty())notice_.clear();return;}
@@ -529,6 +532,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::Stadium:draw_stadium();break;
         case ClassicScreen::Youth:draw_classic_youth(canvas_,snapshot(),session_.finance_tables());break;
         case ClassicScreen::Settings:draw_settings();break;
+        case ClassicScreen::Highscore:case ClassicScreen::NewManager:draw_misc();break;
     }
     draw_roster_hover();
     if(sale_quote_)draw_sale_offer();
