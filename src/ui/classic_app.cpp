@@ -93,7 +93,7 @@ void ClassicApplication::tick(){
             match_banner_day_=session_.game().season_day();match_banner_until_=SDL_GetTicks64()+kMatchBannerMs;return;
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
-        if(session_.advance_day()){advance_first_=false;invalidate();}
+        if(session_.advance_day()){advance_first_=false;invalidate();show_manager_news();}
     }catch(const std::exception& e){notice(e.what());}
 }
 void ClassicApplication::request_exit(){
@@ -102,7 +102,7 @@ void ClassicApplication::request_exit(){
     if(screen_==ClassicScreen::Stadium)canvas_.set_button_edge(3);
     advertising_info_=false;if(advert_renewal_)resolve_advert_renewal(false);
     if(menu_working_)finish_page();
-    fee_editor_.reset();
+    fee_editor_.reset();talent_question_=false;
     if(purchase_draft_){try{cancel_purchase(false);}catch(const std::exception& e){notice(e.what());return;}}
     if(screen_==ClassicScreen::Transfer)action([](Game& game){game.finish_transfer_menu();return ActionResult{};});
     if(screen_==ClassicScreen::Tactics)finish_tactics(ClassicScreen::Main);
@@ -210,6 +210,11 @@ void ClassicApplication::click(int x,int y,bool right){
     if(sale_quote_){
         if(!right&&inside(x,y,12,84,67,94))finish_sale_offer(false);
         else if(!right&&inside(x,y,91,84,146,94))finish_sale_offer(true);
+        return;
+    }
+    if(talent_question_){
+        if(!right&&inside(x,y,96,167,151,177))answer_talent_question(true);
+        else if(!right&&inside(x,y,166,167,221,177))answer_talent_question(false);
         return;
     }
     if(quit_question_){
@@ -542,11 +547,12 @@ void ClassicApplication::draw(){
     if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
 }
 void ClassicApplication::draw_dialog(){
-    if(notice_.empty()&&!quit_question_&&!session_.contract_question()&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
+    if(notice_.empty()&&!quit_question_&&!talent_question_&&!session_.contract_question()&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
     if(advancing_&&notice_.empty()&&!session_.contract_question())return;
     const bool advert_question=advert_renewal_.has_value()&&!advert_renewal_refused_;
     const bool stadium_question=stadium_build_.has_value();
-    const bool question=quit_question_||session_.contract_question().has_value()||advert_question||stadium_question;
+    const bool talent_question=talent_question_&&notice_.empty();
+    const bool question=quit_question_||session_.contract_question().has_value()||advert_question||stadium_question||talent_question;
     canvas_.frame(75,107,7,4);
     canvas_.text(flow,105,125,session_.loaded()?session_.game().save().manager:"",7,0,210);
     for(const int x:{83,212}){
@@ -558,6 +564,8 @@ void ClassicApplication::draw_dialog(){
         canvas_.text(mini,105,141,"Sie haben also wirklich",7,0,210);
         canvas_.text(mini,105,149,"etwas besseres zu tun ?",7,0,210);
         canvas_.text(mini,105,157,"Sind Sie sicher ??",7,0,210);
+    }else if(talent_question){
+        draw_talent_question();
     }else if(stadium_question){
         const auto& draft=*stadium_build_;
         canvas_.text_native(mini,105,141,"M|chten Sie Ihr Stadion ausbauen ?",7,0,210);
@@ -590,9 +598,9 @@ void ClassicApplication::draw_dialog(){
         for(size_t i=0;i<std::min(lines.size(),size_t(4));i++)canvas_.text(mini,105,y+int(i)*pitch,lines[i],7,0,210);
         if(lines.size()>=3){button(95,166,"Na gut.");button(165,166,"Na gut.");}
     }
-    if(quit_question_||session_.contract_question()||advert_question||stadium_question){
-        button(95,166,quit_question_?"Leider ja":advert_question||stadium_question?"Ja.":"Mach' ich!");
-        button(165,166,quit_question_?"Kein Gedanke":advert_question||stadium_question?"Nein.":"Lass' ich!");
+    if(quit_question_||session_.contract_question()||advert_question||stadium_question||talent_question){
+        button(95,166,talent_question?"Aber immer!":quit_question_?"Leider ja":advert_question||stadium_question?"Ja.":"Mach' ich!");
+        button(165,166,talent_question?"Lieber nicht.":quit_question_?"Kein Gedanke":advert_question||stadium_question?"Nein.":"Lass' ich!");
     }
 }
 void ClassicApplication::render_screen(std::string_view name){
@@ -657,6 +665,8 @@ void ClassicApplication::render_screen(std::string_view name){
         screen_=ClassicScreen::Transfer;update_roster_hover();open_purchase(3);
         if(name=="purchase-contract"&&fee_editor_){fee_editor_->digits="400000";finish_fee(false);}
     }
+    else if(name=="loan-fee"){screen_=ClassicScreen::Transfer;update_roster_hover();open_loan(3);}
+    else if(name=="talent-question"){screen_=ClassicScreen::Transfer;update_roster_hover();open_talent_question();}
     else if(name=="lineup")open_lineup();else if(name=="tactics")open_tactics();
     else if(name=="transfer")screen_=ClassicScreen::Transfer;else throw FormatError("Unknown render screen");
     update_roster_hover();draw();

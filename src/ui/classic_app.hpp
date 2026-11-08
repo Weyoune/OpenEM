@@ -93,6 +93,12 @@ private:
     void open_player(int slot,int manager=0);
     void submit_contract();
     void open_purchase(int pool_slot);
+    void open_loan(int pool_slot);           // classic_loan.cpp
+    void finish_loan(int pool_slot,long fee);
+    void open_talent_question();             // classic_scout.cpp
+    void answer_talent_question(bool yes);
+    void draw_talent_question();
+    void show_manager_news();
     void open_sale_offer(int block,int slot,int16_t native_si);
     void finish_sale_offer(bool sell);
     void draw_sale_offer();
@@ -181,10 +187,11 @@ private:
         std::string digits;
     };
     std::optional<ContractEditor> contract_editor_;
-    struct FeeEditor { int pool_slot;std::string digits; };
+    struct FeeEditor { int pool_slot;std::string digits;bool loan=false; };
     std::optional<FeeEditor> fee_editor_;
     std::optional<PurchaseDraft> purchase_draft_;
     std::optional<SaleQuote> sale_quote_;
+    bool talent_question_=false;
     int16_t transfer_native_si_=0;
     std::unique_ptr<HokFile> purchase_backdrop_;
     struct PlayerDetail { int player,manager,slot;int64_t quote; };

@@ -85,6 +85,7 @@ struct StadiumBuildDraft {
 enum class StadiumBuildResult { Invalid,Unavailable,Blocked,InsufficientFunds,Prepared };
 enum class ContractResult { Invalid, Unavailable, Blocked, ShorteningNotConfirmed, PlayerRefused, Signed };
 enum class TransferMoveResult { Invalid, Unavailable, Blocked, OwnLimit, PoolFull, SquadFull, Moved };
+enum class TalentResult { Unavailable, Running, InsufficientFunds, Started };
 enum class BankResult { InvalidAmount, Unavailable, InsufficientCash, CreditLimit, Transferred };
 enum class StockResult { Invalid, Unavailable, InsufficientCash, InsufficientShares, Traded };
 
@@ -201,6 +202,16 @@ public:
     PurchaseResult begin_transfer_purchase(size_t slot,long fee,PurchaseDraft& draft);
     PurchaseResult finish_transfer_purchase(const PurchaseDraft&,int years,long salary,bool accept_subsidy=false,bool prepare_lineup=true);
     bool cancel_transfer_purchase(const PurchaseDraft&);
+    // Loan of a computer transfer-list player for one season (src/game/loan.cpp, ovr035:1118 loan flag).
+    // The fee is raw; Purchased means the player joined on loan.
+    PurchaseResult loan_transfer_player(size_t slot,long fee,bool accept_subsidy=false,bool prepare_lineup=true);
+    // Talent scout (src/game/talent.cpp): price (raw, state 0x18), running counter, start.
+    long talent_search_price() const;
+    int talent_search_days() const;
+    TalentResult start_talent_search();
+    // Messages for the manager from the last day step (talent scout), oldest first. They are not part
+    // of a checkpoint: the UI reads them right after advancing.
+    const std::vector<std::string>& manager_news() const { return manager_news_; }
     // Third contract-dialog row: half a freshly computed salary per month.
     // New cover is locked through the next month-end; injured players cannot
     // change cover. Returns true if the requested state is already set or applied.
@@ -323,6 +334,8 @@ private:
     void remove_squad_record(int block, int slot, int end_slot);
     void refresh_human_team();
     void weekly_team_drift();  // 162c:1c5b(1) for all 64 national and club teams, twice a week (ovl14)
+    void talent_search_week();  // seg002:0AC5, src/game/talent.cpp
+    bool talent_player(int skill,long percent);  // seg002:089F
     void refresh_menu_manager(int manager);
     void update_sponsors();
     int current_club_image();
@@ -349,6 +362,7 @@ private:
     bool human_played_ = false;          // the human club played today
     bool interactive_played_ = false;
     std::vector<ManagerOffer> manager_offers_;
+    std::vector<std::string> manager_news_;
     ContractDecider contract_decider_;
     RatingBounds rating_;
     TrainingPlan plan_{};
