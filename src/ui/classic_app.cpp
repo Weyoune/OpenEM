@@ -123,16 +123,16 @@ void ClassicApplication::route_submenu(int item){
             if(item==3){screen_=ClassicScreen::Transfer;return;}
             if(item==4){screen_=ClassicScreen::Training;training_plan_=session_.game().training_plan();training_changed_=false;training_kind_=0;return;}
             break;
-        case 2:if(item==0){screen_=ClassicScreen::Totals;return;}break;
+        case 2:if(item==0){screen_=ClassicScreen::Totals;return;}if(item<6){open_statistics(item);return;}break;
         case 3:
             if(item<3){division_=item;table_view_=1;table_order_=session_.game().league(item).ranking;screen_=ClassicScreen::Table;return;}
             if(item==3){open_cup();return;}
-            if(item==4){open_euro(euro_page_);return;}
+            if(item==4){euro_from_fixtures_=false;open_euro(euro_table_page_);return;}
             if(item==5){open_wm(wm_table_page_);return;}
             break;
         case 6:if(item<2){open_files(item==1);return;}if(item==2){open_settings();return;}break;
         case 5:if(item<4){open_strengths(item==3?4:item);return;}break;
-        case 4:if(item<3){if(league_page_==7)open_league_fixtures(item);else open_league_competition(item);return;}if(item==3){open_cup();return;}if(item==5){open_wm(wm_fixture_page_);return;}break;
+        case 4:if(item<3){if(league_page_==7)open_league_fixtures(item);else open_league_competition(item);return;}if(item==3){open_cup();return;}if(item==4){euro_from_fixtures_=true;open_euro(euro_fixture_page_);return;}if(item==5){open_wm(wm_fixture_page_);return;}break;
     }
     notice("Dieser Bereich ist noch nicht nachgebaut.");
 }
@@ -256,6 +256,7 @@ void ClassicApplication::click(int x,int y,bool right){
         }else if(inside(x,y,174,216,229,226)&&classic_club_info(snapshot(),*club_info_,club_info_mode_).schedule)open_team_schedule();
         return;
     }
+    if(screen_==ClassicScreen::Statistics){click_statistics(x,y,right);return;}
     if(roster_kind())roster_rules_=false;
     if(contract_editor_){
         auto& e=*contract_editor_;
@@ -534,6 +535,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::Stadium:draw_stadium();break;
         case ClassicScreen::Youth:draw_classic_youth(canvas_,snapshot(),session_.finance_tables());break;
         case ClassicScreen::Settings:draw_settings();break;
+        case ClassicScreen::Statistics:draw_statistics();break;
     }
     draw_roster_hover();
     if(sale_quote_)draw_sale_offer();
@@ -625,6 +627,7 @@ void ClassicApplication::render_screen(std::string_view name){
         }
     }
     else if(name=="main-files-return"){screen_=ClassicScreen::Main;category_=6;}
+    else if(render_statistics(name)){}
     else if(name=="table")screen_=ClassicScreen::Table;
     else if(name=="load")open_files(false);else if(name=="save")open_files(true);
     else if(name=="totals")screen_=ClassicScreen::Totals;else if(name=="bank")screen_=ClassicScreen::Bank;

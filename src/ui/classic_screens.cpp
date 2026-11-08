@@ -37,7 +37,8 @@ void ClassicApplication::begin_page_working(ClassicScreen screen){
 void ClassicApplication::draw_strengths(){draw_classic_strengths(canvas_,snapshot(),strengths_league_,strengths_mode_);}
 void ClassicApplication::open_euro(int page){
     if(screen_!=ClassicScreen::EuroCup||!menu_working_)begin_page_working(ClassicScreen::EuroCup);
-    euro_page_=page;(void)snapshot();
+    euro_page_=page;(euro_from_fixtures_?euro_fixture_page_:euro_table_page_)=page; // separate DS:5126 / DS:5123 memories
+    (void)snapshot();
     const Bytes date(menu_working_->state.begin()+0x8E21,menu_working_->state.begin()+0x8E2D);
     prepare_classic_euro_working(*menu_working_,calendar_,page);
     menu_date_dirty_=menu_date_dirty_||!std::equal(date.begin(),date.end(),menu_working_->state.begin()+0x8E21);
