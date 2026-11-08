@@ -561,7 +561,7 @@ if(TARGET em_realcode)
     add_test(NAME realcode_market COMMAND em_realcode_market_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
     # whole-program differential test: the original played (in the emulator, through its menu) 9 days from a savegame; the game must reach
     # the same 47 761 state bytes with identical Borland and game random draws (periods of 4, 3, 2 and 2 days: home and away league games, a DEB cup round)
-    foreach(period "1;2;4;2" "2;3;3;3" "3;4;2;4" "4;5;2;5" "5;6;3;6")
+    foreach(period "1;2;4;2" "2;3;3;3" "3;4;2;4" "4;5;2;5" "5;6;3;6" "6;7;4;10")
         list(GET period 0 from)
         list(GET period 1 to)
         list(GET period 2 days)

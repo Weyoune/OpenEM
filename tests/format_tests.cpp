@@ -4219,6 +4219,7 @@ static void checkpoint_format() {
     source.stadium_refusals[0][4]=1;source.stadium_refusals[3][10]=1;
     source.save_history.remember(0xFFFF1234u);source.save_history.remember(0xFFFF5678u);
     source.annual_distribution_cursors={16,5,11};
+    source.last_scorer_slot=17;
     const Bytes bytes = encode_game_checkpoint(source);
     const auto decoded = decode_game_checkpoint(bytes);
     CHECK(decoded.hok == source.hok && decoded.exe_fingerprint == source.exe_fingerprint);
@@ -4231,10 +4232,11 @@ static void checkpoint_format() {
     CHECK(decoded.stadium_refusals==source.stadium_refusals);
     CHECK(decoded.save_history==source.save_history);
     CHECK(decoded.annual_distribution_cursors==source.annual_distribution_cursors);
+    CHECK(decoded.last_scorer_slot==source.last_scorer_slot);
     CHECK(encode_game_checkpoint(decoded) == bytes);
     // A genuine version1 layout ends directly after its offers. It remains
     // readable and gets the explicitly historical2/3 default without RNG.
-    Bytes legacy(bytes.begin(),bytes.end()-260); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3
+    Bytes legacy(bytes.begin(),bytes.end()-261); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1
     const auto patch32=[&](size_t at,uint32_t value){for(int b=0;b<4;b++)legacy[at+size_t(b)]=uint8_t(value>>(8*b));};
     patch32(8,1);patch32(12,uint32_t(legacy.size()-20));
     uint32_t crc=0xFFFFFFFFu;
@@ -4245,25 +4247,31 @@ static void checkpoint_format() {
     CHECK(v1.borland_random==source.borland_random&&v1.game_random==source.game_random);
     CHECK(v1.stadium_refusals==(std::array<std::array<uint8_t,11>,4>{}));
     // Version2 includes row counters, but predates process-local stadium gates.
-    legacy.assign(bytes.begin(),bytes.end()-248);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-249);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v2=decode_game_checkpoint(legacy);
     CHECK(v2.line_counts==source.line_counts&&v2.stadium_refusals==v1.stadium_refusals);
     CHECK(v1.save_history==NativeSaveHistory{}&&v2.save_history==NativeSaveHistory{});
     // Version3 contains the construction gates, but has no identity history.
-    legacy.assign(bytes.begin(),bytes.end()-204);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-205);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v3=decode_game_checkpoint(legacy);
     CHECK(v3.line_counts==source.line_counts&&v3.stadium_refusals==source.stadium_refusals&&v3.save_history==NativeSaveHistory{});
     CHECK(v1.annual_distribution_cursors==(std::array<uint8_t,3>{})&&v2.annual_distribution_cursors==v1.annual_distribution_cursors&&v3.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version4 retains history but predates the three session cursors.
-    legacy.assign(bytes.begin(),bytes.end()-3);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-4);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v4=decode_game_checkpoint(legacy);
     CHECK(v4.save_history==source.save_history&&v4.annual_distribution_cursors==v1.annual_distribution_cursors);
+    // Version5 has the cursors but not the scorer slot of the last pick.
+    legacy.assign(bytes.begin(),bytes.end()-1);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
+    crc=0xFFFFFFFFu;
+    for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
+    patch32(16,~crc);const auto v5=decode_game_checkpoint(legacy);
+    CHECK(v5.annual_distribution_cursors==source.annual_distribution_cursors&&v5.last_scorer_slot==0);
     const auto rejects = [](const Bytes& bad) {
         try { (void)decode_game_checkpoint(bad); return false; } catch (const FormatError&) { return true; }
     };

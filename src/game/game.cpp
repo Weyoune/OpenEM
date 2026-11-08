@@ -101,7 +101,8 @@ void store_group_schedule(Bytes& state, const GroupTable& table, int kind, int g
 void store_cup_participants(HokFile& save, const std::vector<HokPairing>& draw, int round) {
     save.cup_draw = draw;
     save.cup_round = round;
-    std::fill(save.state.begin() + 0x8E51, save.state.begin() + 0x8E71, uint8_t(0xFF));
+    // the original writes the new pairs and one end marker; the rest of the 32 bytes keeps the previous round (REAL-CODE period 7)
+    if (draw.size() * 2 < 32) save.state.at(0x8E51 + draw.size() * 2) = 0xFF;
     for (size_t pair = 0; pair < draw.size(); pair++) {
         save.state.at(0x8E51 + pair * 2) = uint8_t(draw[pair].home);
         save.state.at(0x8E52 + pair * 2) = uint8_t(draw[pair].away);
@@ -271,6 +272,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         stadium_refusals_=checkpoint.stadium_refusals;
         save_history_=checkpoint.save_history;
         annual_distribution_cursors_=checkpoint.annual_distribution_cursors;
+        last_scorer_slot_=checkpoint.last_scorer_slot;
         for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
         human_rotation_ = checkpoint.club_rotation;
         national_rotation_ = checkpoint.national_rotation;
@@ -315,6 +317,7 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.stadium_refusals=stadium_refusals_;
     checkpoint.save_history=save_history_;
     checkpoint.annual_distribution_cursors=annual_distribution_cursors_;
+    checkpoint.last_scorer_slot=uint8_t(last_scorer_slot_);
     checkpoint.club_rotation = human_rotation_;
     checkpoint.national_rotation = national_rotation_;
     checkpoint.injured_roles = injured_role_;
@@ -451,9 +454,11 @@ void Game::play_league_day() {
     MatchStats stats;
     human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
     human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(0, false, goal, &team); };  // every chance picks scorer and assist
+    human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
     human_.on_minute = nullptr;
     human_.on_chance = nullptr;
+    human_.on_opponent_chance = nullptr;
     injuries_in_minutes_ = true;
     for (size_t d = 0; d < league_days.size(); d++) {
         const int l = day_league[d];
@@ -566,11 +571,13 @@ void Game::play_cup_day() {
     if (live) {
         human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
         human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
+        human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
     }
     const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_) : play_cup_round(save_.teams, draw, rng_, side);
     if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
     human_.on_minute = nullptr;
     human_.on_chance = nullptr;
+    human_.on_opponent_chance = nullptr;
     for (size_t match = 0; match < ties.size(); match++) {
         const Tie& t = ties[match];
         const size_t pair = active[match];
@@ -650,6 +657,11 @@ void Game::play_cup_day() {
                 save_.squad[slot].fitness = 90;
             }
             save_.state.at(0x784) = 0xFF;
+            // the head-to-head booking still runs for the human club's (decided) pair of the round, with the pair turned for
+            // the game that is not played and a 0:0 (REAL-CODE period 7)
+            for (size_t pair = 0; pair < cup_series_.size() && pair < cup_draw_.size(); pair++)
+                if (cup_draw_[pair].home == human_team_ || cup_draw_[pair].away == human_team_)
+                    record_head_to_head(cup_draw_[pair].home, cup_draw_[pair].away, 0, 0);
         }
         if (human_in)
             save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == human_team_ || p.away == human_team_) return p.home; return 0; }());
@@ -687,6 +699,10 @@ void Game::play_cup_day() {
             cup_game_ = 2;  // ovl05_5646 leaves the final results visible at index 2
             log_.push_back("DEB cup winner: " + save_.teams[size_t(cup_winner_)].name);
         } else {
+            // the original first puts each winner on the home byte of its pair (in place); the new draw then overwrites the
+            // front of the list, so the tail keeps these values (REAL-CODE period 7)
+            for (size_t pair = 0; pair < cup_series_.size() && pair < 16; pair++)
+                if (save_.state.at(0x8E51 + pair * 2) != uint8_t(winners[pair])) save_.state.at(0x8E51 + pair * 2) = uint8_t(winners[pair]);
             cup_draw_ = draw_cup_round(winners, brng_);
             cup_series_.clear();
             cup_round_++;
@@ -1847,6 +1863,27 @@ void Game::refresh_national_team() {
     }
 }
 
+// ovl14_2349 (ovr038:2349) for a goal of the human club's opponent: it books the goal for the first of the six managers
+// whose club is the scorer. Unused manager blocks carry club 0, so a goal of team record 0 lands in manager 1's empty
+// squad: without players no pick is drawn, the slot of the last scorer pick (byte_33277) gets the goal counters and the
+// player record of that slot (index 0 = record 0) its +0x1B league goals (REAL-CODE period 7).
+void Game::credit_opponent_goal(int competition, bool goal, const HokTeam& scorer) {
+    if (!goal || competition < 0 || competition > 2 || scorer.name != save_.teams[0].name || human_team_ == 0) return;
+    const size_t block = kSquad + 0x618;  // manager 1
+    for (int s = 0; s < kHokSquadSlots; s++)
+        if (save_.state.at(block + size_t(s) * kSquadRecord + 0x0F) != 0) return;  // a used block would draw a real pick
+    const size_t rec = block + size_t(last_scorer_slot_) * kSquadRecord;
+    if (competition == 0) {
+        uint8_t& g = save_.state.at(0x4FA5 + size_t(save_.state.at(rec + 0x0F)) * 0x21 + 0x1B);
+        if (g < 0xFF) g++;
+    }
+    const size_t at = rec + 0x22 + size_t(competition) * 2;
+    const int value = le16(save_.state, at);
+    if (value < 0xFF) { save_.state.at(at) = uint8_t(value + 1); save_.state.at(at + 1) = uint8_t((value + 1) >> 8); }
+    uint8_t& b = save_.state.at(rec + 3 + size_t(competition));
+    if (b < 0xFF) b++;
+}
+
 void Game::credit_human_goal(int competition, bool penalty, bool goal, const HokTeam* on_ice) {
     auto add_assists = [&](const HokPlayer& player, int count) {
         const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
@@ -1855,6 +1892,7 @@ void Game::credit_human_goal(int competition, bool penalty, bool goal, const Hok
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
     const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty, goal, on_ice);
+    if (credit.scorer >= 0) last_scorer_slot_ = credit.scorer;
     if (!goal || credit.scorer < 0) return;
     auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];
     if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
@@ -3009,6 +3047,8 @@ g_draw_scope = "match-injuries";
 g_draw_scope = "refusal-reset";
     stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
     if (finance_date.day == finance_month_days) clear_insurance_locks();
+    // the routines of the new month (ovr038:2EAB / 36E3 / 4645) copy the month counter DS:5A1C to DS:A8A0 (state 0xB965, REAL-CODE period 7)
+    if (finance_date.day == finance_month_days) save_.state.at(0xB965) = uint8_t(finance_date.month % 12);
     // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
     // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
 g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d md %d,%d,%d\n", day_, matchday_[0], matchday_[1], matchday_[2]);

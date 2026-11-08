@@ -41,6 +41,8 @@ struct GameCheckpoint {
     NativeSaveHistory save_history;
     // Version5: DS48FB..48FD weighted CPU-club distribution cursors.
     std::array<uint8_t,3> annual_distribution_cursors{};
+    // Version6: DS:3277 (byte_33277), slot of the last scorer pick (ovl14_2349).
+    uint8_t last_scorer_slot = 0;
 };
 
 bool is_game_checkpoint(const Bytes& data);

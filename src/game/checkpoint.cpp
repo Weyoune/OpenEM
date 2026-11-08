@@ -7,7 +7,7 @@
 namespace em {
 namespace {
 constexpr uint8_t kMagic[8] = {'O', 'P', 'E', 'N', 'E', 'M', 0x1A, 0};
-constexpr uint32_t kVersion = 5;
+constexpr uint32_t kVersion = 6;
 constexpr size_t kHeader = 20, kMaxSize = 1024 * 1024;
 
 uint32_t crc32(const Bytes& bytes, size_t first) {
@@ -122,6 +122,7 @@ GameCheckpoint decode_game_checkpoint(const Bytes& data) {
     if(version>=5)for(auto& cursor:c.annual_distribution_cursors){
         cursor=read.byte();if(cursor>=17)throw FormatError("OpenEM checkpoint: invalid annual distribution cursor");
     }
+    if(version>=6){c.last_scorer_slot=read.byte();if(c.last_scorer_slot>=30)throw FormatError("OpenEM checkpoint: invalid scorer slot");}
     read.end();
     return c;
 }
@@ -152,6 +153,7 @@ Bytes encode_game_checkpoint(const GameCheckpoint& c) {
     bytes.push_back(c.save_history.count);
     for(auto identity:c.save_history.identities)put32(bytes,identity);
     for(auto cursor:c.annual_distribution_cursors)bytes.push_back(cursor);
+    bytes.push_back(c.last_scorer_slot);
     const uint32_t size = uint32_t(bytes.size() - kHeader), crc = crc32(bytes, kHeader);
     for (int b = 0; b < 4; b++) {
         bytes[12 + size_t(b)] = uint8_t(size >> (8 * b));
