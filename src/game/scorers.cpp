@@ -104,6 +104,8 @@ void credit_goalkeepers(std::vector<HokPlayer>& players, Bytes& state, int team,
 
 void credit_club_scorers(std::vector<HokPlayer>& players, Bytes& state, int team, int goals, int goals_against,
                          bool league, BorlandRandom& rng) {
+    if (std::getenv("EM_DEBUG_SCORERS"))
+        std::fprintf(stderr, "scorers B%zu team %d goals %d against %d\n", g_borland_log ? g_borland_log->size() : size_t(0), team, goals, goals_against);
     if (league) credit_goalkeepers(players, state, team, goals_against, rng);
     if (goals <= 0) return;
     std::vector<HokPlayer*> shooters;

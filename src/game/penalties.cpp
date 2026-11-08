@@ -101,6 +101,7 @@ void PenaltyBox::release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* 
     Entry& e = entries_[entry];
     if (!e.minutes) return;
     if (squad && e.player >= 0) squad->at(size_t(e.player)).role = e.role;
+    if (squad && e.player < 0 && !finishing_) phantom_ = true;  // slot -1: the original writes through DS:5D8F
     e = Entry{};
     team.skaters++;
 }
@@ -131,6 +132,7 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
     // asymmetric association instead of silently substituting hockey rules.
     if (squad && entries_[0].player >= 0)
         squad->at(size_t(entries_[0].player)).role = entries_[0].role;
+    else if (squad && entries_[0].player < 0) phantom_ = true;
     entries_[0].player = entries_[1].player;
     entries_[0].role = entries_[1].role;
     entries_[1] = Entry{};
@@ -138,7 +140,9 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
 }
 
 void PenaltyBox::finish(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
+    finishing_ = true;
     for (int i = 0; i < 2; i++) release(i, team, squad);
+    finishing_ = false;
 }
 
 }  // namespace em

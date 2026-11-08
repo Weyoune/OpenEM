@@ -2,6 +2,7 @@
 #include "game/season.hpp"
 #include "game/scorers.hpp"
 #include <cstdlib>
+#include <map>
 #include <cstdio>
 
 #include <algorithm>
@@ -34,9 +35,10 @@ League league_from_save(const HokFile& save, int league) {
     return l;
 }
 
-void book_result(League& league, int home, int away, MatchResult r) {
-    HokTableRow& h = league.rows[size_t(home)];
-    HokTableRow& a = league.rows[size_t(away)];
+void book_result_rows(HokTableRow* hp, HokTableRow* ap, MatchResult r) {
+    HokTableRow dummy_h, dummy_a;
+    HokTableRow& h = hp ? *hp : dummy_h;
+    HokTableRow& a = ap ? *ap : dummy_a;
     h.goals_for[0] = uint8_t(h.goals_for[0] + r.home);
     h.goals_against[0] = uint8_t(h.goals_against[0] + r.away);
     h.games[0]++;
@@ -57,6 +59,10 @@ void book_result(League& league, int home, int away, MatchResult r) {
         push_form(h, 'u');
         push_form(a, 'U');
     }
+}
+
+void book_result(League& league, int home, int away, MatchResult r) {
+    book_result_rows(&league.rows[size_t(home)], &league.rows[size_t(away)], r);
 }
 
 int fever_curve_position(const HokTableRow& row, int matchday) {
@@ -110,7 +116,8 @@ std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam
 std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, std::vector<HokTeam>& teams,
                                                      const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human,
                                                      int human_team, MatchStats* human_stats, BorlandRandom* brng,
-                                                     const MatchMinuteObserver* observer) {
+                                                     const MatchMinuteObserver* observer,
+                                                     std::vector<std::vector<std::pair<int, int>>>* played) {
     // ovl06_2522 plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
     struct Entry {
         size_t day, pair;
@@ -144,10 +151,55 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         for (auto& e : entries) live.push_back({e->home, e->away, e->run.get()});
         (*observer)(0, live);
     }
+    // The pair-table error of the original (DEVIATIONS.md): when a penalty of the human club without a bound player ends,
+    // ovr030:0151 writes through the slot -1 record DS:5D8F into the Oberliga row of the pair table (DS:5D7B + 24): the
+    // away team of pair 2 loses bit 0, the home team of pair 3 and the away team of pair 4 become team 0. From then on these
+    // pairs play with the records of the new teams, which they share with the matches those teams play themselves.
+    struct SharedTeam { HokTeam team; PenaltyBox box; };
+    std::map<int, SharedTeam> shared;  // team id -> current record (and running penalties) of a team that plays in more than one slot
+    auto side_state = [](Entry& e, int side) -> HokTeam& { return side == 0 ? e.run->home_mut() : e.run->away_mut(); };
+    auto side_box = [](Entry& e, int side) -> PenaltyBox& { return side == 0 ? e.run->home_box() : e.run->away_box(); };
+    auto corrupt_pairs = [&](const Entry* trigger) {
+        for (auto& f : entries) {
+            if (days[f->day].league->first_team != 24 || f->pair < 2 || f->pair > 4) continue;
+            const int side = f->pair == 3 ? 0 : 1;
+            int& id = side == 0 ? f->home : f->away;
+            const int next = f->pair == 2 ? (id & ~1) : 0;
+            if (next == id) continue;
+            SharedTeam copy;
+            bool found = false;
+            if (auto it = shared.find(next); it != shared.end()) { copy = it->second; found = true; }
+            else
+                for (auto& g : entries) {
+                    if (g->home == next) { copy = {g->run->home_mut(), g->run->home_box()}; found = true; break; }
+                    if (g->away == next) { copy = {g->run->away_mut(), g->run->away_box()}; found = true; break; }
+                }
+            if (!found) continue;
+            shared[next] = copy;
+            side_state(*f, side) = copy.team;
+            side_box(*f, side) = copy.box;
+            id = next;
+            if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d\n", f->pair, side, next);
+        }
+        (void)trigger;
+    };
+    auto pull_shared = [&](Entry& e) {
+        for (int side = 0; side < 2; side++)
+            if (auto it = shared.find(side == 0 ? e.home : e.away); it != shared.end()) { side_state(e, side) = it->second.team; side_box(e, side) = it->second.box; }
+    };
+    auto push_shared = [&](Entry& e) {
+        for (int side = 0; side < 2; side++)
+            if (auto it = shared.find(side == 0 ? e.home : e.away); it != shared.end()) it->second = {side_state(e, side), side_box(e, side)};
+    };
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
-        for (auto& e : entries) more = e->run->step() || more;
+        for (auto& e : entries) {
+            pull_shared(*e);
+            more = e->run->step() || more;
+            push_shared(*e);
+            if (e->run->take_phantom_release()) corrupt_pairs(e.get());
+        }
         if (observer) (*observer)(minute_number + 1, live);
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
@@ -158,14 +210,21 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
     }
     std::vector<std::vector<MatchResult>> results(days.size());
     for (auto& e : entries) {
-        League& league = *days[e->day].league;
-        const Pairing& p = pairings[e->day][e->pair];
         const MatchResult r = e->run->finish();
+        // book every side into the league of the team that actually played (the pair-table error can put a team of another
+        // league into an Oberliga pair, DEVIATIONS.md)
+        auto row_of = [&](int team) -> HokTableRow* {
+            for (const LeagueDay& ld : days)
+                if (team >= ld.league->first_team && team < ld.league->first_team + kHokLeagueSize) return &ld.league->rows[size_t(team - ld.league->first_team)];
+            return nullptr;
+        };
+        if (played) { if (played->size() < days.size()) played->resize(days.size()); (*played)[e->day].push_back({e->home, e->away}); }
         {  // the original plays on the real team records: the match state stays there (the human club is booked by the game)
             for (int side = 0; side < 2; side++) {
                 if ((side == 0 ? e->home : e->away) == human_team) continue;
                 HokTeam& t = teams[size_t(side == 0 ? e->home : e->away)];
-                const HokTeam& m = side == 0 ? e->run->home_state() : e->run->away_state();
+                const int tid = side == 0 ? e->home : e->away;
+                const HokTeam& m = shared.count(tid) ? shared.at(tid).team : (side == 0 ? e->run->home_state() : e->run->away_state());
                 t.effort_current = m.effort_current;
                 t.flags = m.flags;
                 t.effort_base = m.effort_base;
@@ -175,7 +234,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
             }
         }
-        book_result(league, p.home, p.away, r);
+        book_result_rows(row_of(e->home), row_of(e->away), r);
         if (false && brng) {  // moved to Game::play_league_day (per league, before the scorers)  // ovl13 table booking (sub_5C067, twice): the morale byte +0x17 follows the goal difference, clamped to 47..53
             const int diff = r.home - r.away;
             auto morale = [&](int team, int d) {
@@ -185,8 +244,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             morale(e->home, diff);
             morale(e->away, -diff);
         }
-        league.rows[size_t(p.home)].penalty_minutes = uint16_t(league.rows[size_t(p.home)].penalty_minutes + e->stats->penalty_minutes[0] - e->before[0]);
-        league.rows[size_t(p.away)].penalty_minutes = uint16_t(league.rows[size_t(p.away)].penalty_minutes + e->stats->penalty_minutes[1] - e->before[1]);
+        if (HokTableRow* rh = row_of(e->home)) rh->penalty_minutes = uint16_t(rh->penalty_minutes + e->stats->penalty_minutes[0] - e->before[0]);
+        if (HokTableRow* ra = row_of(e->away)) ra->penalty_minutes = uint16_t(ra->penalty_minutes + e->stats->penalty_minutes[1] - e->before[1]);
         results[e->day].push_back(r);
     }
     for (size_t d = 0; d < days.size(); d++) {

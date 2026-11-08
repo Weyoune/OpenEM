@@ -225,6 +225,11 @@ public:
     MatchRun& operator=(const MatchRun&) = delete;
     bool step();           // plays the next minute; false when no minute is left
     MatchResult finish();  // plays the remaining minutes and returns the result
+    HokTeam& home_mut();  // the working copies for the pair-table error of the original (shared team records, play_matchdays)
+    HokTeam& away_mut();
+    PenaltyBox& home_box();  // the running penalties travel with the team record in the original (+0x32/+0x33)
+    PenaltyBox& away_box();
+    bool take_phantom_release();  // a manager penalty without bound player ended in the last minute (DEVIATIONS.md)
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)

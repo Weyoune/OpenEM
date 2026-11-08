@@ -466,8 +466,9 @@ void Game::play_league_day() {
     human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
     human_.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working); };  // every chance picks scorer and assist
     human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
+    std::vector<std::vector<std::pair<int, int>>> played;
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_,
-                                           match_observer_ ? &match_observer_ : nullptr);
+                                           match_observer_ ? &match_observer_ : nullptr, &played);
     human_.on_minute = nullptr;
     human_.on_chance = nullptr;
     human_.on_opponent_chance = nullptr;
@@ -478,11 +479,20 @@ void Game::play_league_day() {
         League& lg = *league_days[d].league;
         const auto pairs = round_robin_pairings(schedule_.teams12, md - 1);
         const auto& results = day_results[d];
+        // the teams as actually played (pair-table error of the original, DEVIATIONS.md); the pair table keeps them (DS:5D7B)
+        auto team_of = [&](size_t k, int side, int fallback) {
+            return d < played.size() && k < played[d].size() ? (side == 0 ? played[d][k].first : played[d][k].second) : fallback;
+        };
+        for (size_t k = 0; k < pairs.size(); k++) {
+            save_.state.at(0x8dfd + size_t(l) * 12 + k * 2) = uint8_t(team_of(k, 0, lg.first_team + pairs[k].home));
+            save_.state.at(0x8dfd + size_t(l) * 12 + k * 2 + 1) = uint8_t(team_of(k, 1, lg.first_team + pairs[k].away));
+            save_.pairings[size_t(l)][k] = {team_of(k, 0, lg.first_team + pairs[k].home), team_of(k, 1, lg.first_team + pairs[k].away)};
+        }
         matchday_[size_t(l)]++;
         // ovl13 table booking (sub_5C067, twice per game): the morale byte +0x17 follows the goal difference, clamped to 47..53;
         // the original books all games of a league before the scorers of that league
         for (size_t k = 0; k < pairs.size(); k++) {
-            const int hi = lg.first_team + pairs[k].home, ai = lg.first_team + pairs[k].away;
+            const int hi = team_of(k, 0, lg.first_team + pairs[k].home), ai = team_of(k, 1, lg.first_team + pairs[k].away);
             const int diff = results[k].home - results[k].away;
             auto morale = [&](int team, int dd) {
                 const int step = int(brng_.range(0, 2 * std::abs(dd)));
@@ -492,7 +502,7 @@ void Game::play_league_day() {
             morale(ai, -diff);
         }
         for (size_t k = 0; k < pairs.size(); k++) {
-            const int hi = lg.first_team + pairs[k].home, ai = lg.first_team + pairs[k].away;
+            const int hi = team_of(k, 0, lg.first_team + pairs[k].home), ai = team_of(k, 1, lg.first_team + pairs[k].away);
             const size_t result_offset = kLeagueResults + size_t(l) * 0x210 + size_t(md - 1) * 12 + k * 2;
             save_.state.at(result_offset) = uint8_t(results[k].home);
             save_.state.at(result_offset + 1) = uint8_t(results[k].away);

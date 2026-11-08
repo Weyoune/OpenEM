@@ -919,6 +919,15 @@ MatchProgress MatchRun::progress() const {
 }
 void MatchRun::overtime_break() { if (p_->hp || p_->ap) return; prepare_match_energy(p_->h, nullptr, true); prepare_match_energy(p_->a, nullptr, true); }
 MatchResult MatchRun::finish() { return p_->finish(); }
+HokTeam& MatchRun::home_mut() { return p_->h; }
+HokTeam& MatchRun::away_mut() { return p_->a; }
+PenaltyBox& MatchRun::home_box() { return p_->hbox; }
+PenaltyBox& MatchRun::away_box() { return p_->abox; }
+bool MatchRun::take_phantom_release() {
+    const bool h = p_->hp && p_->hbox.take_phantom_release();
+    const bool a = p_->ap && p_->abox.take_phantom_release();
+    return h || a;
+}
 const HokTeam& MatchRun::home_state() const { return p_->h; }
 const HokTeam& MatchRun::away_state() const { return p_->a; }
 

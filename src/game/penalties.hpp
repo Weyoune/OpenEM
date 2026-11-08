@@ -41,11 +41,15 @@ public:
     int started() const { return started_; }
     int code() const;  // team record byte +0x33 for the running penalties
     int minutes_assessed() const { return assessed_; }
+    // A manager penalty without a bound player ended during the game (ovr030:0151 then writes through the slot -1 record
+    // DS:5D8F into the pair table, DEVIATIONS.md); reading clears the mark.
+    bool take_phantom_release() { const bool p = phantom_; phantom_ = false; return p; }
 
 private:
     struct Entry { int minutes = 0; bool major = false; int player = -1, role = 0; };
     Entry entries_[2];
     int started_ = 0, assessed_ = 0;
+    bool phantom_ = false, finishing_ = false;
     void release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* squad);
     void compact();
 };
