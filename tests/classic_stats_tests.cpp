@@ -39,9 +39,17 @@ int main(int argc, char** argv) {
             check(classic_stats_players_button(60, 186) == 0 && classic_stats_players_button(220, 200) == 4, "player statistics buttons");
         }
 
-        struct Scene { const char* name; int mouse_x, mouse_y; const char* save; };
-        constexpr std::array<Scene, 2> scenes{{
+        // A scene may exclude a documented rectangle of background residue (left, top, right, bottom).
+        struct Mask { int left = 0, top = 0, right = -1, bottom = -1; };
+        struct Scene { const char* name; int mouse_x, mouse_y; const char* save; std::array<Mask, 2> masks{}; };
+        constexpr std::array<Scene, 5> scenes{{
+            // Frueher: the capture shows 8 background pixels between the two frames that differ from KB22
+            // (centre line x=160 ends at y=148, 168..170/149). They also differ in the capture of the main
+            // menu before the click; not reproduced in a DOSBox capture (residue or emulator latch copy).
+            {"stats-history", 80, 219, "MONAT1", {{{160, 149, 160, 153}, {168, 149, 170, 149}}}},
+            {"stats-history", 80, 219, "MORNPOST", {{{160, 149, 160, 153}, {168, 149, 170, 149}}}},
             {"stats-players", 187, 219, "MONAT1"},
+            {"stats-players", 187, 219, "MORNPOST"},
             {"euro-fixtures1", 216, 236, "MONAT1"},
         }};
         for (const auto& scene : scenes) {
@@ -59,6 +67,10 @@ int main(int argc, char** argv) {
             for (size_t pixel = 0; pixel < actual.size(); ++pixel) {
                 rgb[pixel * 3] = uint8_t(actual[pixel] >> 16); rgb[pixel * 3 + 1] = uint8_t(actual[pixel] >> 8); rgb[pixel * 3 + 2] = uint8_t(actual[pixel]);
                 const uint32_t want = uint32_t(expected[pixel * 3]) << 16 | uint32_t(expected[pixel * 3 + 1]) << 8 | expected[pixel * 3 + 2];
+                const int px = int(pixel % 320), py = int(pixel / 320);
+                bool masked = false;
+                for (const auto& m : scene.masks) masked = masked || (px >= m.left && px <= m.right && py >= m.top && py <= m.bottom);
+                if (masked) continue;
                 if ((actual[pixel] & 0xffffff) != want) { if (!differences) first = pixel; ++differences; }
             }
             if (dump) {

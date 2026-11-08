@@ -146,7 +146,7 @@ private:
     int euro_page_=3;
     int euro_table_page_=3,euro_fixture_page_=3; // DS:5123 / DS:5126
     bool euro_from_fixtures_=false;
-    int stats_page_=0,stats_mode_=2; // 1 Frueher .. 5 WM; Spieler mode
+    int stats_page_=0,stats_mode_=2,stats_scroll_=0; // 1 Frueher .. 5 WM; Spieler mode; Frueher scroll
     bool stats_managers_=false;
     int wm_table_page_=11,wm_fixture_page_=8,wm_previous_fixtures_=8,wm_page_=11,wm_round_=-1;
     int fixture_league_=0,fixture_round_=1,fixture_width_=1,fixture_next_width_=1;

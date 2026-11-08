@@ -23,6 +23,10 @@ struct ClassicStatsPlayersView {
     bool managers_only = false;
     std::vector<ClassicStatsPlayerRow> skaters, keepers;  // at most 12 / 3
     std::string native_title, native_keeper_title;
+    // 4080:0B9C draws "NOCH KEINE EINTR[GE..." only while the reused local row
+    // variable is still 0x36: the last eligible candidate was a skater and no
+    // skater row was shown. It starts with the last human squad's player count.
+    bool empty_notice = false;
 };
 
 // Read-only: the native display first copies the human squads' league goals

@@ -47,9 +47,11 @@ ClassicStatsPlayersView classic_stats_players_view(const HokFile& h, int mode, b
     if (s.size() < kSquads + 6 * 0x618) throw FormatError("classic player statistics: truncated state");
     const int humans = s.at(0x0DC6), manager = s.at(0x0788);
     if (humans > 4 || manager >= 6) throw FormatError("classic player statistics: invalid managers");
+    int last_row = 0;  // 4080:0050 local_6
     for (int m = 0; m < humans; ++m) {
         int count = 0;
         for (int slot = 0; slot < 30; ++slot) count += s.at(kSquads + size_t(m) * 0x618 + size_t(slot) * 0x34 + 0x0F) != 0;
+        last_row = count;
         for (int slot = 0; slot < count; ++slot) {
             const size_t squad = kSquads + size_t(m) * 0x618 + size_t(slot) * 0x34;
             const int id = s.at(squad + 0x0F);
@@ -84,6 +86,7 @@ ClassicStatsPlayersView classic_stats_players_view(const HokFile& h, int mode, b
         const bool keeper = s.at(r + 0x18) == 0;
         if (keeper ? second < 0x18F : goals + second < 2) continue;
         const size_t kind = keeper ? 1 : 0;
+        last_row = baseline[kind];
         bool managed = false;
         for (int m = 0; m < humans; ++m)
             if (s.at(kManagers + size_t(m) * 0x1AF + 0x14) == team && managers_only) managed = true;
@@ -108,6 +111,7 @@ ClassicStatsPlayersView classic_stats_players_view(const HokFile& h, int mode, b
         rows.push_back(row);
         baseline[kind] += 7;
     }
+    view.empty_notice = last_row == 0x36;
     return view;
 }
 
@@ -130,7 +134,7 @@ void draw_classic_stats_players(ClassicCanvas& c, const HokFile& h, int mode, bo
             c.text_native(mini, 200, row.baseline, row.native_score, row.color);
             c.text_native(mini, keeper ? 0xFC - 15 : 0xFC, row.baseline, row.native_rate, row.color);
         }
-    if (view.skaters.empty()) c.text_native(mini, 0x23, 0x3C, "NOCH KEINE EINTR[GE VORHANDEN...", 7, 1, 0x11D);
+    if (view.empty_notice) c.text_native(mini, 0x23, 0x3C, "NOCH KEINE EINTR[GE VORHANDEN...", 7, 1, 0x11D);
     auto button = [&](int x, int y, std::string_view text) {
         const std::array<uint8_t, 4> corners{c.pixels().at(x, y), c.pixels().at(x + 56, y),
                                              c.pixels().at(x, y + 11), c.pixels().at(x + 56, y + 11)};
