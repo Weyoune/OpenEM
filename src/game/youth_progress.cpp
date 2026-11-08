@@ -24,7 +24,7 @@ void youth_fixture_day(Bytes& state,const FinanceTables& finance,int first_match
         throw FormatError("youth progress: invalid matchday or currency");
     for(size_t i=0;i<3;++i)if(!state[at+i]||state[at+6+i]>=3)
         throw FormatError("youth progress: invalid native quality or league");
-    const auto draw=[&](int lo,int hi){if(hi<lo)std::swap(lo,hi);return random(lo,hi);};
+    const auto draw=[&](int lo,int hi){return random(lo,hi);};  // rand(1,0) stays as it is (sub_1A237 swaps itself)
     std::array<uint8_t,45> tempo{};int counter=4;
     for(size_t j=0;j<44;++j){tempo[j]=uint8_t(counter);if(counter&&draw(0,8)==0)--counter;}
     // Native tempo[44] aliases the adjacent surviving counter byte.

@@ -591,6 +591,10 @@ void Game::play_cup_day() {
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
         if (human_team_ >= 0 && human_team_ < kHokTeams)
             save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(human_team_)], human_));
+        if (!std::getenv("EM_OLD_CUP_MSG")) {  // the cup display passes the menu routine: messages sorted and counted (REAL-CODE period 20)
+            native_sort_messages(save_.state);
+            native_message_step(save_.state);
+        }
         g_draw_scope = "randomize";
         const int spin = brng_.range(100, 300);
         for (int i = 0; i < spin; i++) rng_.range(0, 1);
@@ -807,7 +811,7 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
         uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
         if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
             r[0x09] &= 0x1F;
-            pl[0x1E] = 0;
+            native_delete_message(save_.state, pl[0x1E]);  // ovr036:0180: the entry goes with the handle (REAL-CODE period 18)
         }
     }
     // heal_squad(weekly) runs after the loop below
@@ -844,12 +848,12 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
         if (r[0x0D] != 0) r[0x0A] = 0;  // an injured player loses his role
         if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
             r[0x09] &= 0x1F;
-            pl[0x1E] = 0;
+            native_delete_message(save_.state, pl[0x1E]);
         }
         if (r[0x18] > 99 && !(r[0x18] & 0x80)) {
             if (brng_.range(0, 5) == 0 && pl[0x1E] != 0) {
                 r[0x18] = uint8_t(brng_.range(9, 17));
-                pl[0x1E] = 0;
+                native_delete_message(save_.state, pl[0x1E]);
             }
         } else if (r[0x18] != 0 && !(r[0x18] & 0x80)) {
             r[0x18]--;
@@ -3121,6 +3125,7 @@ Bytes Game::native_save_bytes() {
 }
 
 void Game::advance_day() {
+    if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     if (message_step_pending_) {  // ovr038:3019 / 3067 when the play step starts from the menu
         native_sort_messages(save_.state);
         native_message_step(save_.state);

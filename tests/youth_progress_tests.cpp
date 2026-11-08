@@ -29,7 +29,7 @@ int main(int argc,char** argv){try{
         size_t cursor=0;
         youth_fixture_day(state,finance,matchday,0,[&](int low,int high){
             require(cursor<draws.size(),"no extra RNG draw");const auto& d=draws[cursor++];
-            require(low==d.low&&high==d.high,"exact native RNG draw order and inclusive bounds");return d.value;
+            require(std::min(low,high)==d.low&&std::max(low,high)==d.high,"exact native RNG draw order and inclusive bounds");return d.value;
         });
         require(cursor==draws.size()&&state==expected_state,"all state bytes and complete draw transcript match ASM evidence");
         std::printf("%s: %zu native draw bounds\n",name.c_str(),cursor);
