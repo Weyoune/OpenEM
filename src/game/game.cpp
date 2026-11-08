@@ -453,7 +453,7 @@ void Game::play_league_day() {
     g_draw_scope = "league-day";
     MatchStats stats;
     human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
-    human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(0, false, goal, &team); };  // every chance picks scorer and assist
+    human_.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working); };  // every chance picks scorer and assist
     human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
     const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, &human_, human_team_, &stats, &brng_);
     human_.on_minute = nullptr;
@@ -570,7 +570,7 @@ void Game::play_cup_day() {
     }
     if (live) {
         human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
-        human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
+        human_.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working); };
         human_.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
     }
     const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_) : play_cup_round(save_.teams, draw, rng_, side);
@@ -1884,14 +1884,28 @@ void Game::credit_opponent_goal(int competition, bool goal, const HokTeam& score
     if (b < 0xFF) b++;
 }
 
-void Game::credit_human_goal(int competition, bool penalty, bool goal, const HokTeam* on_ice) {
+void Game::credit_human_goal(int competition, bool penalty, bool goal, const HokTeam* on_ice,
+                             const std::vector<HokSquadPlayer>* working) {
     auto add_assists = [&](const HokPlayer& player, int count) {
         const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
         const int value = le16(save_.state, at) + count;
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
-    const GoalCredit credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty, goal, on_ice);
+    GoalCredit credit;
+    if (working && working->size() == save_.squad.size()) {
+        // the pick sees the squad of the running match: a player in the penalty box has no role there (REAL-CODE period 8)
+        std::vector<HokSquadPlayer> view = save_.squad;
+        for (size_t i = 0; i < view.size(); i++) view[i].role = (*working)[i].role;
+        credit = credit_goal(view, save_.players, brng_, competition, penalty, goal, on_ice);
+        for (size_t i = 0; i < view.size(); i++) {  // the goal counters go to the stored squad
+            save_.squad[i].league_goals = view[i].league_goals; save_.squad[i].league_goals_byte = view[i].league_goals_byte;
+            save_.squad[i].cup_goals = view[i].cup_goals; save_.squad[i].cup_goals_byte = view[i].cup_goals_byte;
+            save_.squad[i].other_goals = view[i].other_goals; save_.squad[i].other_goals_byte = view[i].other_goals_byte;
+        }
+    } else {
+        credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty, goal, on_ice);
+    }
     if (credit.scorer >= 0) last_scorer_slot_ = credit.scorer;
     if (!goal || credit.scorer < 0) return;
     auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];

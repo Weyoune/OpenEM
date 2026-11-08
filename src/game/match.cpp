@@ -790,7 +790,7 @@ struct MatchRun::Impl {
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
-        if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h);  // 23c4 books every chance of a match with a manager
+        if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
         if ((events & 1) && ap && ap->on_opponent_chance) ap->on_opponent_chance(home_goal, h);
         if (home_goal) {
             score.home++;
@@ -802,7 +802,7 @@ struct MatchRun::Impl {
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
-        if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a);
+        if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a, asq);
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
         if (away_goal) {
             score.away++;

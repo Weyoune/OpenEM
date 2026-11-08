@@ -315,7 +315,7 @@ private:
     bool book_forfeit(const MatchStats& stats, int manager = 0);
     void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0,
                          bool credit_goals = true);
-    void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr);
+    void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr, const std::vector<HokSquadPlayer>* working = nullptr);
     void credit_opponent_goal(int competition, bool goal, const HokTeam& scorer);
     int last_scorer_slot_ = 0;  // DS:3277 (byte_33277): slot of the last scorer pick, reused when a club without a squad scores
     void reset_wm();

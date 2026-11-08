@@ -35,7 +35,7 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
         const int position_value = players[size_t(p.player)].position;
         if (position_value == 0) continue;
         if (std::getenv("EM_DEBUG_PICK"))
-            std::fprintf(stderr, "pick kind %d slot %d role %d line %02x lines on ice %d/%d\n", kind, slot, p.role, p.line,
+            std::fprintf(stderr, "pick B%zu kind %d slot %d role %d line %02x lines on ice %d/%d\n", g_borland_log ? g_borland_log->size() : size_t(0), kind, slot, p.role, p.line,
                          on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
         int weight = (kind == 0 && !goal) ? rng.range(120, 170)
                                           : p.skill_b * 3 / (5 - 3 * kind) + p.skill_a / 5 + p.form / 5;
