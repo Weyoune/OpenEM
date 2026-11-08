@@ -21,7 +21,6 @@ void ClassicApplication::open_statistics(int item){
 }
 
 void ClassicApplication::draw_statistics(){
-    if(stats_page_==99)return;
     if(stats_page_==1)draw_classic_stats_history(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==2)draw_classic_stats_club(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==3)draw_classic_stats_players(canvas_,snapshot(),stats_mode_,stats_managers_);
@@ -64,7 +63,6 @@ bool ClassicApplication::render_statistics(std::string_view name){
         else if(name=="stats-players-managers")stats_managers_=true;
         return true;
     }
-    if(name=="debug-kb20"||name=="debug-kb22"){stats_page_=99;screen_=ClassicScreen::Statistics;canvas_.background();if(name=="debug-kb20")canvas_.blit(20,0,0);return true;}
     if(name=="euro-fixtures1"){euro_from_fixtures_=true;open_euro(euro_fixture_page_);return true;}
     return false;
 }
