@@ -14,6 +14,7 @@ namespace em::ui {
 enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
 
 struct ClassicMiscState;  // classic_misc_input.cpp
+struct ClassicCareerState;  // classic_career.cpp
 class ClassicApplication {
 public:
     ClassicApplication(std::filesystem::path data, std::filesystem::path saves, const std::filesystem::path& initial);
@@ -97,6 +98,18 @@ private:
     void key_misc(int key);
     void text_misc(std::string_view text);
     std::shared_ptr<ClassicMiscState> misc_; // incomplete here; shared_ptr keeps the deleter
+    void open_start_menu();                   // new game (classic_misc_input.cpp)
+    void click_start_menu(int x,int y,bool right);
+    // Message field and career pages (classic_career.cpp)
+    bool main_menu_idle() const;
+    void check_new_messages();
+    void open_messages();
+    void show_immediate_messages();
+    bool career_click(int x,int y,bool right);
+    void career_release();
+    bool career_key(int key);
+    void draw_career();
+    std::shared_ptr<ClassicCareerState> career_;
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);

@@ -212,9 +212,12 @@ public:
     long talent_search_price() const;
     int talent_search_days() const;
     TalentResult start_talent_search();
+    void clear_message_flag(int manager);  // DS:5A50 + manager, src/game/messages.cpp
     // Messages for the manager from the last day step (talent scout), oldest first. They are not part
     // of a checkpoint: the UI reads them right after advancing.
     const std::vector<std::string>& manager_news() const { return manager_news_; }
+    // Messages the original shows at once and deletes again (season review ovr026:09EB), native text, oldest first.
+    const std::vector<std::string>& immediate_messages() const { return immediate_messages_; }
     // Third contract-dialog row: half a freshly computed salary per month.
     // New cover is locked through the next month-end; injured players cannot
     // change cover. Returns true if the requested state is already set or applied.
@@ -307,6 +310,7 @@ private:
     void book_special_teams(const MatchStats& stats, int side, int manager = 0);
     void play_cup_day();
     bool human_in_next_cup() const;
+    bool human_in_next_euro() const;
     void play_euro_day();
     void play_playoff_day();
     void store_playoff_state(int stage, int completed_days);
@@ -375,6 +379,7 @@ private:
     bool interactive_played_ = false;
     std::vector<ManagerOffer> manager_offers_;
     std::vector<std::string> manager_news_;
+    std::vector<std::string> immediate_messages_;
     ContractDecider contract_decider_;
     MatchMinuteObserver match_observer_;
     long match_attendance_ = 0;

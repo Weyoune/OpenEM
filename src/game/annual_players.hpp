@@ -8,6 +8,7 @@ struct AnnualPlayerReview {
     AnnualPlayerStatus status=AnnualPlayerStatus::Missing;
     int slot=-1;
     int32_t insurance_payment=0;
+    int notice_back=0;  // the immediate message's date draw rand(0,3): days dated back
 };
 // 4184:07D9..0AB6, a fresh lookup in the second review pass. Age/years and
 // global statistics have already been processed. Only found own rows mutate.

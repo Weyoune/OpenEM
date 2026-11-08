@@ -78,6 +78,27 @@ void Session::load(const std::filesystem::path& file, uint32_t seed) {
     add_news("Spielstand geöffnet: " + path_text(file.filename()));
 }
 
+bool Session::can_start_new_game() const { return database_ && find_new_game_base(data_directory_).has_value(); }
+
+void Session::start_new_game(const NewGameSetup& setup, uint32_t seed) {
+    const auto base = find_new_game_base(data_directory_);
+    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
+    const Bytes bytes = encode_hok(em::start_new_game(decode_hok(read_file(*base)), *database_, setup));
+    // A new game is a new program run of the original: no earlier save identities, no previous game.
+    save_history_ = NativeSaveHistory{};
+    auto next = std::make_unique<Game>(exe_, bytes, seed, nullptr);
+    next->set_native_save_history(save_history_);
+    next->set_database(*database_);
+    game_ = std::move(next);
+    loaded_path_.clear();
+    dirty_ = true;
+    revision_++;
+    contract_answers_.clear();
+    contract_question_.reset();
+    news_.clear();
+    add_news("Neues Spiel gestartet.");
+}
+
 void Session::save(const std::filesystem::path& file) {
     if (contract_question_) throw FormatError("Zuerst die Vertragsentscheidung abschließen oder abbrechen.");
     const auto ext = extension(file);

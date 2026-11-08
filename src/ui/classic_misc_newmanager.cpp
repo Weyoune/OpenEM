@@ -53,6 +53,13 @@ void ClassicNewManager::open(const HokFile& h) {
     highscore_ = (s.at(kFileNumber) | s.at(kFileNumber + 1)) != 0;
 }
 
+void ClassicNewManager::open_start(const HokFile& base) {
+    *this = ClassicNewManager{};
+    for (size_t i = 0; i < options_.size(); i++) options_[i] = base.state.at(kOptions + i);
+    highscore_ = (base.state.at(kFileNumber) | base.state.at(kFileNumber + 1)) != 0;
+    start_mode_ = true;
+}
+
 void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my) const {
     c.background(150);
     for (int r = 0; r < 4; r++) {
@@ -181,6 +188,7 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
             if (!r.existing && ((r.face >= 0) != (r.team >= 0))) return Result::None;  // incomplete row
         for (const auto& r : rows_)
             if (!r.existing && r.face >= 0) return Result::LeaveWithManager;
+        if (start_mode_) return Result::None;  // ovr027:15AF: a new game needs a manager (var_57 != 0)
         return Result::Leave;
     }
     return Result::None;

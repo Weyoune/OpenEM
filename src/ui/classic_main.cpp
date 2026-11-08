@@ -30,17 +30,19 @@ int main(int argc,char**argv){
     try{
         char* base=SDL_GetBasePath();const fs::path root=project_root(base?path_from_text(base):fs::current_path());SDL_free(base);
         fs::path data=root/"work"/"EM",saves=root/"work"/"saves",save,render,input_log;
-        std::string render_screen="main";int cursor_x=-1,cursor_y=-1;
+        std::string render_screen="main";int cursor_x=-1,cursor_y=-1;bool new_game=false;
         for(int n=1;n<argc;n++){
             const std::string option=argv[n];
-            if(n+1>=argc)throw std::runtime_error("openem [--data folder] [--save file] [--render new.bmp] [--screen name]");
+            if(option=="--new-game"){new_game=true;continue;}
+            if(n+1>=argc)throw std::runtime_error("openem [--data folder] [--save file] [--new-game] [--render new.bmp] [--screen name]");
             const std::string value=argv[++n];
             if(option=="--data")data=path_from_text(value);else if(option=="--save")save=path_from_text(value);
             else if(option=="--input-log")input_log=path_from_text(value);
             else if(option=="--cursor"){const auto comma=value.find(',');if(comma==std::string::npos)throw std::runtime_error("--cursor x,y");cursor_x=std::stoi(value.substr(0,comma));cursor_y=std::stoi(value.substr(comma+1));}
             else if(option=="--render"){render=path_from_text(value);headless=true;}else if(option=="--screen")render_screen=value;else throw std::runtime_error("Unknown option");
         }
-        if(save.empty()&&fs::exists(data/"START.HOK"))save=data/"START.HOK";
+        // --new-game opens the start menu of a new game (game/new_game.hpp) instead of the default START.HOK
+        if(save.empty()&&!new_game&&fs::exists(data/"START.HOK"))save=data/"START.HOK";
         ClassicApplication app(data,saves,save);
         if(cursor_x>=0&&cursor_y>=0)app.motion(cursor_x,cursor_y);
         if(!render.empty()){app.render_screen(render_screen);write_new_save(render,app.canvas().bmp_bytes());return 0;}

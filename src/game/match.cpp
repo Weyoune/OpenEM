@@ -629,9 +629,12 @@ MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bo
                                     GameRandom& rng, int level, bool knockout) {
     // ovl06_161d, quick path: whole-match results (FUN_162c_1e9c), German clubs (team < 64) +6,
     // re-rolled up to min(4, |difference / 3|) times while the favourite does not win
-    int sh = playing_strength(home, StrengthMode::Neutral, 0, 0) + (home_german ? 6 : 0);
-    int sa = playing_strength(away, StrengthMode::Neutral, 0, 0) + (away_german ? 6 : 0);
+    int sh = playing_strength(home, StrengthMode::Neutral, 0, 0, home.current_line[0], home.current_line[1]) + (home_german ? 6 : 0);
+    int sa = playing_strength(away, StrengthMode::Neutral, 0, 0, away.current_line[0], away.current_line[1]) + (away_german ? 6 : 0);
     const int rerolls = std::min(4, std::abs(sh / 3 - sa / 3));
+    if (std::getenv("EM_DEBUG_QUICK"))
+        std::fprintf(stderr, "quick %s - %s: sh %d sa %d german %d/%d rerolls %d at G%zu lines %d/%d eff %d en %d %d %d %d / %d %d %d %d\n", home.name.c_str(), away.name.c_str(), sh, sa,
+                     home_german, away_german, rerolls, g_game_log ? g_game_log->size() : size_t(0), home.current_line[0], home.current_line[1], home.effort_current, home.energy[0][0], home.energy[0][1], home.energy[0][2], home.energy[0][3], home.energy[1][0], home.energy[1][1], home.energy[1][2], home.energy[1][3]);
     MatchResult r;
     do {
         r = quick_match(home, away, rng, level);

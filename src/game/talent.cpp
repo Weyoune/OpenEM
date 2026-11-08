@@ -23,6 +23,7 @@
 // worth(value); contract rand(2, 3) years.
 #include "game/game.hpp"
 #include "game/native_roster.hpp"
+#include "game/messages.hpp"
 
 #include <algorithm>
 
@@ -96,13 +97,19 @@ void Game::talent_search_week() {
     if (counter == 0) return;
     if (--counter != 0) return;  // DS:4860 (immediate evaluation) is never set in a normal game
     const int level = save_.state.at(kLevelByte);
+    // ovr036:01CA (two lines, general entry of the current manager); its date draw is rand(0, 3)
+    auto talent_message = [&](const char* first, const char* second) {
+        const GameDate d = date_of_season_day(day_ + 1, save_.year);
+        native_add_message(save_.state, brng_, {d.day, d.month, d.year, day_ + 1}, MessageKind::TwoLines,
+                           {MessageArg::str(first), MessageArg::str(second)}, 0, true);
+    };
     if (brng_.range(0, 5 - level / 2) == 0) {
         if (talent_player(brng_.range(40, 90), 80)) {
-            (void)brng_.range(0, 3);
+            talent_message("Ihre Talentsuche war ein Erfolg.", "Ein junger Spieler st|~t zu Ihrem Kader.");
             manager_news_.push_back("Ihre Talentsuche war ein Erfolg.\nEin junger Spieler stößt zu Ihrem Kader.");
         }
     } else {
-        (void)brng_.range(0, 3);
+        talent_message("Ihr Talentsp{her gibt die", "Suche ohne Erfolg auf... Pech...");
         manager_news_.push_back("Ihr Talentspäher gibt die\nSuche ohne Erfolg auf... Pech...");
     }
 }

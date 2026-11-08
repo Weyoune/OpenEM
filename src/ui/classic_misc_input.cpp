@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Manager -> Highscore and Manager -> Neuer of the native menu.
+#include <algorithm>
 #include <fstream>
+
+#include "game/new_game.hpp"
 
 #include "game/highscore.hpp"
 #include "ui/classic_app.hpp"
@@ -16,6 +19,7 @@ struct ClassicMiscState {
     uint32_t game = 0;
     bool wm_only = false;
     ClassicNewManager setup;
+    std::unique_ptr<HokFile> start_base;  // start menu of a new game: the fresh start state (game/new_game.hpp)
 };
 
 namespace {
@@ -65,6 +69,7 @@ void ClassicApplication::open_new_manager() {
 
 void ClassicApplication::draw_misc() {
     if (!misc_) return;
+    if (misc_->start_base) { misc_->setup.draw(canvas_, *misc_->start_base, mouse_x_, mouse_y_); return; }
     if (screen_ == ClassicScreen::Highscore) draw_classic_highscore(canvas_, misc_->highscore, misc_->wm_only);
     else misc_->setup.draw(canvas_, snapshot(), mouse_x_, mouse_y_);
 }
@@ -74,11 +79,41 @@ void ClassicApplication::click_misc(int x, int y, bool right) {
         screen_ = ClassicScreen::Main;
         return;
     }
+    if (misc_->start_base) { click_start_menu(x, y, right); return; }
     const auto result = misc_->setup.click(snapshot(), x, y, right);
     if (result == ClassicNewManager::Result::Leave) screen_ = ClassicScreen::Main;
     else if (result == ClassicNewManager::Result::LeaveWithManager) {
         screen_ = ClassicScreen::Main;
         notice("Weitere Manager werden noch nicht\nunterstützt.");
+    }
+}
+
+// Start menu of a new game (ovr027:0135 with argument 1): "Los jetzt!" with a complete row starts the game.
+void ClassicApplication::open_start_menu() {
+    const auto base = find_new_game_base(data_);
+    if (!base) { open_files(false); return; }
+    if (!misc_) misc_ = std::make_shared<ClassicMiscState>();
+    misc_->start_base = std::make_unique<HokFile>(decode_hok(read_file(*base)));
+    misc_->setup.open_start(*misc_->start_base);
+    screen_ = ClassicScreen::NewManager;
+}
+
+void ClassicApplication::click_start_menu(int x, int y, bool right) {
+    auto& m = *misc_;
+    if (m.setup.click(*m.start_base, x, y, right) != ClassicNewManager::Result::LeaveWithManager) return;
+    const auto rows = m.setup.rows();
+    const auto row = std::find_if(rows.begin(), rows.end(), [](const auto& r) { return r.face >= 0 && r.team >= 0; });
+    if (row == rows.end()) return;
+    try {
+        session_.start_new_game({row->name, row->face, row->team});
+        m.start_base.reset();
+        invalidate();
+        screen_ = ClassicScreen::Main;
+        table_order_ = session_.game().league(division_).ranking;
+        if (std::count_if(rows.begin(), rows.end(), [](const auto& r) { return r.face >= 0; }) > 1)
+            notice("Weitere Manager werden noch nicht\nunterstützt.");
+    } catch (const std::exception& e) {
+        notice(e.what());
     }
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/game.hpp"
 #include "game/market.hpp"
+#include "game/messages.hpp"
 #include "game/result_books.hpp"
 #include "game/youth_progress.hpp"
 #include "game/youth_intake.hpp"
@@ -523,6 +524,18 @@ bool Game::human_in_next_cup() const {
     });
 }
 
+// The human club plays on the next EuroCup day (group phase rounds 0-5, final group 6-11).
+bool Game::human_in_next_euro() const {
+    if (euro_round_ >= 12) return false;
+    if (euro_round_ < 6) {
+        for (const auto& group : euro_groups_)
+            for (int team : group.teams) if (team == human_team_) return true;
+        return false;
+    }
+    for (int team : euro_final_.teams) if (team == human_team_) return true;
+    return false;
+}
+
 void Game::play_cup_day() {
     cup_day_++;
     if (cup_draw_.empty() || cup_winner_ >= 0) return;
@@ -773,8 +786,8 @@ void Game::heal_squad(bool weekly) {
 
 // 146e:0c89 runs on season_day % 7 == 0 or (season_day + 3) % 7 == 0.
 // Phase A (transfer-list entries of manager 0) and the per-slot player mood loop (injury roll, wish to leave, mood decay,
-// contract wish) of the original daily manager routine; the messages that accompany these events are not modelled
-// (player byte +0x1E, the message index, is read but never created).
+// contract wish) of the original daily manager routine, with the messages of these events (src/game/messages.cpp;
+// player byte +0x1E holds the entry index).
 void Game::squad_injuries(bool weekly, bool no_match_today) {
     uint8_t* st = save_.state.data();
     // phase A: the entries of the transfer list: exhaustion decay, ownership toggle, interest expiry
@@ -789,13 +802,25 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
             pl[0x1E] = 0;
         }
     }
-    heal_squad(weekly);
+    // heal_squad(weekly) runs after the loop below
+    // the messages of this loop (src/game/messages.cpp), each with its date draw rand(0, 3)
+    const GameDate today = date_of_season_day(day_ + 1, save_.year);
+    const MessageDate message_date{today.day, today.month, today.year, day_ + 1};
+    auto native_name = [](const uint8_t* pl) { std::string t; for (size_t k = 0; k < 19 && pl[k]; k++) t += char(pl[k]); return t; };
     for (size_t i = 0; i < save_.squad.size() && i < size_t(kHokSquadSlots); i++) {
         if (save_.squad[i].player < 0) continue;
         uint8_t* r = st + kSquad + i * kSquadRecord;
         if (std::getenv("EM_DEBUG_TINJ"))
             std::fprintf(stderr, "tinj B%zu day %d slot %zu 09=%02x 0D=%02x 0A=%02x 13=%02x\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, i, r[0x09], r[0x0D], r[0x0A], r[0x13]);
-        if (r[0x0D] == 0 && r[0x09] == 0 && training_injury(r[0x13], no_match_today, finance_.level, brng_)) injure(i, 0);
+        if (r[0x0D] == 0 && r[0x09] == 0 && training_injury(r[0x13], no_match_today, finance_.level, brng_)) {
+            injure(i, 0);
+            // seg002:0FD1..1042: "Verletzung au~erhalb des Spieles:" / "NAME  (injury)" (general, ovr036:01CA)
+            const uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+            native_add_message(save_.state, brng_, message_date, MessageKind::TwoLines,
+                               {MessageArg::str("Verletzung au~erhalb des Spieles:"),
+                                MessageArg::str(native_name(pl) + "  (" + native_from_utf8(injuries_.names[size_t(r[0x17]) % injuries_.names.size()]) + ")")},
+                               0, true);
+        }
         if (day_ >= 233) continue;
         uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
         // the wish to leave: older players with a good record, checked against rand(350,450)
@@ -803,7 +828,11 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
         const int diff = int(r[0x11]) - int(r[0x10]);
         if (diff > 0) cx -= diff >> 1;
         const int limit = int(pl[0x14]) * cx / 10;
-        if (brng_.range(350, 450) < limit && !(r[0x18] & 0x80) && r[0x18] < 100) r[0x18] |= 0x80;
+        if (brng_.range(350, 450) < limit && !(r[0x18] & 0x80) && r[0x18] < 100) {
+            r[0x18] |= 0x80;
+            // seg002:110C..112A: "NAME k}ndigt an, da~ er seinen Vertrag^nicht mehr verl{ngern wird." (general)
+            native_add_message(save_.state, brng_, message_date, MessageKind::NoRenewal, {MessageArg::str(native_name(pl)), MessageArg::str("")}, 0, true);
+        }
         if (r[0x0D] != 0) r[0x0A] = 0;  // an injured player loses his role
         if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
             r[0x09] &= 0x1F;
@@ -826,9 +855,15 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
         wish -= wish * games * 10 / 100;
         if (brng_.range(0, wish) == 0 && brng_.range(0, 3) == 0 && pl[0x1E] == 0 && !(r[0x18] & 0x80) && r[0x0B] == 1) {
             const int c = brng_.range(0, 100);
-            r[0x18] = uint8_t((c > 90 ? 4 : c > 70 ? 3 : 2) + 100);  // the new-contract wish; the message index is not created
+            const int years = c > 90 ? 4 : c > 70 ? 3 : 2;
+            r[0x18] = uint8_t(years + 100);  // the new-contract wish
+            // seg002:13CB..1471: "NAME bietet Ihnen an, von <years> auf <wish>^Jahre zu verl{ngern." (entry index to +0x1E)
+            pl[0x1E] = uint8_t(native_add_message(save_.state, brng_, message_date, MessageKind::ContractOffer,
+                                                  {MessageArg::str(native_name(pl)), MessageArg::str("von " + std::to_string(r[0x0B]) + " auf " + std::to_string(years))},
+                                                  0, false, r[0x0F]));
         }
     }
+    heal_squad(weekly);  // REAL-CODE period 12: the healing comes after the player loop (an injured player draws no training injury on his last week)
 }
 
 void Game::refresh_budget_roster() {
@@ -921,6 +956,15 @@ void Game::make_offers() {
         const bool foreign = !listed && v > 90 && brng_.range(0, 10) == 0;
         const int bidder = pick_bidder(save_.teams, strength_of_record(slot), foreign, brng_);
         r[0x16] = uint8_t(bidder);
+        {  // seg002:0E92..0EE2: "TEAM ist an SPIELER^interessiert.^" (ovr036:0206, its date draw rand(0, 3)); the
+            // entry index goes to the player record +0x1E
+            const GameDate d = date_of_season_day(day_ + 1, save_.year);
+            auto cstr = [&](size_t at, size_t n) { std::string t; for (size_t k = 0; k < n && st[at + k]; k++) t += char(st[at + k]); return t; };
+            const size_t record = kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+            const int handle = native_add_message(save_.state, brng_, {d.day, d.month, d.year, day_ + 1}, MessageKind::Interest,
+                {MessageArg::str(cstr(0x17E7 + size_t(bidder) * 61, 22)), MessageArg::str(cstr(record, 20))}, 0, false, r[0x0F]);
+            st[record + 0x1E] = uint8_t(handle);
+        }
         ManagerOffer o{int(pl - save_.players.data()), listed, bidder, 0};
         // Native interest creation has no sale-price draw; price begins on click.
         manager_offers_.push_back(o);
@@ -1485,6 +1529,7 @@ void Game::update_sponsors() {
 
 void Game::play_euro_day() {
     if (euro_round_ >= 12) return;
+    const bool human_euro = human_in_next_euro();
     const int r = euro_round_++;  // DS:07AF
     // DS:0228 requests full EuroCup display. An active human participant also
     // selects the minute path for the whole event; pure CPU events can be fast.
@@ -1570,6 +1615,27 @@ void Game::play_euro_day() {
             euro_champion_ = euro_final_.teams[size_t(euro_final_.order()[0])];
             log_.push_back("European cup winner: " + save_.teams[size_t(euro_champion_)].name);
         }
+    }
+    if (r == 0)  // the first EuroCup day lists both groups in the slots DS:5D5B (state 0x8EB1, REAL-CODE period 13)
+        for (size_t g = 0; g < 2; g++)
+            for (size_t t = 0; t < 4; t++) save_.state.at(0x8EB1 + g * 4 + t) = uint8_t(euro_groups_[g].teams[t]);
+    if (!human_euro && !minute_path) {
+        // a EuroCup day without the human club rests the 64 clubs like a cup day without him: energy 90, shifts 0, the
+        // human squad's fitness 90 and match load, DS:A88D = FF (REAL-CODE period 13)
+        for (int team = 0; team < 64; team++) {
+            HokTeam& t = save_.teams[size_t(team)];
+            const int mode = team == human_team_ ? (t.flags & 0x07) : 0;
+            prepare_match_energy(t, nullptr);
+            t.flags |= mode;
+        }
+        for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+            if (save_.state.at(kSquad + slot * kSquadRecord + 0x0F) == 0) continue;
+            save_.state.at(kSquad + slot * kSquadRecord + 0x1B) = 90;
+            save_.squad[slot].fitness = 90;
+        }
+        if (human_team_ >= 0 && human_team_ < kHokTeams)
+            save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(human_team_)], human_));
+        save_.state.at(0x784) = 0xFF;
     }
     save_.state.at(kEuroRound) = uint8_t(euro_round_);
 }
@@ -2756,8 +2822,20 @@ void Game::new_season() {
         pl.league_goals = pl.league_games = 0;
         uint8_t* raw=save_.state.data()+(pl.raw-save_.state.data());
         raw[0x1b]=raw[0x1c]=raw[0x1f]=raw[0x20]=0;
+        std::string native_name;for(size_t k=0;k<19&&raw[k];k++)native_name+=char(raw[k]);
+        const int age_before=raw[0x14];
         const auto review=annual_owned_player(save_,uint8_t(id),0,annual_draw);
         if(review.status==AnnualPlayerStatus::Retired||review.status==AnnualPlayerStatus::Disabled){
+            // ovr026:07F7..09F3: shown at once in the message field and deleted again (src/game/messages.cpp)
+            const GameDate d=date_of_season_day(day_,save_.year);
+            const MessageDate md{d.day,d.month,d.year,day_+1};
+            if(review.status==AnnualPlayerStatus::Retired)
+                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::Retirement,{MessageArg::str(native_name),MessageArg::num(age_before)}));
+            else if(review.insurance_payment==0)
+                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::Invalid,{MessageArg::str(native_name)}));
+            else
+                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::TwoLines,{MessageArg::str(native_name+" ist invalide."),
+                    MessageArg::str("Ein Fall f]r die Versicherung: Sie zahlt Ihnen "+std::to_string(review.insurance_payment/3)+" DM")}));
             budget_.balance+=review.insurance_payment;
             if(review.insurance_payment)
                 log_.push_back(pl.name+" disability insurance payment "+std::to_string(review.insurance_payment/3)+" DM");
@@ -3124,7 +3202,7 @@ g_draw_scope = "stadium-week";
         if (brng_.range(0, 3) == 0) refresh_transfer_list();
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
-        if (next_event == kEventCup && !calendar_.league_day(day_ + 1) && !human_in_next_cup()) {
+        if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()))) {  // REAL-CODE periods 7 and 13
             if (next_event == kEventCup && cup_game_ == 0)
                 for (int t = 36; t < 64; t++)
                     for (auto& kind : save_.teams[size_t(t)].energy)
@@ -3132,12 +3210,10 @@ g_draw_scope = "stadium-week";
             return;
         }
         daily_luck_ = brng_.range(85, 115);
-        // news items (25 entries of 0x71 bytes at DS:D294): the display timer drops by 16 per play step; the item ends at the next step (REAL-CODE)
-        for (int i = 0; i < 24; i++) {
-            uint8_t* m = save_.state.data() + 0xAEB7 + size_t(i) * 0x71;
-            if (m[0] == 0) continue;
-            if (m[0] >= 32) m[0] = uint8_t(m[0] - 16); else m[0] = m[1] = 0;  // 56, 40, 24 (gone) in three steps
-        }
+        // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
+        // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
+        native_sort_messages(save_.state);
+        native_message_step(save_.state);
         // before a DEB cup day the original prepares the energies of the 28 cup clubs outside the three leagues (REAL-CODE)
         if (next_event == kEventCup && cup_game_ == 0)
             for (int t = 36; t < 64; t++)

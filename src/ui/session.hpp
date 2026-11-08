@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "game/game.hpp"
+#include "game/new_game.hpp"
 
 namespace em::ui {
 
@@ -50,6 +51,9 @@ public:
     const std::optional<ContractQuestion>& contract_question() const { return contract_question_; }
 
     void load(const std::filesystem::path& file, uint32_t seed = 1);
+    // A new game from the fresh start state of the data directory (game/new_game.hpp, start menu "Los jetzt!").
+    bool can_start_new_game() const;
+    void start_new_game(const NewGameSetup& setup, uint32_t seed = 1);
     void save(const std::filesystem::path& file);  // new .oem or .hok only, never overwrite
     ActionResult apply(const std::function<ActionResult(Game&)>& action);
     bool advance_day();  // false means a contract decision is pending; game remains unchanged
