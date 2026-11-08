@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/annual_distribution.hpp"
+#include "game/annual_players.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
@@ -82,6 +83,18 @@ int main(int argc,char** argv){try{
         DistributionCursors cursors{};annual_distribute_players(state,cursors,[&](int l,int h){return script.draw(l,h);});script.done();
         require(state==expected&&cursors==(DistributionCursors{8,0,0}),"post-change quota129: two incumbents plus127 moves; only global club bytes change");
         require(annual_distribution_quotas(state)==(std::array<int,4>{129,0,0,0}),"actual foreign4 is recounted after all random switches");
+    }
+    { // 1238:13A1 as a whole: 398 skill draws (1238:1359), then rand(5,15) and
+        // per change rand(1,179) plus the 1238:1838 target draws, nothing between.
+        auto state=blank();Script script;
+        for(int id=1;id<200;++id){script.calls.push_back({1,7,id==5?7:4});script.calls.push_back({1,7,id==5?1:4});}
+        script.calls.push_back({5,15,5});
+        for(int id:{5,9,179,9,1})script.calls.insert(script.calls.end(),{{1,179,id},{0,42,0},{2,10,2}});
+        auto expected=state;expected[p(5)+21]=63;expected[p(5)+22]=57;
+        for(int id:{5,9,179,1})expected[p(id)+29]=0;
+        const auto run=[&](int l,int h){return script.draw(l,h);};
+        annual_global_skills(state,run);DistributionCursors cursors{};annual_distribute_players(state,cursors,run);script.done();
+        require(state==expected&&cursors==DistributionCursors{},"season-change order: skill pass, then player shift, no quota draws");
     }
     const std::filesystem::path refs=argv[1];
     for(const std::string name:{"START","SAISEND","NEUSAIS"}){

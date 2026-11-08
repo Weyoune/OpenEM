@@ -32,6 +32,7 @@ AnnualPlayerReview annual_owned_player(HokFile& h,uint8_t id,int manager,const C
     return {disabled?AnnualPlayerStatus::Disabled:AnnualPlayerStatus::Retired,location->slot,payment,notice_back};
 }
 void annual_global_skills(Bytes& state,const ContractRandomDraw& draw){
+    // 1238:142F..14A9: IDs 1..199 (block + id*0x21), two calls of 1238:1359 each.
     if(state.size()<0x4fc6+199*0x21)throw FormatError("annual players: truncated globals");
     for(size_t id=1;id<200;++id)for(size_t skill:{size_t(0x15),size_t(0x16)}){
         auto& value=state.at(0x4fa5+id*0x21+skill);
