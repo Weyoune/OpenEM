@@ -944,8 +944,10 @@ void Game::make_offers() {
     };
     auto offer = [&](int block, int slot, bool listed) {
         uint8_t* r = st + kSquad + size_t(block) * 0x618 + size_t(slot) * kSquadRecord;
-        if (r[0x09] & 0xC0) return;  // a saved interest must not be overwritten by a new bidder
         HokPlayer* pl = player_by_exe_index(r[0x0F]);
+        if (std::getenv("EM_DEBUG_OFFER"))
+            std::fprintf(stderr, "offer B%zu day %d block %d slot %d 09=%02x pending %d\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, block, slot, r[0x09], pl ? int(pending(pl)) : -1);
+        if (r[0x09] & 0xC0) return;  // a saved interest must not be overwritten by a new bidder
         if (!pl || pending(pl)) return;
         const long value = player_worth(contracts_, contract_player(save_, block, slot), Worth::Value, brng_);
         const long v = value / 10000;
@@ -983,6 +985,8 @@ void Game::make_offers() {
     if (day_ >= 233) return;
     for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
         const uint8_t* r = st + kSquad + slot * kSquadRecord;
+        if (std::getenv("EM_DEBUG_OFFER") && (!r[0x0F] || r[0x0C] != 0 || (r[0x18] & 0x80)))
+            std::fprintf(stderr, "offer skip day %d slot %zu 0F=%02x 0C=%02x 18=%02x\n", day_, slot, r[0x0F], r[0x0C], r[0x18]);
         if (!r[0x0F] || r[0x0C] != 0 || (r[0x18] & 0x80)) continue;
         offer(0, int(slot), false);
     }
