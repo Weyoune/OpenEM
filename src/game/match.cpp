@@ -91,6 +91,9 @@ LineValues line_strength(const HokTeam& t, int line, int kind, bool in_play, int
     v.skill1 = clamp_line(v.skill1);
     v.skill2 = clamp_line(v.skill2);
     v.form = clamp_line(v.form);
+    if (std::getenv("EM_DEBUG_LS"))
+        std::fprintf(stderr, "ls %s line %d kind %d play %d man %d -> s1 %d s2 %d form %d (eff %d en %d)\n", t.name.c_str(), line, kind, int(in_play), man_advantage, v.skill1, v.skill2, v.form,
+                     t.effort_current, t.energy[kind][line]);
     return v;
 }
 

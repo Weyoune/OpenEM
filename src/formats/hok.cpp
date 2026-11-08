@@ -37,7 +37,7 @@ HokFile clone_hok(const HokFile& source) {
     copy.version = source.version; copy.year = source.year; copy.season_year = source.season_year;
     copy.manager = source.manager; copy.club = source.club; copy.key0 = source.key0;
     copy.header = source.header; copy.state = source.state;
-    copy.teams = source.teams; copy.players = source.players; copy.table = source.table;
+    copy.teams = source.teams; copy.players = source.players; copy.table = source.table; copy.keep_table_copies = source.keep_table_copies;
     for (size_t i = 0; i < copy.teams.size(); i++)
         if (source.teams[i].raw) copy.teams[i].raw = copy.state.data() + (source.teams[i].raw - source.state.data());
     for (size_t i = 0; i < copy.players.size(); i++)
@@ -250,7 +250,25 @@ namespace {
 void put32(Bytes& b, size_t o, uint32_t v) {
     for (int i = 0; i < 4; i++) b.at(o + size_t(i)) = uint8_t(v >> (8 * i));
 }
+// the copies of one table row (hok.hpp); r = state + kTable + team * kTableRecord
+void write_table_row_copies(uint8_t* r, const HokTableRow& row) {
+    for (int side = 0; side < 2; side++) {
+        r[-2 + side] = uint8_t(2 * row.wins[side] + row.draws(side));
+        r[0x14 + side] = uint8_t(row.goals_for[side]);
+        r[0x18 + side] = uint8_t(row.goals_against[side]);
+    }
+    r[0x24] = uint8_t(row.wins[0]);
+    r[0x25] = 0;
+    r[0x28] = uint8_t(row.losses[0]);
+    r[0x29] = 0;
+    for (size_t i = 0; i < 8 && i < row.form.size(); i++) r[0x09 + i] = uint8_t(row.form[i]);
+}
 }  // namespace
+
+void write_table_copies(Bytes& state, const std::vector<HokTableRow>& rows) {
+    for (size_t t = 0; t < rows.size() && t < 36; t++)  // the three leagues (rows 36..47 are unused)
+        write_table_row_copies(state.data() + kTable + t * kTableRecord, rows[t]);
+}
 
 void store_hok(HokFile& h) {
     Bytes& s = h.state;
@@ -292,7 +310,7 @@ void store_hok(HokFile& h) {
     }
     for (size_t t = 0; t < h.table.size() && t < size_t(kHokLeagueTeams); t++) {
         const HokTableRow& row = h.table[t];
-        uint8_t* r = s.data() + kTable + t * kTableRecord;
+        uint8_t* r = s.data() + kTable + t * kTableRecord;  // row + 4 (the points lie before it)
         r[0x43] = uint8_t(row.penalty_minutes);
         r[0x44] = uint8_t(row.penalty_minutes >> 8);
         // a changed row gets its points and the league-season copies as well (hok.hpp)
@@ -303,17 +321,8 @@ void store_hok(HokFile& h) {
                        r[0x1A + side] != row.games[side] || r[0x22 + side] != row.wins[side] ||
                        r[0x26 + side] != row.losses[side];
         if (changed) {
-            for (int side = 0; side < 2; side++) {
-                const int points = 2 * row.wins[side] + row.draws(side);
-                r[-4 + side] = r[-2 + side] = uint8_t(points);
-                r[0x14 + side] = uint8_t(row.goals_for[side]);
-                r[0x18 + side] = uint8_t(row.goals_against[side]);
-            }
-            r[0x24] = uint8_t(row.wins[0]);
-            r[0x25] = 0;
-            r[0x28] = uint8_t(row.losses[0]);
-            r[0x29] = 0;
-            for (size_t i = 0; i < 8 && i < row.form.size(); i++) r[0x09 + i] = uint8_t(row.form[i]);
+            for (int side = 0; side < 2; side++) r[-4 + side] = uint8_t(2 * row.wins[side] + row.draws(side));
+            if (!h.keep_table_copies) write_table_row_copies(r, row);
         }
         for (size_t i = 0; i < 8 && i < row.form.size(); i++) r[i] = uint8_t(row.form[i]);
         for (int side = 0; side < 2; side++) {

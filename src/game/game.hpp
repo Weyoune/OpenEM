@@ -311,6 +311,7 @@ private:
     void play_cup_day();
     bool human_in_next_cup() const;
     bool human_in_next_playoff() const;
+    void quick_setup(int home, int away, HokTeam& h, HokTeam& a);
     bool human_in_next_euro() const;
     void play_euro_day();
     void play_playoff_day();
@@ -327,6 +328,8 @@ private:
     void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr, const std::vector<HokSquadPlayer>* working = nullptr);
     void credit_opponent_goal(int competition, bool goal, const HokTeam& scorer);
     bool message_step_pending_ = true;  // a loaded game stands in the menu: the next play step sorts and counts the messages
+    bool table_copies_frozen_ = false;   // a play step passed a league day without returning to the menu: the copies of the table stay (HokFile::keep_table_copies)
+    bool league_since_refresh_ = false;  // a league day was played since the copies were last refreshed
     int last_scorer_slot_ = 0;  // DS:3277 (byte_33277): slot of the last scorer pick, reused when a club without a squad scores
     void reset_wm();
     void new_season();
@@ -410,6 +413,7 @@ private:
     GroupTable euro_final_{};
     int euro_round_ = 0, euro_champion_ = -1;
     std::vector<Series> series_;
+    std::vector<HokTableRow> table_rows() const;  // the 48 rows of the three leagues as saved
     int playoff_day_ = 0, champion_ = -1, cup_winner_ = -1;
     int seasons_ = 0;
     std::array<RoundRobinTable<6>, 2> wm_groups_{};  // nations 52-57 and 58-63

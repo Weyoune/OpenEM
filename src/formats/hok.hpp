@@ -295,6 +295,9 @@ struct HokFile {
     std::vector<HokTeam> teams;      // 150 team records (raw pointers into `state`)
     std::vector<HokPlayer> players;  // named player records (raw pointers into `state`)
     std::vector<HokTableRow> table;  // 48 league table rows, same index as `teams`
+    // the copies of the table rows (+0x09 form, +0x14/+0x18 goals, -0x02 points, +0x24/+0x28) stay as they are in `state`:
+    // the original refreshes them when a play step returns to the menu (REAL-CODE period 28)
+    bool keep_table_copies = false;
     HokDate date;
     int matchday[3] = {};  // next matchday: first division, second division, Oberliga
     std::array<std::array<HokPairing, kHokLeagueSize / 2>, 3> pairings{};  // next matchday per league
@@ -337,6 +340,8 @@ std::vector<HokSquadPlayer> hok_squad(const HokFile& h, int manager);
 // money of HokFinance (scaled) - write those into `state` directly. Team and player records are
 // written at the position their `raw` pointer names.
 void store_hok(HokFile& h);
+// Writes the copies of the table rows (hok.hpp: +0x09 form, +0x14/+0x18 goals, -0x02 points, +0x24/+0x28) into a state.
+void write_table_copies(Bytes& state, const std::vector<HokTableRow>& rows);
 
 // Builds the file: plain header, key0, the state encrypted with the BMH cipher (key0, k -= 0x29)
 // and the two check bytes computed anew. decode_hok(encode_hok(h)) gives `h` again; for an unchanged

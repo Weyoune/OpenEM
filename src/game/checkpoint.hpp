@@ -45,6 +45,8 @@ struct GameCheckpoint {
     uint8_t last_scorer_slot = 0;
     // Version7: the message sort/count of the next play step is still due (a game saved in the menu).
     bool message_step_pending = true;
+    bool table_copies_frozen = false;  // v8: Game::table_copies_frozen_
+    bool league_since_refresh = false;  // v8
 };
 
 bool is_game_checkpoint(const Bytes& data);

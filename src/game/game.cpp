@@ -193,7 +193,10 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             const size_t slot = size_t(base + pair * 2);
             const int a = save_.state.at(kPlayoffTeams + slot), b = save_.state.at(kPlayoffTeams + slot + 1);
             Series s;
-            s.higher = team_rank(a) < team_rank(b) ? a : b;
+            // quarter finals by the table; later rounds by the bracket: the winner of the feeding slot (its column 0 after the
+            // round) holds the seed - semi-final 1 from quarter final 1, semi-final 2 from quarter final 2, the final from semi-final 1
+            const int seed = stage == 1 ? save_.state.at(kPlayoffTeams + size_t(pair) * 2) : stage == 2 ? save_.state.at(kPlayoffTeams + 8) : -1;
+            s.higher = seed == a || seed == b ? seed : team_rank(a) < team_rank(b) ? a : b;
             s.lower = s.higher == a ? b : a;
             const int wa = std::min(int(save_.state.at(kPlayoffWins + slot)), 3);
             const int wb = std::min(int(save_.state.at(kPlayoffWins + slot + 1)), 3);
@@ -275,6 +278,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         annual_distribution_cursors_=checkpoint.annual_distribution_cursors;
         last_scorer_slot_=checkpoint.last_scorer_slot;
         message_step_pending_=checkpoint.message_step_pending;
+        table_copies_frozen_=checkpoint.table_copies_frozen;league_since_refresh_=checkpoint.league_since_refresh;
         for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
         human_rotation_ = checkpoint.club_rotation;
         national_rotation_ = checkpoint.national_rotation;
@@ -321,6 +325,7 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.annual_distribution_cursors=annual_distribution_cursors_;
     checkpoint.last_scorer_slot=uint8_t(last_scorer_slot_);
     checkpoint.message_step_pending=message_step_pending_;
+    checkpoint.table_copies_frozen=table_copies_frozen_;checkpoint.league_since_refresh=league_since_refresh_;
     checkpoint.club_rotation = human_rotation_;
     checkpoint.national_rotation = national_rotation_;
     checkpoint.injured_roles = injured_role_;
@@ -1722,6 +1727,25 @@ void Game::play_euro_day() {
     save_.state.at(kEuroRound) = uint8_t(euro_round_);
 }
 
+// ovl06_161d quick path, scan loop: 162c:02a5 sets up home, then away (which already sees the home team's new effort)
+// directly in the team records, so the effort and tactics stay until the next set-up (REAL-CODE period 28: Landshut plays
+// its next set-up with effort 60). The strengths are computed with rested lines (energy 90); the record keeps its energies.
+// `h` and `a` receive the teams as they enter the quick result.
+void Game::quick_setup(int home, int away, HokTeam& h, HokTeam& a) {
+    HokTeam& H = save_.teams[size_t(home)];
+    HokTeam& A = save_.teams[size_t(away)];
+    h = H; a = A;
+    prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
+    setup_computer_team(h, a);
+    setup_computer_team(a, h);
+    for (auto [rec, run] : {std::pair<HokTeam*, const HokTeam*>{&H, &h}, {&A, &a}}) {
+        int energy[2][4];
+        std::memcpy(energy, rec->energy, sizeof energy);
+        *rec = *run;
+        std::memcpy(rec->energy, energy, sizeof energy);
+    }
+}
+
 void Game::play_playoff_day() {
     const int day = playoff_day_++;
     const int stage = day / 5;  // five days per best-of-five round
@@ -1757,7 +1781,9 @@ void Game::play_playoff_day() {
         series_.clear();
         for (size_t i = 0; i + 1 < teams.size(); i += 2) {
             Series s;
-            s.higher = position(teams[i]) < position(teams[i + 1]) ? teams[i] : teams[i + 1];
+            // quarter finals by the final table; later rounds keep the bracket slot: the winner inherits the seed of its slot
+            // (REAL-CODE period 28: Kaufbeuren, 6th, beat Krefeld, 2nd, and is the home team of the first semi-final against the 3rd)
+            s.higher = stage > 0 || position(teams[i]) < position(teams[i + 1]) ? teams[i] : teams[i + 1];
             s.lower = s.higher == teams[i] ? teams[i + 1] : teams[i];
             series_.push_back(s);
         }
@@ -1773,13 +1799,55 @@ void Game::play_playoff_day() {
             }
         }
     }
-    for (Series& s : series_) {
+    // ovl06_161d quick path (no human club in any series of the day): the games are played in slot order into the
+    // result grid DS:5C4B; after each game sub_40683 scans every open pair of the day for H == A - the pairs not played
+    // yet are still 0:0 and count (they are marked 30:0) - and any such pair gives the current game a shoot-out of
+    // Borland rand(0,2) pairs, +30 on its home byte (a real draw was marked as well: +60). REAL-CODE period 28.
+    std::vector<size_t> open_today;
+    bool human_today = false;
+    for (size_t i = 0; i < series_.size(); i++) {
+        const Series& s = series_[i];
+        if (s.wins_higher == 3 || s.wins_lower == 3) continue;
+        open_today.push_back(i);
+        human_today |= s.higher == human_team_ || s.lower == human_team_;
+    }
+    std::vector<std::array<int, 2>> grid(series_.size(), {0, 0});
+    auto quick_playoff = [&](size_t index, int home, int away) {
+        HokTeam h, a;
+        quick_setup(home, away, h, a);
+        if (std::getenv("EM_DEBUG_PQ"))
+            for (const HokTeam* t : {&save_.teams[size_t(home)], &save_.teams[size_t(away)]})
+                std::fprintf(stderr, "pq %s: bonus %d s1 %d/%d s2 %d/%d form %d/%d en %d %d %d %d %d %d %d %d eff %d fl %02x lines %d/%d sk %d pen %02x\n", t->name.c_str(), t->bonus,
+                             t->skill1[0], t->skill1[1], t->skill2[0], t->skill2[1], t->form[0], t->form[1], t->energy[0][0], t->energy[0][1], t->energy[0][2], t->energy[0][3],
+                             t->energy[1][0], t->energy[1][1], t->energy[1][2], t->energy[1][3], t->effort_current, t->flags, t->current_line[0], t->current_line[1], t->skaters, t->penalty_code);
+        MatchResult r = quick_competition_match(h, a, home < 64, away < 64, rng_, 0, false, true);  // German clubs +6
+        grid[index] = {r.home, r.away};
+        bool tie = false;
+        for (size_t j : open_today)
+            if (grid[j][0] == grid[j][1]) { tie = true; grid[j][0] += 30; }
+        if (tie) {
+            int c = 0, e = 0;
+            do {
+                c = brng_.range(0, 2);
+                e = brng_.range(0, 2);
+            } while (grid[index][0] + c == grid[index][1] + e);
+            grid[index][0] += c + 30;
+            grid[index][1] += e;
+        }
+        r.decision_marker = (grid[index][0] / 30) * 30;
+        r.home = grid[index][0] - r.decision_marker;
+        r.away = grid[index][1];
+        r.shootout = tie;
+        return r;
+    };
+    for (size_t index = 0; index < series_.size(); index++) {
+        Series& s = series_[index];
         if (s.wins_higher == 3 || s.wins_lower == 3) continue;
         const bool higher_home = s.games.size() % 2 == 0;  // games 1, 3, 5 at the higher seed
         const int home = higher_home ? s.higher : s.lower, away = higher_home ? s.lower : s.higher;
-        const MatchResult r = playoff_game(save_.teams, home, away, rng_, side);
+        const MatchResult r = human_today ? playoff_game(save_.teams, home, away, rng_, side) : quick_playoff(index, home, away);
         s.games.push_back(r);
-        if ((r.home > r.away) == higher_home)
+        if ((r.home > r.away) == higher_home)  // a level result after the quick shoot-out goes to the away team (REAL-CODE period 28: both streams equal)
             s.wins_higher++;
         else
             s.wins_lower++;
@@ -1812,10 +1880,8 @@ void Game::play_playoff_day() {
                 const int home = t.teams[size_t(p.home)], away = t.teams[size_t(p.away)];
                 MatchResult r;
                 if (home != human_team_ && away != human_team_) {  // without the human club a quick result (REAL-CODE period 28)
-                    HokTeam& h = save_.teams[size_t(home)];
-                    HokTeam& a = save_.teams[size_t(away)];
-                    prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
-                    setup_computer_team(h, a); setup_computer_team(a, h);
+                    HokTeam h, a;
+                    quick_setup(home, away, h, a);  // same quick path as the play-offs
                     r = quick_competition_match(h, a, true, true, rng_, 0, false, true);
                 } else {
                     r = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0, home == human_team_ ? &human_ : nullptr,
@@ -1904,7 +1970,7 @@ void Game::store_playoff_state(int stage, int completed_days) {
         if (stage == 0) std::swap(winners[1], winners[2]);
         const size_t next = size_t(kPlayoffBase[stage + 1]);
         for (size_t i = 0; i + 1 < winners.size(); i += 2) {
-            if (team_rank(winners[i]) > team_rank(winners[i + 1])) std::swap(winners[i], winners[i + 1]);
+            if (std::getenv("EM_OLD_PLAYOFF_SEED") && team_rank(winners[i]) > team_rank(winners[i + 1])) std::swap(winners[i], winners[i + 1]);  // the slot decides (REAL-CODE period 28)
             for (size_t side = 0; side < 2; side++) {
                 state.at(kPlayoffTeams + next + i + side) = uint8_t(winners[i + side]);
                 state.at(kPlayoffWins + next + i + side) = 0;
@@ -3058,6 +3124,17 @@ void Game::new_season() {
     log_.push_back("new season " + std::to_string(save_.year) + "/" + std::to_string(save_.year + 1));
 }
 
+std::vector<HokTableRow> Game::table_rows() const {
+    std::vector<HokTableRow> rows = save_.table;
+    for (const League& lg : leagues_)
+        for (int s = 0; s < kHokLeagueSize; s++) {
+            HokTableRow row = lg.rows[size_t(s)];
+            if (row.form.size() < 8) row.form.insert(0, 8 - row.form.size(), '-');
+            if (size_t(lg.first_team + s) < rows.size()) rows[size_t(lg.first_team + s)] = row;
+        }
+    return rows;
+}
+
 Bytes Game::save_bytes() const {
     HokFile h = clone_hok(save_);
     // date and matchdays
@@ -3066,14 +3143,13 @@ Bytes Game::save_bytes() const {
     h.date.month = next.month;
     h.date.year = next.year;
     h.date.day_index = day_ + 1;
+    const std::vector<HokTableRow> rows = table_rows();
+    for (size_t t = 0; t < rows.size() && t < h.table.size(); t++)
+        if (t < size_t(3 * kHokLeagueSize)) h.table[t] = rows[t];
+    h.keep_table_copies = table_copies_frozen_;
     for (int l = 0; l < 3; l++) {
         h.matchday[l] = matchday_[size_t(l)];
         const League& lg = leagues_[size_t(l)];
-        for (int s = 0; s < kHokLeagueSize; s++) {
-            HokTableRow row = lg.rows[size_t(s)];
-            if (row.form.size() < 8) row.form.insert(0, 8 - row.form.size(), '-');
-            h.table[size_t(lg.first_team + s)] = row;
-        }
         for (size_t place = 0; place < lg.ranking.size(); place++)
             h.table_order[size_t(l)][place] = lg.first_team + lg.ranking[place];
         const int md = matchday_[size_t(l)];
@@ -3207,6 +3283,7 @@ g_draw_scope = "youth";
         youth_fixture_day(save_.state,finance_,std::min(44, matchday_[0]),0,[&](int lo,int hi){return brng_.range(lo,hi);});
 g_draw_scope = "league-day";
         play_league_day();
+        league_since_refresh_ = true;
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;
     }
 g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d at %zu\n", day_, int(event), int(calendar_.league_day(day_)), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
@@ -3307,6 +3384,7 @@ g_draw_scope = "stadium-week";
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
         if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
                                               (next_event == kEventPlayoff && !human_in_next_playoff()))) {  // REAL-CODE periods 7, 13 and 28
+            if (league_since_refresh_) table_copies_frozen_ = true;  // no menu after a league day: the copies of the table stay (REAL-CODE period 28)
             if (next_event == kEventCup && cup_game_ == 0)
                 for (int t = 36; t < 64; t++)
                     for (auto& kind : save_.teams[size_t(t)].energy)
@@ -3314,6 +3392,8 @@ g_draw_scope = "stadium-week";
             return;
         }
         daily_luck_ = brng_.range(85, 115);
+        write_table_copies(save_.state, table_rows());  // the menu refreshes the copies of the table (REAL-CODE period 28)
+        table_copies_frozen_ = league_since_refresh_ = false;
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
         // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
         // (REAL-CODE period 16: only when the next play step leaves the menu, so a message of this step keeps its count)

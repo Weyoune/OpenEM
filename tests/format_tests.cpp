@@ -3853,12 +3853,12 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
             for (size_t match = 0; match < s.games.size(); match++) {
                 const size_t o = 0x0205 + match * 14 + slot;
                 const int hg = h.state[o] % 30, ag = h.state[o + 1] % 30;
-                CHECK(hg != ag);
-                const bool higher_won = (hg > ag) == (first == s.higher);
-                higher_wins += higher_won; lower_wins += !higher_won;
                 const auto& r = s.games[match];
+                // a quick shoot-out after a real draw can end level (the scan already marked +30); the away team wins then
+                const bool higher_won = (r.home > r.away) == (match % 2 == 0);
+                if (hg != ag) CHECK((hg > ag) == (first == s.higher) == higher_won);
+                higher_wins += higher_won; lower_wins += !higher_won;
                 CHECK((h.state[o] / 30 + h.state[o + 1] / 30) * 30 == r.decision_marker);
-                CHECK(((r.home > r.away) == (match % 2 == 0)) == higher_won);
             }
             CHECK(higher_wins == s.wins_higher && lower_wins == s.wins_lower);
         }
@@ -4239,6 +4239,7 @@ static void checkpoint_format() {
     source.annual_distribution_cursors={16,5,11};
     source.last_scorer_slot=17;
     source.message_step_pending=false;
+    source.table_copies_frozen=true;source.league_since_refresh=true;
     const Bytes bytes = encode_game_checkpoint(source);
     const auto decoded = decode_game_checkpoint(bytes);
     CHECK(decoded.hok == source.hok && decoded.exe_fingerprint == source.exe_fingerprint);
@@ -4253,10 +4254,11 @@ static void checkpoint_format() {
     CHECK(decoded.annual_distribution_cursors==source.annual_distribution_cursors);
     CHECK(decoded.last_scorer_slot==source.last_scorer_slot);
     CHECK(decoded.message_step_pending==source.message_step_pending);
+    CHECK(decoded.table_copies_frozen&&decoded.league_since_refresh);
     CHECK(encode_game_checkpoint(decoded) == bytes);
     // A genuine version1 layout ends directly after its offers. It remains
     // readable and gets the explicitly historical2/3 default without RNG.
-    Bytes legacy(bytes.begin(),bytes.end()-262); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1
+    Bytes legacy(bytes.begin(),bytes.end()-264); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1 + v8 table-copy flags2
     const auto patch32=[&](size_t at,uint32_t value){for(int b=0;b<4;b++)legacy[at+size_t(b)]=uint8_t(value>>(8*b));};
     patch32(8,1);patch32(12,uint32_t(legacy.size()-20));
     uint32_t crc=0xFFFFFFFFu;
@@ -4267,37 +4269,43 @@ static void checkpoint_format() {
     CHECK(v1.borland_random==source.borland_random&&v1.game_random==source.game_random);
     CHECK(v1.stadium_refusals==(std::array<std::array<uint8_t,11>,4>{}));
     // Version2 includes row counters, but predates process-local stadium gates.
-    legacy.assign(bytes.begin(),bytes.end()-250);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-252);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v2=decode_game_checkpoint(legacy);
     CHECK(v2.line_counts==source.line_counts&&v2.stadium_refusals==v1.stadium_refusals);
     CHECK(v1.save_history==NativeSaveHistory{}&&v2.save_history==NativeSaveHistory{});
     // Version3 contains the construction gates, but has no identity history.
-    legacy.assign(bytes.begin(),bytes.end()-206);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-208);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v3=decode_game_checkpoint(legacy);
     CHECK(v3.line_counts==source.line_counts&&v3.stadium_refusals==source.stadium_refusals&&v3.save_history==NativeSaveHistory{});
     CHECK(v1.annual_distribution_cursors==(std::array<uint8_t,3>{})&&v2.annual_distribution_cursors==v1.annual_distribution_cursors&&v3.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version4 retains history but predates the three session cursors.
-    legacy.assign(bytes.begin(),bytes.end()-5);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-7);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v4=decode_game_checkpoint(legacy);
     CHECK(v4.save_history==source.save_history&&v4.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version5 has the cursors but not the scorer slot of the last pick.
-    legacy.assign(bytes.begin(),bytes.end()-2);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-4);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v5=decode_game_checkpoint(legacy);
     CHECK(v5.annual_distribution_cursors==source.annual_distribution_cursors&&v5.last_scorer_slot==0);
     // Version6 has the scorer slot but no message step flag (loads as due).
-    legacy.assign(bytes.begin(),bytes.end()-1);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-3);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v6=decode_game_checkpoint(legacy);
     CHECK(v6.last_scorer_slot==source.last_scorer_slot&&v6.message_step_pending);
+    // Version7 has the message step flag but no table-copy flags (the copies follow the table).
+    legacy.assign(bytes.begin(),bytes.end()-2);patch32(8,7);patch32(12,uint32_t(legacy.size()-20));
+    crc=0xFFFFFFFFu;
+    for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
+    patch32(16,~crc);const auto v7=decode_game_checkpoint(legacy);
+    CHECK(v7.message_step_pending==source.message_step_pending&&!v7.table_copies_frozen&&!v7.league_since_refresh);
     const auto rejects = [](const Bytes& bad) {
         try { (void)decode_game_checkpoint(bad); return false; } catch (const FormatError&) { return true; }
     };
@@ -4459,6 +4467,10 @@ static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_
             // both sides daily and could conceal export-induced mutations.
             if (continuous.log() != resumed->log()) {
                 std::fprintf(stderr, "checkpoint event mismatch: %s, day %d\n", scenario.name, day + 1);
+                for (size_t i = 0; i < std::max(continuous.log().size(), resumed->log().size()); i++) {
+                    const std::string a = i < continuous.log().size() ? continuous.log()[i] : "-", b = i < resumed->log().size() ? resumed->log()[i] : "-";
+                    if (a != b) { std::fprintf(stderr, "  continuous: %s\n  resumed:    %s\n", a.c_str(), b.c_str()); break; }
+                }
                 CHECK(continuous.log() == resumed->log());
                 break;
             }
