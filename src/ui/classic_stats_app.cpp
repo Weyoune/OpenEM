@@ -2,15 +2,17 @@
 // Statistiken -> Frueher, Verein, Spieler, Fairplay, WM (ovr034:2691 dispatch).
 #include "ui/classic_app.hpp"
 #include "ui/classic_stats_club.hpp"
+#include "ui/classic_stats_fairplay.hpp"
 #include "ui/classic_stats_history.hpp"
 #include "ui/classic_stats_players.hpp"
+#include "ui/classic_stats_wm.hpp"
 
 #include <algorithm>
 
 namespace em::ui {
 
 void ClassicApplication::open_statistics(int item){
-    if(item!=1&&item!=2&&item!=3){notice("Dieser Bereich ist noch nicht nachgebaut.");return;}
+    if(item<1||item>5){notice("Dieser Bereich ist noch nicht nachgebaut.");return;}
     stats_page_=item;
     if(item==1)stats_scroll_=0;                     // 4495:417F local scroll state
     if(item==2)stats_scroll_=classic_stats_club_years(snapshot())-1; // 4495:2513 starts with the last year
@@ -23,10 +25,12 @@ void ClassicApplication::draw_statistics(){
     if(stats_page_==1)draw_classic_stats_history(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==2)draw_classic_stats_club(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==3)draw_classic_stats_players(canvas_,snapshot(),stats_mode_,stats_managers_);
+    else if(stats_page_==4)draw_classic_stats_fairplay(canvas_,snapshot());
+    else if(stats_page_==5)draw_classic_stats_wm(canvas_,snapshot());
 }
 
 void ClassicApplication::click_statistics(int x,int y,bool right){
-    if(right){screen_=ClassicScreen::Main;return;}
+    if(right||stats_page_==4){screen_=ClassicScreen::Main;return;} // Fairplay: sub_19B08 closes on any press
     if(stats_page_==1){
         stats_scroll_=std::clamp(stats_scroll_+classic_stats_history_scroll(x,y),0,30);
     }else if(stats_page_==2){
@@ -38,6 +42,9 @@ void ClassicApplication::click_statistics(int x,int y,bool right){
         if(button>=0&&button<3)stats_mode_=button;
         else if(button==3)stats_managers_=false;
         else if(button==4)stats_managers_=true;
+    }else if(stats_page_==5){
+        const int team=classic_stats_wm_team(x,y);
+        if(team>=0)open_club_info(team,2); // 5396:1ADE stub_ovl13_0095(team,2,0,0)
     }
 }
 
@@ -48,6 +55,8 @@ bool ClassicApplication::render_statistics(std::string_view name){
         return true;
     }
     if(name=="stats-club"){open_statistics(2);return true;}
+    if(name=="stats-wm"){open_statistics(5);return true;}
+    if(name=="stats-fairplay"){open_statistics(4);return true;}
     if(name=="stats-players"||name=="stats-players-goals"||name=="stats-players-assists"||name=="stats-players-managers"){
         open_statistics(3);
         if(name=="stats-players-goals")stats_mode_=0;

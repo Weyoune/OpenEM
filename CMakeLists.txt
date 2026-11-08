@@ -128,7 +128,7 @@ add_library(em_classic STATIC
     src/ui/classic_youth.cpp)
 target_link_libraries(em_classic PUBLIC em_game)
 # Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM)
-target_sources(em_classic PRIVATE src/ui/classic_stats_players.cpp src/ui/classic_stats_history.cpp src/ui/classic_stats_club.cpp)
+target_sources(em_classic PRIVATE src/ui/classic_stats_players.cpp src/ui/classic_stats_history.cpp src/ui/classic_stats_club.cpp src/ui/classic_stats_wm.cpp src/ui/classic_stats_fairplay.cpp)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
 if(EM_BUILD_GUI)

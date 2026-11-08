@@ -220,7 +220,6 @@ void ClassicApplication::click(int x,int y,bool right){
     if(screen_==ClassicScreen::Advertising){click_advertising(x,y,right);return;}
     if(screen_==ClassicScreen::Stadium){click_stadium(x,y,right);return;}
     if(screen_==ClassicScreen::Youth){click_youth(x,y,right);return;}
-    if(screen_==ClassicScreen::Statistics){click_statistics(x,y,right);return;}
     if(fee_editor_)return;
     if(file_preview_)return;
     if(player_detail_){
@@ -241,6 +240,7 @@ void ClassicApplication::click(int x,int y,bool right){
         }else if(inside(x,y,174,216,229,226)&&classic_club_info(snapshot(),*club_info_,club_info_mode_).schedule)open_team_schedule();
         return;
     }
+    if(screen_==ClassicScreen::Statistics){click_statistics(x,y,right);return;}
     if(roster_kind())roster_rules_=false;
     if(contract_editor_){
         auto& e=*contract_editor_;
