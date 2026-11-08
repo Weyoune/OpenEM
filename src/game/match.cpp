@@ -766,7 +766,7 @@ struct MatchRun::Impl {
         minute++;
         LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
         LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
-        if (minute == 21 || minute == 41 || minute == 61 || minute == 66) {
+        if (minute == 21 || minute == 41 || (std::getenv("EM_OT_BREAK") && (minute == 61 || minute == 66) && (hp || ap))) {  // the overtime breaks only recover the managed match (REAL-CODE)
             prepare_match_energy(h, hp ? &hsq : nullptr, true);
             prepare_match_energy(a, ap ? &asq : nullptr, true);
         }
@@ -780,7 +780,7 @@ struct MatchRun::Impl {
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
         if (ap) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line);
-        const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff, minute > 60 ? 70 : 60);
+        const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff, minute > 65 ? 70 : minute > 60 ? 65 : 60);
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
@@ -790,7 +790,8 @@ struct MatchRun::Impl {
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters < a.skaters) stats->short_handed_goals[0]++;
             const bool equal = h.skaters == a.skaters;
-            abox.goal_against(a, ap ? &asq : nullptr);
+            { const int before = abox.code(); abox.goal_against(a, ap ? &asq : nullptr);
+              if (ap && abox.code() != before) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line); }  // ovr030:0151 (sub_42FE1) ends with the recount (REAL-CODE)
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
@@ -800,7 +801,8 @@ struct MatchRun::Impl {
             if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
             if (stats && h.skaters + a.skaters != 11 && a.skaters < h.skaters) stats->short_handed_goals[1]++;
             const bool equal = h.skaters == a.skaters;
-            hbox.goal_against(h, hp ? &hsq : nullptr);
+            { const int before = hbox.code(); hbox.goal_against(h, hp ? &hsq : nullptr);
+              if (hp && hbox.code() != before) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line); }
             if (stats) stats->after_goal(1, equal, a.skaters, h.skaters, ap != nullptr, hp != nullptr);
         }
         // ovl06_2522 (whole-program differential test): energy, line changes and effort only run for a match with a manager
@@ -809,12 +811,15 @@ struct MatchRun::Impl {
         // line changes, effort of the situation (even minutes), penalties.
         bool swap_sides = false;
         if (hp && std::getenv("EM_DEBUG_SCORE")) std::fprintf(stderr, "minute %d score %d:%d draws %zu\n", minute, score.home, score.away, g_game_log ? g_game_log->size() : size_t(0));
-        if (hp || ap || watched) {
-            energy_minute(h, hp ? &hsq : nullptr, rng);
-            energy_minute(a, ap ? &asq : nullptr, rng);
-            if (hp) refresh_line_energy(h, *hp);
-            if (ap) refresh_line_energy(a, *ap);
-            swap_sides = (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
+        if (hp || ap || (watched && minute <= 60)) {  // REAL-CODE: the watched list of the other matches ends with the regular time (the overtime minutes of the other pairs skip energy, swap and line changes)
+            const bool decided_now = opts.knockout && minute > 60 && score.home != score.away;  // the golden goal of the overtime: the minute ends without energy (REAL-CODE)
+            if (!decided_now) {
+                energy_minute(h, hp ? &hsq : nullptr, rng);
+                energy_minute(a, ap ? &asq : nullptr, rng);
+                if (hp) refresh_line_energy(h, *hp);
+                if (ap) refresh_line_energy(a, *ap);
+            }
+            swap_sides = !decided_now && (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
             if (minute % 2 != 0) {  // the swapped side is team A of the routine (its rules are not symmetric)
                 if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute, kinds_a, kinds_h);
                 else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute, kinds_h, kinds_a);
@@ -831,7 +836,7 @@ struct MatchRun::Impl {
                 apply_effort(a, shown_away, shown_home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
             }
         }
-        if (minute != 60 && minute != 70) {
+        if (minute != 60 && minute != 70 && !(opts.knockout && minute > 60 && score.home != score.away)) {  // no penalties in the minute of the golden goal (REAL-CODE)
             penalty_minute(swap_sides ? *apen : *hpen, swap_sides ? *hpen : *apen, true, rng);
             penalty_minute(swap_sides ? *hpen : *apen, swap_sides ? *apen : *hpen, true, rng);
         }
@@ -843,6 +848,7 @@ struct MatchRun::Impl {
             last = 70;
             score.decision_marker = 30;  // ovl05_3573, before minutes 61-70
         }
+        if (opts.knockout && minute > 60 && score.home != score.away) last = minute;  // sudden death: the first goal of the overtime decides (REAL-CODE)
         const bool more = minute < last;
         // a knock-out game that is still level after its last minute goes to the shoot-out at once (the other games go on)
         if (!more && opts.knockout && !shootout_done && score.home == score.away) {

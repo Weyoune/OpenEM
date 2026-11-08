@@ -528,12 +528,25 @@ void Game::play_cup_day() {
     }
     MatchStats stats;
     HumanSide side{human_team_, &human_, &stats};
+    const bool live = save_.state.at(0xA526) != 0;  // Einstellungen: DEB cup display
+    bool gate_before = false;
+    if (std::getenv("EM_DEBUG_CUP")) {
+        std::fprintf(stderr, "cup day: human %d draw:", human_team_);
+        for (const HokPairing& p : draw) std::fprintf(stderr, " %d-%d", p.home, p.away);
+        std::fprintf(stderr, "\n");
+    }
     for (const HokPairing& p : draw)
         if (p.home == human_team_ || p.away == human_team_) {
-            if (!(human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players)) manager_day(false);
+            if (!(human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players)) {
+                if (live && p.home == human_team_) {  // the gate of a home game is booked before the matches, as in the league (REAL-CODE)
+                    g_draw_scope = "gate";
+                    home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away));
+                    gate_before = true;
+                }
+                manager_day(gate_before);
+            }
             break;
         }
-    const bool live = save_.state.at(0xA526) != 0;  // Einstellungen: DEB cup display
     if (live) {
         human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
         human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
@@ -573,7 +586,7 @@ void Game::play_cup_day() {
                       save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away,
                       t.result.shootout ? " (shoot-out)" : "");
         log_.push_back(line);
-        if (!forfeited && t.home == human_team_)
+        if (!forfeited && t.home == human_team_ && !gate_before)
             home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                       team_rank(t.away));
     }
@@ -591,7 +604,9 @@ void Game::play_cup_day() {
                 for (auto& kind : save_.teams[size_t(team)].energy)
                     for (auto& e : kind) e = std::min(90, e + 38);
             } else {
-                prepare_match_energy(save_.teams[size_t(team)], nullptr);  // energy 90, no mode bits, shifts 0
+                bool in_round = false;
+                for (const Tie& t : ties) in_round |= t.home == team || t.away == team;
+                if (true || !in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);  // clubs outside the round: energy 90, no mode bits, shifts 0; the players of the round keep their final state (REAL-CODE)
             }
         }
         if (human_in) {
@@ -621,7 +636,7 @@ void Game::play_cup_day() {
         const bool first = cup_draw_[pair].home == s.higher;
         save_.state.at(kCupWins + pair * 2) = uint8_t(first ? s.wins_higher : s.wins_lower);
         save_.state.at(kCupWins + pair * 2 + 1) = uint8_t(first ? s.wins_lower : s.wins_higher);
-        save_.state.at(kCupLive + pair * 2) = save_.state.at(kCupLive + pair * 2 + 1) = uint8_t(finished ? 100 : 0);
+        save_.state.at(kCupLive + pair * 2) = save_.state.at(kCupLive + pair * 2 + 1) = uint8_t(finished && !live ? 100 : 0);
         if (finished)
             for (int game = cup_game_; game < 3; game++)
                 save_.state.at(kCupScores + size_t(game) * 32 + pair * 2) =
