@@ -42,12 +42,14 @@ int main(int argc, char** argv) {
         // A scene may exclude a documented rectangle of background residue (left, top, right, bottom).
         struct Mask { int left = 0, top = 0, right = -1, bottom = -1; };
         struct Scene { const char* name; int mouse_x, mouse_y; const char* save; std::array<Mask, 2> masks{}; };
-        constexpr std::array<Scene, 5> scenes{{
+        constexpr std::array<Scene, 7> scenes{{
             // Frueher: the capture shows 8 background pixels between the two frames that differ from KB22
             // (centre line x=160 ends at y=148, 168..170/149). They also differ in the capture of the main
             // menu before the click; not reproduced in a DOSBox capture (residue or emulator latch copy).
             {"stats-history", 80, 219, "MONAT1", {{{160, 149, 160, 153}, {168, 149, 170, 149}}}},
             {"stats-history", 80, 219, "MORNPOST", {{{160, 149, 160, 153}, {168, 149, 170, 149}}}},
+            {"stats-club", 150, 237, "MONAT1"},
+            {"stats-club", 150, 237, "MORNPOST"},
             {"stats-players", 187, 219, "MONAT1"},
             {"stats-players", 187, 219, "MORNPOST"},
             {"euro-fixtures1", 216, 236, "MONAT1"},

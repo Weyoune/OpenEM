@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Statistiken -> Frueher, Verein, Spieler, Fairplay, WM (ovr034:2691 dispatch).
 #include "ui/classic_app.hpp"
+#include "ui/classic_stats_club.hpp"
 #include "ui/classic_stats_history.hpp"
 #include "ui/classic_stats_players.hpp"
 
@@ -9,9 +10,10 @@
 namespace em::ui {
 
 void ClassicApplication::open_statistics(int item){
-    if(item!=1&&item!=3){notice("Dieser Bereich ist noch nicht nachgebaut.");return;}
+    if(item!=1&&item!=2&&item!=3){notice("Dieser Bereich ist noch nicht nachgebaut.");return;}
     stats_page_=item;
     if(item==1)stats_scroll_=0;                     // 4495:417F local scroll state
+    if(item==2)stats_scroll_=classic_stats_club_years(snapshot())-1; // 4495:2513 starts with the last year
     if(item==3){stats_mode_=2;stats_managers_=false;} // 4080:0000 starts with SCORER / LIGA
     screen_=ClassicScreen::Statistics;
 }
@@ -19,6 +21,7 @@ void ClassicApplication::open_statistics(int item){
 void ClassicApplication::draw_statistics(){
     if(stats_page_==99)return;
     if(stats_page_==1)draw_classic_stats_history(canvas_,snapshot(),stats_scroll_);
+    else if(stats_page_==2)draw_classic_stats_club(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==3)draw_classic_stats_players(canvas_,snapshot(),stats_mode_,stats_managers_);
 }
 
@@ -26,6 +29,10 @@ void ClassicApplication::click_statistics(int x,int y,bool right){
     if(right){screen_=ClassicScreen::Main;return;}
     if(stats_page_==1){
         stats_scroll_=std::clamp(stats_scroll_+classic_stats_history_scroll(x,y),0,30);
+    }else if(stats_page_==2){
+        const int years=classic_stats_club_years(snapshot()),arrow=classic_stats_club_arrow(x,y);
+        if(years&&arrow==-1&&stats_scroll_<years-1)++stats_scroll_;
+        else if(years&&arrow==1&&stats_scroll_>0)--stats_scroll_;
     }else if(stats_page_==3){
         const int button=classic_stats_players_button(x,y);
         if(button>=0&&button<3)stats_mode_=button;
@@ -40,6 +47,7 @@ bool ClassicApplication::render_statistics(std::string_view name){
         if(name=="stats-history-scrolled")stats_scroll_=30;
         return true;
     }
+    if(name=="stats-club"){open_statistics(2);return true;}
     if(name=="stats-players"||name=="stats-players-goals"||name=="stats-players-assists"||name=="stats-players-managers"){
         open_statistics(3);
         if(name=="stats-players-goals")stats_mode_=0;
