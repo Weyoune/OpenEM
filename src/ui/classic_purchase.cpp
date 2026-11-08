@@ -14,7 +14,7 @@ void ClassicApplication::draw_fee_editor(){
     const auto& editor=*fee_editor_;const auto& h=snapshot();
     const auto roster=hok_squad(h,4);const auto& player=h.players.at(size_t(roster.at(size_t(editor.pool_slot)).player));
     plain_frame(2,28,168,73,4);
-    canvas_.text(ClassicFontId::Flow,6,40,player.name+" kaufen",10,28,163);
+    canvas_.text(ClassicFontId::Flow,6,40,player.name+(editor.loan?" leihen":" kaufen"),10,28,163);
     canvas_.line(6,43,163,43,7);
     canvas_.text(ClassicFontId::Flow,11,54,"Ihr Angebot:",7);
     canvas_.text(ClassicFontId::Flow,11,66,editor.digits,1);
@@ -26,6 +26,7 @@ void ClassicApplication::finish_fee(bool cancel){
     if(cancel||editor.digits.empty())return;
     const long fee=std::stol(editor.digits)*3;
     if(!fee)return;
+    if(editor.loan){finish_loan(editor.pool_slot,fee);return;}
     try{
         auto backing=std::make_unique<HokFile>(clone_hok(snapshot()));
         PurchaseDraft draft;PurchaseResult result;
@@ -40,7 +41,7 @@ void ClassicApplication::finish_fee(bool cancel){
         switch(result){
             case PurchaseResult::SellerRefused:notice("Ihr Angebot\nwurde abgelehnt.");break;
             case PurchaseResult::InsufficientFunds:notice("Sie haben nicht\ngenug Geld !");break;
-            case PurchaseResult::SquadFull:notice("Kein Platz mehr\nim Kader !");break;
+            case PurchaseResult::SquadFull:notice("Schon 29 Mann\nim Team.");break;
             case PurchaseResult::Blocked:notice("Angebot wurde\nbereits abgelehnt.");break;
             default:notice("Dieser Transfer ist derzeit nicht möglich.");break;
         }

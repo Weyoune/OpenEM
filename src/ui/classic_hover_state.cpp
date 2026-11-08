@@ -11,7 +11,7 @@ std::optional<ClassicRosterKind> ClassicApplication::roster_kind() const{
     }
 }
 void ClassicApplication::update_roster_hover(){
-    if(!session_.loaded()||player_detail_||contract_editor_||fee_editor_||sale_quote_||!notice_.empty()||quit_question_||file_preview_)return;
+    if(!session_.loaded()||player_detail_||contract_editor_||fee_editor_||sale_quote_||!notice_.empty()||quit_question_||talent_question_||file_preview_)return;
     const auto kind=roster_kind();
     if(!kind){hover_kind_.reset();roster_hover_={};roster_rules_=false;transfer_hover_={};pool_rules_=pool_help_visible_=false;return;}
     hover_kind_=kind;

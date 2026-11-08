@@ -3009,6 +3009,7 @@ g_draw_scope = "image";
     // instead advances the stadium and healing without normal club training.
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
+        talent_search_week();  // ovr038:33FA, before 162c:1c5b and 146e:0c89
         weekly_team_drift();
         if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: weekly at day %d event(today) %d event(next) %d league_day(next) %d\n", day_, int(calendar_.event(day_)), int(calendar_.event(day_ + 1)), int(calendar_.league_day(day_ + 1)));
         squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_) == 0);  // the flag is the calendar byte of the current day (146e:0f5a)

@@ -74,6 +74,8 @@ add_library(em_game STATIC
     src/game/national_team.cpp
     src/game/native_roster.cpp
     src/game/purchase.cpp
+    src/game/loan.cpp
+    src/game/talent.cpp
     src/game/reporting.cpp
     src/game/penalties.cpp
     src/game/schedule.cpp
@@ -130,12 +132,14 @@ target_link_libraries(em_classic PUBLIC em_game)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
 if(EM_BUILD_GUI)
-    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp)
+    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_loan.cpp src/ui/classic_scout.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp)
     target_link_libraries(em_classic_app PUBLIC em_frontend em_classic ${EM_SDL_TARGET})
     add_executable(openem WIN32 src/ui/classic_main.cpp)
     target_link_libraries(openem PRIVATE em_classic_app)
     add_executable(em_classic_app_tests tests/classic_app_tests.cpp)
     target_link_libraries(em_classic_app_tests PRIVATE em_classic_app)
+    add_executable(em_classic_loan_scout_tests tests/classic_loan_scout_tests.cpp)
+    target_link_libraries(em_classic_loan_scout_tests PRIVATE em_classic_app)
     add_executable(em_classic_raster_tests tests/classic_raster_tests.cpp)
     target_link_libraries(em_classic_raster_tests PRIVATE em_classic_app)
 endif()
@@ -163,6 +167,8 @@ target_link_libraries(em_native_roster_tests PRIVATE em_game)
 add_test(NAME native_roster COMMAND em_native_roster_tests)
 add_executable(em_purchase_tests tests/purchase_tests.cpp)
 target_link_libraries(em_purchase_tests PRIVATE em_game)
+add_executable(em_loan_talent_tests tests/loan_talent_tests.cpp)
+target_link_libraries(em_loan_talent_tests PRIVATE em_game)
 add_executable(em_team_refresh_tests tests/team_refresh_tests.cpp)
 target_link_libraries(em_team_refresh_tests PRIVATE em_game)
 add_executable(em_reporting_tests tests/reporting_tests.cpp)
@@ -229,6 +235,7 @@ if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME ui_session COMMAND em_ui_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/ui-test-work")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/nativepurchase-cancel.hok")
         add_test(NAME purchase_dialog COMMAND em_purchase_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
+        add_test(NAME loan_talent COMMAND em_loan_talent_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
         add_test(NAME team_refresh COMMAND em_team_refresh_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
         add_test(NAME reporting COMMAND em_reporting_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/advertising-monat1-accepted.hok")
@@ -273,6 +280,7 @@ if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME stock_actions COMMAND em_stock_tests "${EM_DATA}" "${EM_REFERENCE}")
     if(EM_BUILD_GUI)
         add_test(NAME classic_input COMMAND em_classic_app_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
+        add_test(NAME classic_loan_scout COMMAND em_classic_loan_scout_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
         set(EM_CLASSIC_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/raster_goldens" CACHE PATH "Native DOSBox RGB reference captures")
         if(EXISTS "${EM_CLASSIC_REFERENCE}/main-start.rgb")
             add_test(NAME classic_raster COMMAND em_classic_raster_tests "${EM_DATA}" "${EM_REFERENCE}" "${EM_CLASSIC_REFERENCE}")
