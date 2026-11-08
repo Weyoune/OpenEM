@@ -416,6 +416,12 @@ void Game::manager_day(bool home_game_today) {
 }
 
 void Game::play_league_day() {
+    // the 28 clubs outside the leagues (36..63) do not play and are rested like before a cup day (REAL-CODE period 17:
+    // energy 90 after the weekly drift)
+    if (!std::getenv("EM_OLD_LEAGUE_REST"))
+        for (int t = 36; t < 64; t++)
+            for (auto& kind : save_.teams[size_t(t)].energy)
+                for (auto& e : kind) e = 90;
     // 4F6E:161D mode0 prepares all three caches before any masked league
     // game, using each raw round even when another league is already at45.
     for(size_t league=0;league<3;++league){
