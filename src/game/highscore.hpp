@@ -67,7 +67,7 @@ HighscoreTables load_highscore_tables(const Bytes& exe);
 
 int highscore_file_number(const HokFile& h);  // DS:0256, 0 = no list for this setting
 uint32_t highscore_game_identity(const HokFile& h);  // DS:02C4
-std::filesystem::path highscore_file_name(int number);  // HIGH/H.<n>
+std::filesystem::path highscore_file_name(int number);  // HIGH/H.<n>, extension cut to three characters as by DOS
 
 // ovr040:282F without its two random parts: `image` is the freshly computed image, `squad_values` the market
 // values of the first count(m) squad slots. `managers` = number of human managers (DS:0386).

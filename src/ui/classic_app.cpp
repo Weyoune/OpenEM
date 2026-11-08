@@ -377,7 +377,7 @@ void ClassicApplication::click(int x,int y,bool right){
             if(index<files_.size()){
                 const auto entry=files_[index];const bool again=file_selection_==int(index);file_selection_=int(index);
                 if(entry.directory){file_directory_=entry.path;filename_.clear();file_page_=0;refresh_files();}
-                else if(entry.save){filename_=path_text(entry.path.filename());filename_focus_=false;if(again)accept_file();}
+                else{filename_=path_text(entry.path.filename());filename_focus_=false;if(again&&entry.save)accept_file();} //native: any file fills FILENAME
             }
             return;
         }

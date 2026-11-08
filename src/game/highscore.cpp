@@ -65,7 +65,8 @@ HighscoreTables load_highscore_tables(const Bytes& exe) {
 int highscore_file_number(const HokFile& h) { return int16_t(le16(h.state, kFileNumber)); }
 uint32_t highscore_game_identity(const HokFile& h) { return le32(h.header, 0xB4); }
 std::filesystem::path highscore_file_name(int number) {
-    return std::filesystem::path("HIGH") / ("H." + std::to_string(number));
+    // DOS keeps three extension characters: the WM-only list 30000 (DS:0256 = 7530h) is H.300.
+    return std::filesystem::path("HIGH") / ("H." + std::to_string(number).substr(0, 3));
 }
 
 long highscore_base(const HighscoreTables& t, const HokFile& h, int m, int image, const std::vector<long>& values,

@@ -95,6 +95,27 @@ int main(int argc, char** argv) {
             app.draw();
             check(differences(app.canvas(), goldens / "main-manager-start.rgb") == 0, "Manager footer");
         }
+        // Gemischtes -> Laden in the reference directory: the first click on HIGH enters it, the kept selection
+        // index marks H.141, a click on that (non-savegame) file puts its name into FILENAME.
+        {
+            ClassicApplication app(references, output / "files", references / "START.HOK");
+            app.click(200, 170, false);
+            app.click(26, 220, false);
+            require(app.screen() == ClassicScreen::Files, "Laden opens the file page");
+            app.click(105, 72, false);
+            app.click(105, 72, false);
+            app.motion(105, 72);
+            app.draw();
+            check(differences(app.canvas(), goldens / "files-load-high-start.rgb") == 0, "Laden in C:\\HIGH with H.141 chosen");
+            require(app.screen() == ClassicScreen::Files, "a non-savegame file is not opened");
+            app.click(10, 10, true);
+            require(app.screen() == ClassicScreen::Main, "right click returns to the menu");
+            app.click(80, 220, false);
+            require(app.screen() == ClassicScreen::Files, "Sichern opens the file page");
+            app.click(10, 10, true);
+            app.click(127, 219, false);
+            require(app.screen() == ClassicScreen::Settings, "Einst. opens the settings page");
+        }
 
         // Highscore from the data directory's file (one record: AGENT replaced by the current score).
         {
@@ -126,6 +147,68 @@ int main(int argc, char** argv) {
             check(differences(app.canvas(), goldens / "highscore-table-start.rgb") == 0, "highscore with five records");
             const auto written = read_highscore_table(read_file(saves / "HIGH" / "H.141"));
             check(written.row(2).score == 1797 && written.row(3).name == "OPA", "merged file");
+        }
+        // Manager -> Neuer, with the clicks of the native capture session (pointer hotspot one row above the click).
+        {
+            ClassicApplication app(data, output / "new", references / "START.HOK");
+            const auto before = app.session().game().checkpoint_bytes();
+            app.click(45, 105, false);
+            app.click(240, 220, false);
+            require(app.screen() == ClassicScreen::NewManager, "Neuer opens the start menu");
+            app.motion(240, 219);
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-start.rgb") == 0, "start menu with the running manager");
+            app.click(90, 110, false);  // name column of an empty row: nothing
+            app.click(25, 110, false);  // face column, row 1
+            app.motion(319, 239);       // in this capture the native pointer stood in the bottom right corner
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-faces-start.rgb") == 0, "face board");
+            app.click(210, 140, false);  // face 6
+            app.text_input("START");     // the native session had these keys still buffered
+            app.key(SDLK_RETURN);
+            app.motion(210, 139);
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-name-start.rgb") == 0, "face and name of the new manager");
+            app.click(90, 107, false);
+            app.click(156, 110, false);  // crest column, row 1
+            app.motion(156, 109);
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-clubs-start.rgb") == 0, "club board, first league page");
+            app.click(311, 190, false);  // down arrow: second league page, pointer frames the last crest
+            app.motion(311, 189);
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-clubs2-start.rgb") == 0, "club board, second page with name");
+            app.click(210, 60, false);  // ERC Schwenningen
+            app.motion(210, 59);
+            app.draw();
+            check(differences(app.canvas(), goldens / "newmanager-chosen-start.rgb") == 0, "new manager with club");
+            app.click(280, 212, false);  // Los jetzt!
+            require(app.screen() == ClassicScreen::Main, "Los jetzt! returns to the menu");
+            require(app.session().game().checkpoint_bytes() == before, "the single-manager game stays unchanged");
+        }
+        // Neuer without a new row returns silently; a row needs face and club.
+        {
+            ClassicNewManager setup;
+            ClassicApplication app(data, output / "new2", references / "START.HOK");
+            setup.open(app.session().game().save());
+            const auto& h = app.session().game().save();
+            require(setup.click(h, 280, 212, false) == ClassicNewManager::Result::Leave, "Los jetzt! without a new manager");
+            setup.click(h, 25, 160, false);
+            require(setup.panel() == ClassicNewManager::Panel::Faces && setup.active_row() == 2, "face board for row 2");
+            require(setup.click(h, 245, 100, false) == ClassicNewManager::Result::None && setup.rows()[2].face == -1,
+                    "face 4 (row 1, column 1) taken by the running manager cannot be chosen");
+            setup.click(h, 205, 60, false);
+            require(setup.rows()[2].face == 0 && setup.editing_name(), "face 0 chosen, name field open");
+            setup.text("A");
+            setup.key(SDLK_RETURN);
+            require(setup.editing_name(), "a one-letter name is refused");
+            setup.text("B");
+            setup.key(SDLK_RETURN);
+            require(!setup.editing_name() && setup.rows()[2].name == "AB", "name accepted");
+            require(setup.click(h, 280, 212, false) == ClassicNewManager::Result::None, "a row without club blocks Los jetzt!");
+            setup.click(h, 20, 160, true);
+            require(setup.rows()[2].face < 0, "right click removes the new manager");
+            require(setup.click(h, 280, 212, false) == ClassicNewManager::Result::Leave, "then Los jetzt! leaves");
         }
         if (failures) throw std::runtime_error(std::to_string(failures) + " checks failed");
         std::puts("classic_misc tests passed");

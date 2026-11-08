@@ -232,17 +232,20 @@ void ClassicApplication::draw_files(){
         for(int row=0;row<16;row++){
             const size_t index=file_page_+size_t(col*16+row);if(index>=files_.size())continue;
             const auto& e=files_[index];canvas_.text(mini,48+80*col,60+7*row,e.name,e.directory?6:e.save?24:1);
-            if(int(index)==file_selection_)canvas_.rect(43+80*col,55+7*row,45+80*col,60+7*row,24);
+            if(int(index)==file_selection_){ //native 1902:0106 style 0 (DS:4EAE light 0x12, fill 0x11, dark 0x10)
+                const int l=43+80*col,t=55+7*row,r=45+80*col,b=60+7*row;
+                canvas_.line(l,t,r-1,t,0x12);canvas_.line(l,t,l,b,0x12);canvas_.line(r,t,r,b,0x10);canvas_.line(l+1,b,r,b,0x10);canvas_.rect(l+1,t+1,r-1,b-1,0x11);
+            }
         }
     }
     canvas_.blit(4,150,169,20,0,9,8);canvas_.blit(4,174,169,20,9,9,8);
     canvas_.rect(88,187,290,193,4);canvas_.rect(88,197,290,203,4);
-    canvas_.text(mini,35,192,"VERZEICHNIS:",1);canvas_.text_native(mini,88,192,virtual_file_path(file_directory_),1);
-    canvas_.text(mini,35,202,"FILENAME  :",1);canvas_.text(mini,88,202,filename_,1);
+    canvas_.text_native(mini,35,192,"VERZEICHNIS: "+virtual_file_path(file_directory_),1); //one string, DS:26EE
+    canvas_.text(mini,35,202,"FILENAME      :",1);canvas_.text(mini,88,202,filename_,1); //label DS:26FC
     if(filename_focus_){const int x=88+canvas_.font().measure(mini,filename_);canvas_.rect(x,198,x+2,202,1);}
     constexpr const char* buttons[]={"A:","B:","C:","D:","E:","F:","G:","LÖSCHEN"};
     for(int i=0;i<8;i++){
-        const int x=53+59*(i%4),y=207+13*(i/4);canvas_.blit(4,x,y,17,179,57,12);canvas_.text(mini,x,y+7,buttons[i],29,1,x+59);
+        const int x=53+59*(i%4),y=207+13*(i/4);canvas_.blit(4,x,y,17,179,57,12,true,0);canvas_.text(mini,x,y+7,buttons[i],29,1,x+59); //native corners (index 0) stay transparent
     }
 }
 
