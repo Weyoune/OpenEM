@@ -41,6 +41,7 @@
 #include "game/national_team.hpp"
 #include "game/schedule.hpp"
 #include "game/scorers.hpp"
+#include "game/settings.hpp"
 #include "game/season.hpp"
 #include "game/season_end.hpp"
 #include "game/sponsors.hpp"
@@ -215,6 +216,10 @@ public:
     void enter_strengths(); // explicit146C(manager,0), distinct from pure rendering
     void enter_club_info(int team);
     int set_team_reporting(int team,int mode); //0 off,1 intermediate results,2 goals
+    // Einstellungen page (settings.hpp): switches, game speed. Pure state bytes, no random numbers.
+    GameSettings settings() const;
+    int toggle_setting(int widget,int manager);
+    void set_game_speed(int speed);
     // Positive raw amount: deposit/repay. Negative: withdraw/borrow. The bank
     // permits withdrawal of all savings, or 6,000,000 raw minus existing debt,
     // whichever is greater (the savings are not added to the credit allowance).

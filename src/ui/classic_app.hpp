@@ -10,7 +10,7 @@
 #include "ui/classic_youth.hpp"
 
 namespace em::ui {
-enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth };
+enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings };
 
 class ClassicApplication {
 public:
@@ -84,6 +84,9 @@ private:
     void update_stadium_hover();
     void resolve_stadium_build(bool accept);
     void click_youth(int x,int y,bool right);
+    void open_settings();
+    void draw_settings();
+    void click_settings(int x,int y,bool right);
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);
@@ -150,10 +153,14 @@ private:
     ClassicStadiumSelection stadium_selection_;
     std::optional<StadiumBuildDraft> stadium_build_;
     int stadium_next_value_width_=2;
+    bool settings_rink_hint_shown_=false; //native byte DS:3014: the Torszenen mode 2 hint appears once per program run
     std::string notice_;
     std::vector<std::string> pending_notices_;
     bool save_mode_=false, filename_focus_=false;
     std::optional<uint64_t> native_notice_until_;
+    std::optional<uint64_t> match_banner_until_; //native ovr030:081D "Ligaspiel" banner before the own league match
+    int match_banner_day_=-1;
+    void draw_banner(std::string_view text);
     bool native_notice_return_main_=false;
     std::string filename_;
     std::vector<FileEntry> files_;
