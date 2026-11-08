@@ -563,7 +563,10 @@ void Game::play_cup_day() {
             break;
         }
     if (live && std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
-        // without the human club the live round still starts with the stream spin of the day (REAL-CODE period 7)
+        // without the human club the live round still starts with the match load of the human squad (manager +0xF0,
+        // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
+        if (human_team_ >= 0 && human_team_ < kHokTeams)
+            save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(human_team_)], human_));
         g_draw_scope = "randomize";
         const int spin = brng_.range(100, 300);
         for (int i = 0; i < spin; i++) rng_.range(0, 1);
@@ -3027,7 +3030,7 @@ g_draw_scope = "league-day";
         play_league_day();
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;
     }
-g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d\n", day_, int(event), int(calendar_.league_day(day_)));
+g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d at %zu\n", day_, int(event), int(calendar_.league_day(day_)), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     if (event == kEventCup) play_cup_day();
     if (event == kEventEuroCup) play_euro_day();
     if (event == kEventPlayoff) play_playoff_day();
