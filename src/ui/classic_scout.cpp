@@ -26,9 +26,8 @@ void ClassicApplication::draw_talent_question(){
     canvas_.text_native(mini,105,157,"Preis: "+money(session_.game().talent_search_price()),7,0,210);
 }
 void ClassicApplication::show_manager_news(){
-    if(!session_.loaded())return;
-    for(const auto& text:session_.game().manager_news()){
-        if(notice_.empty())notice_=text;else pending_notices_.push_back(text);
-    }
+    // The talent result is a message entry (ovr036:01CA); the main menu opens the message field for it
+    // (check_new_messages, classic_career.cpp) instead of a dialog. Season-review messages appear at once.
+    show_immediate_messages();
 }
 } // namespace em::ui

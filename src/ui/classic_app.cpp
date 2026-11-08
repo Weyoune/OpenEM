@@ -29,7 +29,7 @@ ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::pa
     :data_(std::move(data)),saves_(std::move(saves)),session_(data_),canvas_(data_),roster_help_(read_file(data_/"EM.EXE")),transfer_help_(read_file(data_/"EM.EXE")),calendar_(load_season_calendar(read_file(data_/"EM.EXE"))),schedule_(load_schedule_tables(read_file(data_/"EM.EXE"))) {
     if(!initial.empty())session_.load(initial);
     if(session_.loaded())table_order_=session_.game().league(division_).ranking;
-    if(!session_.loaded())open_files(false);
+    if(!session_.loaded()){if(session_.can_start_new_game())open_start_menu();else open_files(false);}
 }
 const HokFile& ClassicApplication::snapshot(){
     if(!view_||view_revision_!=session_.revision()){
@@ -78,6 +78,7 @@ void ClassicApplication::tick(){
         finish_timed_native_notice();
     }
     if(!advancing_)update_roster_hover();
+    if(!advancing_)check_new_messages();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
     if(match_banner_until_){
         if(SDL_GetTicks64()<*match_banner_until_)return;
@@ -232,6 +233,7 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(advancing_)return;
+    if(career_click(x,y,right))return;
     if(screen_==ClassicScreen::Advertising){click_advertising(x,y,right);return;}
     if(screen_==ClassicScreen::Stadium){click_stadium(x,y,right);return;}
     if(screen_==ClassicScreen::Youth){click_youth(x,y,right);return;}
@@ -453,6 +455,7 @@ void ClassicApplication::release(){
     //7348:1188..11B4 restores the chooser on either mouse-button release.
     //The pointer position and an additional button-down do not close it.
     file_preview_.reset();
+    career_release();
 }
 void ClassicApplication::motion(int x,int y){
     mouse_x_=x;mouse_y_=y;
@@ -468,6 +471,7 @@ void ClassicApplication::motion(int x,int y){
 }
 void ClassicApplication::key(int key){
     if(native_notice_until_||sale_quote_)return;
+    if(career_key(key))return;
     if(screen_==ClassicScreen::NewManager){key_misc(key);return;}
     if(screen_==ClassicScreen::Youth)return; //087B is mouse-driven, including Escape
     if(screen_==ClassicScreen::Stadium){if(!notice_.empty())notice_.clear();return;}
@@ -541,6 +545,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::Statistics:draw_statistics();break;
         case ClassicScreen::Highscore:case ClassicScreen::NewManager:draw_misc();break;
     }
+    draw_career();
     draw_roster_hover();
     if(sale_quote_)draw_sale_offer();
     if(fee_editor_)draw_fee_editor();

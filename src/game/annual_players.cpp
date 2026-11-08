@@ -20,7 +20,7 @@ AnnualPlayerReview annual_owned_player(HokFile& h,uint8_t id,int manager,const C
         if(h.state.at(row+0x0b)!=0||!(h.state.at(row+0x18)&0x80))
             return {AnnualPlayerStatus::Stayed,location->slot,0};
     }
-    (void)draw(0,3); // immediate notification date, including a full queue
+    const int notice_back=draw(0,3); // immediate notification date (ovr026:09EB), including a full queue
     native_remove_player(h,manager,location->slot);
     const size_t global=0x4fa5+size_t(id)*0x21;
     h.state.at(global+0x1a)=6;
@@ -29,7 +29,7 @@ AnnualPlayerReview annual_owned_player(HokFile& h,uint8_t id,int manager,const C
     h.state.at(global+0x15)=uint8_t(draw(base-5,base+5));
     h.state.at(global+0x19)=0;
     h.state.at(global+0x16)=uint8_t(draw(base-5,base+5));
-    return {disabled?AnnualPlayerStatus::Disabled:AnnualPlayerStatus::Retired,location->slot,payment};
+    return {disabled?AnnualPlayerStatus::Disabled:AnnualPlayerStatus::Retired,location->slot,payment,notice_back};
 }
 void annual_global_skills(Bytes& state,const ContractRandomDraw& draw){
     if(state.size()<0x4fc6+199*0x21)throw FormatError("annual players: truncated globals");

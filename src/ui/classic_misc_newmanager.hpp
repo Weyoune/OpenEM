@@ -33,6 +33,9 @@ public:
     };
 
     void open(const HokFile& h);
+    // Start of a new game (argument 1): no running managers; "Los jetzt!" needs one complete new row.
+    void open_start(const HokFile& base);
+    bool start_mode() const { return start_mode_; }
     void draw(ClassicCanvas& canvas, const HokFile& h, int mouse_x, int mouse_y) const;
     Result click(const HokFile& h, int x, int y, bool right);
     void key(int key);
@@ -60,5 +63,6 @@ private:
     int pressed_arrow_ = 0;                  // scroll arrow held down: -1 up, +1 down
     std::array<uint8_t, 4> options_{};       // state 0x28 (DS:0118): level, duration, league, strength
     bool highscore_ = false;                 // DS:0256 != 0: notepad instead of the bare nail
+    bool start_mode_ = false;                // ovr027:0135 argument 1 (new game)
 };
 }  // namespace em::ui
