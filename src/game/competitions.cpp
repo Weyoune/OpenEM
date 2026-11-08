@@ -26,9 +26,15 @@ MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameR
                     bool playoff) {
     const HumanSquad* hh = home == human.team ? human.squad : nullptr;
     const HumanSquad* ha = away == human.team ? human.squad : nullptr;
-    if (!playoff && !hh && !ha)
+    if (!hh && !ha && playoff) {  // a play-off game without the human club: set-up (5 skaters, 02a5) and a quick result (REAL-CODE period 28)
+        HokTeam h = teams[size_t(home)], a = teams[size_t(away)];
+        prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
+        setup_computer_team(h, a); setup_computer_team(a, h);
+        return knockout_quick(h, a, home < kFirstForeignTeam, away < kFirstForeignTeam, rng, 0, playoff);
+    }
+    if (!hh && !ha)
         return knockout_quick(teams[size_t(home)], teams[size_t(away)], home < kFirstForeignTeam,
-                              away < kFirstForeignTeam, rng);
+                              away < kFirstForeignTeam, rng, 0, playoff);
     MatchOptions opts;
     opts.knockout = true;
     opts.playoff = playoff;

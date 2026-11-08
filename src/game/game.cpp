@@ -544,6 +544,33 @@ bool Game::human_in_next_cup() const {
     });
 }
 
+// The human club plays on the next play-off day: in a best-of-five series (the first eight of the first division, then
+// the winners) or, on the first and third day of a round, in a relegation group (11th/12th with the 1st/2nd below).
+bool Game::human_in_next_playoff() const {
+    const int day = playoff_day_, stage = day / 5;
+    if (stage > 2) return false;
+    const bool relegation_day = day % 5 == 0 || day % 5 == 2;
+    if (day == 0) {  // the groups and the quarter finals are formed from the final tables
+        for (int l = 0; l < 3; l++) {
+            const League& lg = leagues_[size_t(l)];
+            if (human_team_ < lg.first_team || human_team_ >= lg.first_team + kHokLeagueSize) continue;
+            const int pos = lg.rows[size_t(human_team_ - lg.first_team)].position;
+            return (l == 0 && pos < 8) || (l < 2 && pos >= 10) || (l > 0 && pos < 2);
+        }
+        return false;
+    }
+    if (relegation_day)
+        for (const GroupTable& g : relegation_)
+            for (int team : g.teams) if (team == human_team_) return true;
+    if (day % 5 == 0) {  // the next round is formed from the winners of this one
+        for (const Series& s : series_) if (s.winner() == human_team_) return true;
+        return false;
+    }
+    return std::any_of(series_.begin(), series_.end(), [&](const Series& s) {
+        return s.wins_higher < 3 && s.wins_lower < 3 && (s.higher == human_team_ || s.lower == human_team_);
+    });
+}
+
 // The human club plays on the next EuroCup day (group phase rounds 0-5, final group 6-11).
 bool Game::human_in_next_euro() const {
     if (euro_round_ >= 12) return false;
@@ -918,7 +945,9 @@ void Game::injury_minute(int load, const HokTeam* on_ice) {
     for (const HokSquadPlayer& sp : save_.squad) with_role += sp.player >= 0 && sp.role != 0;
     if (with_role < 5) return;
     if (!match_injury_minute(load, finance_.level, brng_)) return;
-    for (int tries = 0; tries < 150; tries++) {
+    // ovr030:23B6 (sub_45215): up to 151 picks; a pick on the ice (for a watched team, sub_5F431) is chosen when rand(0,10)
+    // exceeds 3 (byte +0x11 below +0x10) or 7; a goalkeeper (position / 25 == 0, sub_12380) then only when rand(0,2) is 0
+    for (int tries = 0; tries <= 150; tries++) {
         const size_t slot = size_t(brng_.range(0, int(save_.squad.size()) - 1));
         const HokSquadPlayer& sp = save_.squad[slot];
         const uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
@@ -926,8 +955,8 @@ void Game::injury_minute(int load, const HokTeam* on_ice) {
         if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury pick slot %zu line %d role %d lines on ice %d/%d\n", slot, sp.line, sp.role, on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
         if (on_ice && (sp.line & 0x7F) != on_ice->current_line[(sp.line >> 7) & 1] + 1) continue;  // ovr030:2444: only players on the ice
         const bool weaker = r[0x11] < r[0x10];
-        if (brng_.range(0, 10) > (weaker ? 3 : 7)) continue;
-        if (save_.players[size_t(sp.player)].position == 0 && brng_.range(0, 2) == 0) continue;
+        if (brng_.range(0, 10) <= (weaker ? 3 : 7)) continue;
+        if (std::min(2, save_.players[size_t(sp.player)].position / 25) == 0 && brng_.range(0, 2) != 0) continue;
         injure(slot, 1);
         break;
     }
@@ -1781,9 +1810,17 @@ void Game::play_playoff_day() {
             for (size_t pair = 0; pair < pairs.size(); pair++) {
                 const Pairing& p = pairs[pair];
                 const int home = t.teams[size_t(p.home)], away = t.teams[size_t(p.away)];
-                const MatchResult r = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0,
-                                                   home == human_team_ ? &human_ : nullptr,
-                                                   away == human_team_ ? &human_ : nullptr, &stats);
+                MatchResult r;
+                if (home != human_team_ && away != human_team_) {  // without the human club a quick result (REAL-CODE period 28)
+                    HokTeam& h = save_.teams[size_t(home)];
+                    HokTeam& a = save_.teams[size_t(away)];
+                    prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
+                    setup_computer_team(h, a); setup_computer_team(a, h);
+                    r = quick_competition_match(h, a, true, true, rng_, 0, false, true);
+                } else {
+                    r = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0, home == human_team_ ? &human_ : nullptr,
+                                     away == human_team_ ? &human_ : nullptr, &stats);
+                }
                 t.book(home, away, r);
                 const size_t o = kGroupResults + 0x48 + g * 0x24 + size_t(round) * 6 + pair * 2;
                 save_.state.at(o) = uint8_t(r.home);
@@ -3268,7 +3305,8 @@ g_draw_scope = "stadium-week";
         if (brng_.range(0, 3) == 0) refresh_transfer_list();
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
-        if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()))) {  // REAL-CODE periods 7 and 13
+        if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
+                                              (next_event == kEventPlayoff && !human_in_next_playoff()))) {  // REAL-CODE periods 7, 13 and 28
             if (next_event == kEventCup && cup_game_ == 0)
                 for (int t = 36; t < 64; t++)
                     for (auto& kind : save_.teams[size_t(t)].energy)

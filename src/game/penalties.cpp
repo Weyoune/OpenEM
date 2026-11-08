@@ -79,6 +79,7 @@ bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSqu
     const int next = running();
     if (next == 2) return false;
     Entry e;
+    e.role = entries_[next].role;  // the saved role of the timer stays until a bound player overwrites it (REAL-CODE period 28)
     e.minutes = major ? 5 : 2;
     e.major = major;
     if (squad && player >= 0) {
@@ -101,8 +102,10 @@ void PenaltyBox::release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* 
     Entry& e = entries_[entry];
     if (!e.minutes) return;
     if (squad && e.player >= 0) squad->at(size_t(e.player)).role = e.role;
-    if (squad && e.player < 0 && !finishing_) phantom_ = true;  // slot -1: the original writes through DS:5D8F
+    if (squad && e.player < 0 && !finishing_) phantom_role_ = e.role;  // slot -1: the original writes through DS:5D8F
+    const int saved_role = e.role;
     e = Entry{};
+    e.role = saved_role;
     team.skaters++;
 }
 
@@ -132,10 +135,12 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
     // asymmetric association instead of silently substituting hockey rules.
     if (squad && entries_[0].player >= 0)
         squad->at(size_t(entries_[0].player)).role = entries_[0].role;
-    else if (squad && entries_[0].player < 0) phantom_ = true;
+    else if (squad && entries_[0].player < 0) phantom_role_ = entries_[0].role;
     entries_[0].player = entries_[1].player;
     entries_[0].role = entries_[1].role;
+    const int saved_role = entries_[1].role;
     entries_[1] = Entry{};
+    entries_[1].role = saved_role;
     team.skaters++;
 }
 

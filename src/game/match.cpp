@@ -20,6 +20,7 @@ int clamp_line(int v) { return std::clamp(v, 0, 100); }  // 162c:1bce..1c1b, exp
 
 // ovl06_134f: half the time the larger of two rolls, otherwise the second one
 int better_of(int a, int b, GameRandom& rng) {
+    if (std::getenv("EM_DEBUG_BO")) std::fprintf(stderr, "better_of B%zu G%zu borland %d\n", g_borland_log ? g_borland_log->size() : size_t(0), g_game_log ? g_game_log->size() : size_t(0), rng.borland != nullptr);
     const long coin = rng.borland ? rng.borland->range(0, 1) : rng.range(0, 1);
     return coin == 0 ? b : std::max(a, b); }
 
@@ -624,12 +625,12 @@ void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool hu
 }
 
 MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                           GameRandom& rng, int level) {
-    return quick_competition_match(home, away, home_german, away_german, rng, level, true);
+                           GameRandom& rng, int level, bool playoff) {
+    return quick_competition_match(home, away, home_german, away_german, rng, level, true, playoff);
 }
 
 MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                                    GameRandom& rng, int level, bool knockout) {
+                                    GameRandom& rng, int level, bool knockout, bool playoff) {
     // ovl06_161d, quick path: whole-match results (FUN_162c_1e9c), German clubs (team < 64) +6,
     // re-rolled up to min(4, |difference / 3|) times while the favourite does not win
     int sh = playing_strength(home, StrengthMode::Neutral, 0, 0, home.current_line[0], home.current_line[1]) + (home_german ? 6 : 0);
@@ -640,12 +641,13 @@ MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bo
                      home_german, away_german, rerolls, g_game_log ? g_game_log->size() : size_t(0), home.current_line[0], home.current_line[1], home.effort_current, home.energy[0][0], home.energy[0][1], home.energy[0][2], home.energy[0][3], home.energy[1][0], home.energy[1][1], home.energy[1][2], home.energy[1][3]);
     MatchResult r;
     do {
-        r = quick_match(home, away, rng, level);
+        r = quick_match(home, away, rng, level, playoff);  // play-offs: halved goal points (DS:76B2)
         if (level == 0) {
             if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 2) != 0)) r.home -= int(rng.range(0, r.home));
             if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 1) != 0)) r.away += int(rng.range(0, 4));
         }
     } while (rng.range(0, rerolls) != 0 && ((r.home <= r.away && sa < sh) || (r.away <= r.home && sh < sa)));
+    if (std::getenv("EM_DEBUG_QUICK")) std::fprintf(stderr, "quick result %d:%d knockout %d\n", r.home, r.away, int(knockout));
     if (knockout && r.home == r.away) shootout(r, rng);
     return r;
 }
@@ -707,6 +709,7 @@ struct MatchRun::Impl {
     HumanSquad hh2, ha2;
     const HumanSquad* hp = nullptr;
     const HumanSquad* ap = nullptr;
+    const std::vector<HokSquadPlayer>* outer_squad[2] = {nullptr, nullptr};  // the squads of the game (an injury in the minute changes them)
     LineRotation hlocal, alocal;
     PenaltyBox hbox, abox;
     BorlandRandom fallback_selection{1};
@@ -746,6 +749,8 @@ struct MatchRun::Impl {
             ha2 = *ha;
             ha2.squad = &asq;
         }
+        if (hh) outer_squad[0] = hh->squad;
+        if (ha) outer_squad[1] = ha->squad;
         hp = hh ? &hh2 : nullptr;
         ap = ha ? &ha2 : nullptr;
         // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
@@ -793,7 +798,21 @@ struct MatchRun::Impl {
         for (int side = 0; side < 2; side++) {
             const HumanSquad* m = side == 0 ? hp : ap;
             const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
-            if (m && m->on_minute) m->on_minute(minute, load, side == 0 ? h : a);
+            if (m && m->on_minute) {
+                m->on_minute(minute, load, side == 0 ? h : a);
+                // a player injured in this minute (ovr030:23B6) leaves the running lineup at once (REAL-CODE period 28: the
+                // original opens the lineup screen; confirmed unchanged, the place stays empty)
+                std::vector<HokSquadPlayer>& working = side == 0 ? hsq : asq;
+                bool removed = false;
+                if (const auto* outer = outer_squad[side])
+                    for (size_t s = 0; s < working.size() && s < outer->size(); s++)
+                        if ((*outer)[s].role == 0 && working[s].role != 0) { working[s].role = 0; removed = true; }
+                // leaving the lineup screen sets the effort of the situation again, the offence stays (162c:12da; REAL-CODE period 28)
+                if (removed) {
+                    HokTeam& team = side == 0 ? h : a;
+                    apply_effort(team, side == 0 ? score.home : score.away, side == 0 ? score.away : score.home, &working, m->effort_control, 2);
+                }
+            }
         }
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
@@ -923,10 +942,10 @@ HokTeam& MatchRun::home_mut() { return p_->h; }
 HokTeam& MatchRun::away_mut() { return p_->a; }
 PenaltyBox& MatchRun::home_box() { return p_->hbox; }
 PenaltyBox& MatchRun::away_box() { return p_->abox; }
-bool MatchRun::take_phantom_release() {
-    const bool h = p_->hp && p_->hbox.take_phantom_release();
-    const bool a = p_->ap && p_->abox.take_phantom_release();
-    return h || a;
+int MatchRun::take_phantom_release() {
+    const int h = p_->hp ? p_->hbox.take_phantom_release() : -1;
+    const int a = p_->ap ? p_->abox.take_phantom_release() : -1;
+    return h >= 0 ? h : a;
 }
 const HokTeam& MatchRun::home_state() const { return p_->h; }
 const HokTeam& MatchRun::away_state() const { return p_->a; }

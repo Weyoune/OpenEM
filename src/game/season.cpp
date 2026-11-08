@@ -127,6 +127,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         MatchStats* stats = nullptr;
         int before[2] = {0, 0};
         int frozen[2] = {-1, -1};  // penalty minutes of a side when the pair-table error replaced its team
+        HokTeam frozen_team[2];  // the record of a replaced team at the moment of the swap (REAL-CODE period 28)
+        bool has_frozen_team[2] = {false, false};
         std::unique_ptr<MatchRun> run;
     };
     std::vector<std::unique_ptr<Entry>> entries;
@@ -162,12 +164,12 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
     std::map<int, SharedTeam> shared;  // team id -> current record (and running penalties) of a team that plays in more than one slot
     auto side_state = [](Entry& e, int side) -> HokTeam& { return side == 0 ? e.run->home_mut() : e.run->away_mut(); };
     auto side_box = [](Entry& e, int side) -> PenaltyBox& { return side == 0 ? e.run->home_box() : e.run->away_box(); };
-    auto corrupt_pairs = [&](const Entry* trigger) {
+    auto corrupt_pairs = [&](const Entry* trigger, int role) {
         for (auto& f : entries) {
             if (days[f->day].league->first_team != 24 || f->pair < 2 || f->pair > 4) continue;
             const int side = f->pair == 3 ? 0 : 1;
             int& id = side == 0 ? f->home : f->away;
-            const int next = f->pair == 2 ? (id & ~1) : 0;
+            const int next = f->pair == 2 ? (id & ~1) : f->pair == 3 ? role : 0;  // +0x0A gets the saved role of the timer
             if (next == id) continue;
             SharedTeam copy;
             bool found = false;
@@ -179,6 +181,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 }
             if (!found) continue;
             shared[next] = copy;
+            if (!f->has_frozen_team[side]) { f->frozen_team[side] = side_state(*f, side); f->frozen_team[side].penalty_code = side_box(*f, side).code(); f->has_frozen_team[side] = true; }
             side_state(*f, side) = copy.team;
             // the replaced team keeps the penalty minutes it had so far; the shared record counts on for the new team (REAL-CODE period 28)
             if (f->frozen[side] < 0) f->frozen[side] = side_box(*f, side).minutes_assessed();
@@ -203,7 +206,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             pull_shared(*e);
             more = e->run->step() || more;
             push_shared(*e);
-            if (e->run->take_phantom_release()) corrupt_pairs(e.get());
+            if (const int role = e->run->take_phantom_release(); role >= 0) corrupt_pairs(e.get(), role);
         }
         if (observer) (*observer)(minute_number + 1, live);
         // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
@@ -225,11 +228,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         };
         if (played) { if (played->size() < days.size()) played->resize(days.size()); (*played)[e->day].push_back({e->scheduled[0], e->scheduled[1]}); }
         {  // the original plays on the real team records: the match state stays there (the human club is booked by the game)
-            for (int side = 0; side < 2; side++) {
-                if ((side == 0 ? e->home : e->away) == human_team) continue;
-                HokTeam& t = teams[size_t(side == 0 ? e->home : e->away)];
-                const int tid = side == 0 ? e->home : e->away;
-                const HokTeam& m = shared.count(tid) ? shared.at(tid).team : (side == 0 ? e->run->home_state() : e->run->away_state());
+            auto write_back = [&](HokTeam& t, const HokTeam& m) {
                 t.effort_current = m.effort_current;
                 t.flags = m.flags;
                 t.effort_base = m.effort_base;
@@ -237,6 +236,18 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 t.skaters = m.skaters; t.penalty_code = m.penalty_code;
                 if (&t == &teams[0] && t.penalty_code) { t.penalty_code = 0; t.skaters = std::max(t.skaters, 5); }  // REAL-CODE: only team record 0 ends its running penalties with the game (cause open, index 0 as an empty marker?)
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
+            };
+            for (int side = 0; side < 2; side++) {
+                // a team replaced by the pair-table error keeps its record as it was at the swap
+                if (e->has_frozen_team[side] && e->scheduled[side] != human_team) write_back(teams[size_t(e->scheduled[side])], e->frozen_team[side]);
+                const int tid = side == 0 ? e->home : e->away;
+                if (tid == human_team) continue;
+                if (shared.count(tid)) {  // a record shared by two pairs keeps the running penalties of its box (REAL-CODE period 28: +0x33)
+                    HokTeam m = shared.at(tid).team;
+                    m.penalty_code = shared.at(tid).box.code();
+                    write_back(teams[size_t(tid)], m);
+                } else
+                    write_back(teams[size_t(tid)], side == 0 ? e->run->home_state() : e->run->away_state());
             }
         }
         book_result_rows(row_of(e->scheduled[0]), row_of(e->scheduled[1]), r);

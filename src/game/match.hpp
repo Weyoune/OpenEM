@@ -151,12 +151,12 @@ MatchResult quick_match(const HokTeam& home, const HokTeam& away, GameRandom& rn
 // results, German clubs +6 strength, re-rolled up to min(4, |strength difference / 3|) times while
 // the favourite does not win; a draw goes to a shoot-out (both sides rand(0, 2) until different).
 MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                           GameRandom& rng, int level = 0);
+                           GameRandom& rng, int level = 0, bool playoff = false);
 
 // Same ovl06_161d fast event path; group matches permit draws and omit the
 // shoot-out. Its postprocessing can add away goals even after a zero-strength 0:0.
 MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                                    GameRandom& rng, int level, bool knockout);
+                                    GameRandom& rng, int level, bool knockout, bool playoff = false);
 
 // A league match as the matchday loop ovl06_2522 plays it: for every minute 1..60 the goal points
 // of FUN_162c_1e9c (with the fatigue of that minute, capped at 10) give chances (1 in 20 per
@@ -229,7 +229,7 @@ public:
     HokTeam& away_mut();
     PenaltyBox& home_box();  // the running penalties travel with the team record in the original (+0x32/+0x33)
     PenaltyBox& away_box();
-    bool take_phantom_release();  // a manager penalty without bound player ended in the last minute (DEVIATIONS.md)
+    int take_phantom_release();  // a manager penalty without bound player ended in the last minute: its saved role, else -1 (DEVIATIONS.md)
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)

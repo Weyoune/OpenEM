@@ -310,6 +310,7 @@ private:
     void book_special_teams(const MatchStats& stats, int side, int manager = 0);
     void play_cup_day();
     bool human_in_next_cup() const;
+    bool human_in_next_playoff() const;
     bool human_in_next_euro() const;
     void play_euro_day();
     void play_playoff_day();
