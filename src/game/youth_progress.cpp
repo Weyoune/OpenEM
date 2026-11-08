@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <cstdio>
 
 namespace em {
 namespace {
@@ -28,6 +29,7 @@ void youth_fixture_day(Bytes& state,const FinanceTables& finance,int first_match
     for(size_t j=0;j<44;++j){tempo[j]=uint8_t(counter);if(counter&&draw(0,8)==0)--counter;}
     // Native tempo[44] aliases the adjacent surviving counter byte.
     tempo[44]=uint8_t(counter);
+    if(std::getenv("EM_DEBUG_YOUTH")){std::fprintf(stderr,"youth md %d tempo",first_matchday);for(size_t j=0;j<45;++j)std::fprintf(stderr," %d",tempo[j]);std::fprintf(stderr,"\n");}
     for(size_t i=0;i<3;++i){
         const int quality=state[at+i],rank=state[at+3+i],league=state[at+6+i];
         const auto raw=std::bit_cast<int32_t>(le32(state,at+9+i*4));

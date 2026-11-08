@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/penalties.hpp"
+#include "game/match.hpp"
+#include "game/scorers.hpp"
+#include <cstdio>
 
 #include <algorithm>
 #include <cstdlib>
@@ -23,12 +26,14 @@ int PenaltyOpportunities::record(int side, int skaters, int other_skaters, bool 
     int token = -1;
     if (other_human) { power_plays[1 - side]++; token = 1 - side; }
     if (human) { penalty_kills[side]++; token = 2 + side; }
+    if (human && std::getenv("EM_DEBUG_PK")) std::fprintf(stderr, "pk record side %d at %zu\n", side, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     return token;
 }
 
 void PenaltyOpportunities::rollback(int token) {
     if (token >= 0 && token < 2) power_plays[token]--;
     else if (token >= 2 && token < 4) penalty_kills[token - 2]--;
+    if (token >= 2 && std::getenv("EM_DEBUG_PK")) std::fprintf(stderr, "pk rollback at %zu\n", (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
 }
 
 void PenaltyOpportunities::after_goal(int attacker, bool previously_equal, int skaters, int other_skaters,
@@ -38,6 +43,7 @@ void PenaltyOpportunities::after_goal(int attacker, bool previously_equal, int s
     // create a new short-handed phase for the scoring team (e.g. 4:4 -> 4:5).
     if (!previously_equal || skaters >= other_skaters) return;
     if (human) penalty_kills[attacker]++;
+    if (human && std::getenv("EM_DEBUG_PK")) std::fprintf(stderr, "pk goal at %zu\n", (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     if (other_human) power_plays[1 - attacker]++;
 }
 

@@ -787,6 +787,8 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
     for (size_t i = 0; i < save_.squad.size() && i < size_t(kHokSquadSlots); i++) {
         if (save_.squad[i].player < 0) continue;
         uint8_t* r = st + kSquad + i * kSquadRecord;
+        if (std::getenv("EM_DEBUG_TINJ"))
+            std::fprintf(stderr, "tinj B%zu day %d slot %zu 09=%02x 0D=%02x 0A=%02x 13=%02x\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, i, r[0x09], r[0x0D], r[0x0A], r[0x13]);
         if (r[0x0D] == 0 && r[0x09] == 0 && training_injury(r[0x13], no_match_today, finance_.level, brng_)) injure(i, 0);
         if (day_ >= 233) continue;
         uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
@@ -2316,8 +2318,8 @@ void Game::refresh_transfer_list() {
         n |= brng_.range(1, 3) << 4;
         n |= brng_.range(0, 1) << 7;
         r[0x14] = uint8_t(n);
-        r[0x03] = pr[0x1B];
-        r[0x06] = pr[0x1C];
+        r[0x03] = uint8_t(pl->league_goals);  // +0x1B / +0x1C of the player: the model holds the counts of the day (the raw bytes follow on save)
+        r[0x06] = uint8_t(pl->league_games);
         r[0x10] = pr[0x15];
         r[0x11] = pr[0x16];
         r[0x12] = pr[0x17];
@@ -3020,7 +3022,7 @@ void Game::advance_day() {
         //6AF8:3178..3198 updates every club manager before the league games.
         //Game currently simulates manager0; all clubs use first-league DS07A9.
 g_draw_scope = "youth";
-        youth_fixture_day(save_.state,finance_,std::max(0, matchday_[0] - 1),0,[&](int lo,int hi){return brng_.range(lo,hi);});
+        youth_fixture_day(save_.state,finance_,std::min(44, matchday_[0]),0,[&](int lo,int hi){return brng_.range(lo,hi);});
 g_draw_scope = "league-day";
         play_league_day();
         human_played_ = human_team_ >= 0 && human_team_ < 3 * kHokLeagueSize;

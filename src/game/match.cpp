@@ -522,13 +522,17 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
                                                0, 100) : side.team.effort_current;
     if (std::getenv("EM_DEBUG_PEN")) std::fprintf(stderr, "pen effort %d (current %d) squad %d at draw %zu skaters %d\n", effort, side.team.effort_current, side.squad != nullptr, g_game_log ? g_game_log->size() : size_t(0), side.team.skaters);
     if (rng.range(0, 12) != 0 && rng.range(0, 110 - effort) != 0) return false;
+    if (std::getenv("EM_DEBUG_PK"))
+        std::fprintf(stderr, "pen hit at %zu human %d/%d skaters %d/%d running %d\n", (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0),
+                     side.human != nullptr, other.human != nullptr, side.team.skaters, other.team.skaters, running);
     if (side.squad && std::count_if(side.squad->begin(), side.squad->begin() + std::min(size_t(29), side.squad->size()), [](const auto& p) {
             return p.player >= 0 && p.role != 0 && p.line != 0;
         }) <= 7) return false;  // ovl12_0d27(manager, 1): protect a depleted human lineup
     const bool major = running == 0 && rng.range(0, 15) == 0;
     const bool pair = may_pair && rng.range(0, 3) == 0 && running == 0;
     // The original books opportunities before attempting to select the player.
-    const int token = side.stats ? side.stats->record(side.side, side.team.skaters - 1,
+    // with the goalkeeper pulled (six skaters) the penalty brings him back: 4 skaters remain (REAL-CODE period 9)
+    const int token = side.stats ? side.stats->record(side.side, side.team.skaters == 6 ? 4 : side.team.skaters - 1,
         other.team.skaters, side.human != nullptr, other.human != nullptr) : -1;
     int slot = -1;
     bool selection_failed = false;
@@ -682,6 +686,7 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human) {
             difference += skill1 - skill2;
         }
     }
+    if (std::getenv("EM_DEBUG_LOAD")) std::fprintf(stderr, "load difference %d -> %d\n", difference, std::clamp(difference / 5 + 20, 0, 40));
     return std::clamp(difference / 5 + 20, 0, 40);
 }
 
