@@ -201,6 +201,9 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
             std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness);
         }
     int d = sh / 3 - sa / 3;
+    if (std::getenv("EM_DEBUG_D"))
+        std::fprintf(stderr, "d B%zu min %d %s-%s sh %d sa %d d %d lines %d/%d %d/%d\n", g_borland_log ? g_borland_log->size() : size_t(0), minute, h.name.c_str(), a.name.c_str(), sh, sa, d,
+                     h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1]);
     int away = (level == 0 || d > 18) ? 0 : int(rng.range(1, 2));
     int home = (d < -18) ? 0 : int(rng.range(1, 2));
     if (d < 1) {
