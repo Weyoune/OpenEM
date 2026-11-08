@@ -10,7 +10,7 @@
 #include "ui/classic_youth.hpp"
 
 namespace em::ui {
-enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth };
+enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Statistics };
 
 class ClassicApplication {
 public:
@@ -100,6 +100,11 @@ private:
     void finish_numeric(bool cancel);
     void button(int x,int y,std::string_view label);
     void plain_frame(int left,int top,int right,int bottom,uint8_t fill);
+    // Statistiken pages (classic_stats_app.cpp)
+    void open_statistics(int item);
+    void draw_statistics();
+    void click_statistics(int x,int y,bool right);
+    bool render_statistics(std::string_view name);
     void open_tactics();
     void open_lineup();
     void finish_tactics(ClassicScreen target);
@@ -139,6 +144,10 @@ private:
     int advanced_days_=0;
     int strengths_league_=0,strengths_mode_=0;
     int euro_page_=3;
+    int euro_table_page_=3,euro_fixture_page_=3; // DS:5123 / DS:5126
+    bool euro_from_fixtures_=false;
+    int stats_page_=0,stats_mode_=2; // 1 Frueher .. 5 WM; Spieler mode
+    bool stats_managers_=false;
     int wm_table_page_=11,wm_fixture_page_=8,wm_previous_fixtures_=8,wm_page_=11,wm_round_=-1;
     int fixture_league_=0,fixture_round_=1,fixture_width_=1,fixture_next_width_=1;
     int league_page_=7;
