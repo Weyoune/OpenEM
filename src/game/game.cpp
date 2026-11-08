@@ -947,15 +947,19 @@ void Game::make_offers() {
         HokPlayer* pl = player_by_exe_index(r[0x0F]);
         if (std::getenv("EM_DEBUG_OFFER"))
             std::fprintf(stderr, "offer B%zu day %d block %d slot %d 09=%02x pending %d\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, block, slot, r[0x09], pl ? int(pending(pl)) : -1);
-        if (r[0x09] & 0xC0) return;  // a saved interest must not be overwritten by a new bidder
-        if (!pl || pending(pl)) return;
+        if (!pl) return;
         const long value = player_worth(contracts_, contract_player(save_, block, slot), Worth::Value, brng_);
         const long v = value / 10000;
+        // seg002:0E36 / 1537: the draws come first; a player whose record already carries a message (+0x1E, the
+        // interest of an earlier offer) is skipped only afterwards (REAL-CODE period 17)
         if (listed) {
             if (brng_.range(0, 180) >= v || brng_.range(0, 2) == 0) return;
         } else {
             if (brng_.range(0, 200) >= v || brng_.range(0, 450) != 0) return;
         }
+        if (st[kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord + 0x1E] != 0) return;
+        if (r[0x09] & 0xC0) return;  // a saved interest must not be overwritten by a new bidder
+        if (pending(pl)) return;
         r[0x09] |= listed ? 0x80 : 0x40;
         const bool foreign = !listed && v > 90 && brng_.range(0, 10) == 0;
         const int bidder = pick_bidder(save_.teams, strength_of_record(slot), foreign, brng_);
