@@ -275,6 +275,7 @@ public:
 
 private:
     void play_league_day();
+    void manager_day(bool home_game_today);
     void update_series(int team, int side, int goals_for, int goals_against);
     void record_head_to_head(int home, int away, int home_goals, int away_goals);
     void update_records(int home, int away, int home_goals, int away_goals);

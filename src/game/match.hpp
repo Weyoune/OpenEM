@@ -142,7 +142,7 @@ void match_change_lines(HokTeam& team, const HokTeam& opponent, LineRotation& ro
 bool match_chance_is_goal(const HokTeam& home, const HokTeam& away, int side, int minute, GameRandom& rng, int level);
 
 int minute_events(const HokTeam& home, const HokTeam& away, int minute, GameRandom& rng, int level,
-                  const HumanSquad* home_squad = nullptr, const HumanSquad* away_squad = nullptr, bool special = false);
+                  const HumanSquad* home_squad = nullptr, const HumanSquad* away_squad = nullptr, bool special = false, int total = 60);
 
 MatchResult quick_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0, bool playoff = false);
 

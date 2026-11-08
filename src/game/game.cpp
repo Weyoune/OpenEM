@@ -383,6 +383,30 @@ void Game::book_special_teams(const MatchStats& st, int side, int manager) {
     }
 }
 
+// ovr038:2630 (sub_60D60), after the gate: the squad bookkeeping draws one rand(0, 4) per squad slot (a hit stores the
+// skill-based home line, +2 := +0x15 & 0x7F) and, for a home game, one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag;
+// sub_33CE9 then spins the game random stream rand(100, 300) times (REAL-CODE probe of the original). It runs on every day
+// with a game of the human club (league and cup).
+void Game::manager_day(bool home_game_today) {
+    g_draw_scope = "manager-day";
+    const size_t squad_at = 0x696D;
+    int slots = 0;
+    for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_at + size_t(s) * 0x34 + 0x0F) != 0;
+    for (int s = 0; s < slots; s++)
+        if (brng_.range(0, 4) == 0) {
+            const uint8_t line = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
+            save_.state.at(squad_at + size_t(s) * 0x34 + 2) = line;
+            if (size_t(s) < save_.squad.size()) save_.squad[size_t(s)].home_line = line;  // human_.squad points at this vector
+        }
+    const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
+    int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
+    x = std::clamp(x, 0, 30);
+    if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
+    g_draw_scope = "randomize";
+    const int spin = brng_.range(100, 300);
+    for (int i = 0; i < spin; i++) rng_.range(0, 1);
+}
+
 void Game::play_league_day() {
     // 4F6E:161D mode0 prepares all three caches before any masked league
     // game, using each raw round even when another league is already at45.
@@ -422,28 +446,7 @@ void Game::play_league_day() {
             break;
         }
     }
-    if (human_plays) {
-        // ovr038:2630 (sub_60D60), after the gate: the squad bookkeeping draws one rand(0, 4) per squad slot (a hit stores the
-        // skill-based home line, +2 := +0x15 & 0x7F) and one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag; sub_33CE9 then
-        // spins the game random stream rand(100, 300) times (REAL-CODE probe of the original).
-        g_draw_scope = "manager-day";
-        const size_t squad_at = 0x696D;
-        int slots = 0;
-        for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_at + size_t(s) * 0x34 + 0x0F) != 0;
-        for (int s = 0; s < slots; s++)
-            if (brng_.range(0, 4) == 0) {
-                const uint8_t line = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
-                save_.state.at(squad_at + size_t(s) * 0x34 + 2) = line;
-                if (size_t(s) < save_.squad.size()) save_.squad[size_t(s)].home_line = line;  // human_.squad points at this vector
-            }
-        const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
-        int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
-        x = std::clamp(x, 0, 30);
-        if (gate_booked && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
-        g_draw_scope = "randomize";
-        const int spin = brng_.range(100, 300);
-        for (int i = 0; i < spin; i++) rng_.range(0, 1);
-    }
+    if (human_plays) manager_day(gate_booked);
     g_draw_scope = "league-day";
     MatchStats stats;
     human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
@@ -525,7 +528,20 @@ void Game::play_cup_day() {
     }
     MatchStats stats;
     HumanSide side{human_team_, &human_, &stats};
-    const auto ties = play_cup_round(save_.teams, draw, rng_, side);
+    for (const HokPairing& p : draw)
+        if (p.home == human_team_ || p.away == human_team_) {
+            if (!(human_.minimum_players > 0 && selected_match_players(human_) < human_.minimum_players)) manager_day(false);
+            break;
+        }
+    const bool live = save_.state.at(0xA526) != 0;  // Einstellungen: DEB cup display
+    if (live) {
+        human_.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
+        human_.on_chance = [this](bool goal, const HokTeam& team) { credit_human_goal(1, false, goal, &team); };
+    }
+    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_) : play_cup_round(save_.teams, draw, rng_, side);
+    if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
+    human_.on_minute = nullptr;
+    human_.on_chance = nullptr;
     for (size_t match = 0; match < ties.size(); match++) {
         const Tie& t = ties[match];
         const size_t pair = active[match];
@@ -536,9 +552,11 @@ void Game::play_cup_day() {
         save_.state.at(o) = uint8_t(t.result.home + t.result.decision_marker);
         save_.state.at(o + 1) = uint8_t(t.result.away);
         // ovl13_2f93 books the series in the cup mode (DS:D0C2 = 8) like in the league mode (REAL-CODE test)
-        update_series(t.home, 0, t.result.home, t.result.away);
-        update_series(t.away, 1, t.result.away, t.result.home);
-        update_records(t.home, t.away, t.result.home, t.result.away);  // DS:D0C2 = 8 counts too
+        if (!live) {  // with the cup display on, the original books neither the series nor the records (REAL-CODE)
+            update_series(t.home, 0, t.result.home, t.result.away);
+            update_series(t.away, 1, t.result.away, t.result.home);
+            update_records(t.home, t.away, t.result.home, t.result.away);  // DS:D0C2 = 8 counts too
+        }
         if (t.home != human_team_ && t.away != human_team_) continue;
         const bool forfeited = book_forfeit(stats);
         if (!forfeited) {
@@ -549,7 +567,7 @@ void Game::play_cup_day() {
         record_head_to_head(t.home, t.away, t.result.home, t.result.away);
         if (!forfeited) book_club_match(t.home == human_team_ ? t.result.home : t.result.away,
                         t.home == human_team_ ? t.result.away : t.result.home, 1, false,
-                        t.result.shootout_goals[t.home == human_team_ ? 0 : 1]);
+                        t.result.shootout_goals[t.home == human_team_ ? 0 : 1], !live);
         char line[160];
         std::snprintf(line, sizeof line, "DEB cup: %s - %s %d:%d%s", save_.teams[size_t(t.home)].name.c_str(),
                       save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away,
@@ -558,6 +576,34 @@ void Game::play_cup_day() {
         if (!forfeited && t.home == human_team_)
             home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                       team_rank(t.away));
+    }
+    if (live) {  // after a cup display game: all cup clubs are rested to 90, the human squad recovers 2 x 19 (REAL-CODE)
+        bool human_in = false;
+        int opponent = -1;
+        for (const Tie& t : ties)
+            if (t.home == human_team_ || t.away == human_team_) {
+                human_in = true;
+                opponent = t.home == human_team_ ? t.away : t.home;
+            }
+        for (int team = 0; team < 64; team++) {
+            if (team == human_team_) continue;
+            if (team == opponent) {  // the opponent of the manager game recovers like the manager squad
+                for (auto& kind : save_.teams[size_t(team)].energy)
+                    for (auto& e : kind) e = std::min(90, e + 38);
+            } else {
+                prepare_match_energy(save_.teams[size_t(team)], nullptr);  // energy 90, no mode bits, shifts 0
+            }
+        }
+        if (human_in) {
+            for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                uint8_t& f = save_.state.at(kSquad + slot * kSquadRecord + 0x1B);
+                f = uint8_t(std::min(90, int(f) + 38));
+                save_.squad[slot].fitness = f;
+            }
+            for (auto& kind : save_.teams[size_t(human_team_)].energy)
+                for (auto& e : kind) e = std::min(90, e + 38);
+            save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == human_team_ || p.away == human_team_) return p.home; return 0; }());
+        }
     }
     cup_game_++;
     bool open = false;
@@ -1777,7 +1823,10 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
-    for (int goal = 0; credit_goals && goal < own_goals; goal++) credit_human_goal(competition, goal >= own_goals - shootout_goals);
+    for (int goal = 0; goal < own_goals; goal++) {
+        const bool penalty = goal >= own_goals - shootout_goals;
+        if (credit_goals || penalty) credit_human_goal(competition, penalty);  // minute-wise credited goals are not booked twice
+    }
     bool goalkeeper_booked = false;
     for (size_t slot = 0; slot < save_.squad.size(); slot++) {
         auto& sp = save_.squad[slot];
@@ -2132,6 +2181,25 @@ void Game::refresh_transfer_list() {
         pl->form = brng_.range(45, 55);
         uint8_t* pr = st + kPlayers + size_t(p - 1) * kPlayerRecord;
         pr[0x17] = uint8_t(pl->form);
+        {  // ovr035:381E (sub_5678E): the skills are derived anew from the attack strengths of the player's club; a club of the
+           // national teams narrow the random part to rand(10,14), the others rand(0,14) (REAL-CODE)
+            const int club = pr[0x1D];
+            if (club >= 0 && club < kHokTeams && save_.teams[size_t(club)].raw[0x16] == 0) {
+                const HokTeam& tm = save_.teams[size_t(club)];
+                const int league_first = kFirstNationalTeam;  // DS:06AD (byte_2567D) = 52: the national teams
+                const int lo = club >= league_first && club < league_first + 12 ? 10 : 0;
+                if (std::getenv("EM_DEBUG_REFRESH")) std::fprintf(stderr, "refresh: player %d club %d league_first %d lo %d\n", p, club, league_first, lo);
+                int a = tm.skill1[1] + int(brng_.range(lo, 14)) - 10;
+                a = std::clamp(a, 10, 99);
+                int b = tm.skill2[1] + int(brng_.range(lo, 14)) - 10;
+                if (brng_.range(0, 4) == 0) b += int(brng_.range(12, 20));
+                b = std::clamp(b, 10, 99);
+                pr[0x15] = uint8_t(a);
+                pr[0x16] = uint8_t(b);
+                pl->skill_a = a;
+                pl->skill_b = b;
+            }
+        }
         // ovl09_2cd1: behind the last entry of the same class
         int at = 0;
         while (at < kSlots && rec(at)[0x0F] && pclass(rec(at)[0x0F]) <= pclass(p)) at++;
@@ -2947,7 +3015,7 @@ g_draw_scope = "stadium-week";
             if (m[0] >= 32) m[0] = uint8_t(m[0] - 16); else m[0] = m[1] = 0;  // 56, 40, 24 (gone) in three steps
         }
         // before a DEB cup day the original prepares the energies of the 28 cup clubs outside the three leagues (REAL-CODE)
-        if (next_event == kEventCup)
+        if (next_event == kEventCup && cup_game_ == 0)
             for (int t = 36; t < 64; t++)
                 for (auto& kind : save_.teams[size_t(t)].energy)
                     for (auto& e : kind) e = 90;

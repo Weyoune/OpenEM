@@ -194,3 +194,64 @@ std::vector<RelegationTie> play_relegation(const std::vector<HokTeam>& teams, co
 }
 
 }  // namespace em
+
+namespace em {
+
+// A cup round with the cup display switched on (Einstellungen / DEB-Pokal): ovl06_2522 plays all pairs at once, minute by minute,
+// exactly like a league day, with the knock-out rules (overtime, shoot-out); the stream reseeding after the periods and the
+// watched list after a home game of the human club are the same (REAL-CODE whole-program test).
+std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
+                                     const HumanSide& human, BorlandRandom* brng) {
+    struct Entry {
+        int home, away;
+        std::unique_ptr<MatchRun> run;
+    };
+    std::vector<Entry> entries;
+    MatchOptions opts;
+    opts.knockout = true;
+    for (const HokPairing& p : draw) {
+        const HumanSquad* hh = p.home == human.team ? human.squad : nullptr;
+        const HumanSquad* ha = p.away == human.team ? human.squad : nullptr;
+        entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, 0, hh, ha,
+                                                                         hh || ha ? human.stats : nullptr, opts)});
+    }
+    int minute_number = 0;
+    for (bool more = true; more;) {
+        more = false;
+        for (auto& e : entries) more = e.run->step() || more;
+        minute_number++;
+        if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const Entry& e) { return e.home == human.team; }))
+            for (auto& e : entries) e.run->set_watched(true);
+        if (brng && (minute_number == 20 || minute_number == 40)) {
+            const int spin = brng->range(100, 300);
+            for (int i = 0; i < spin; i++) rng.range(0, 1);
+        }
+    }
+    std::vector<Tie> out;
+    for (auto& e : entries) {
+        Tie t{e.home, e.away, e.run->finish()};
+        for (int side = 0; side < 2; side++) {
+            if ((side == 0 ? e.home : e.away) == human.team) continue;
+            HokTeam& team = teams[size_t(side == 0 ? e.home : e.away)];
+            const HokTeam& m = side == 0 ? e.run->home_state() : e.run->away_state();
+            team.effort_current = m.effort_current;
+            team.flags = m.flags;
+            team.effort_base = m.effort_base;
+            for (int k = 0; k < 2; k++) {
+                team.current_line[k] = m.current_line[k];
+                team.shift[k] = m.shift[k];
+                for (int line = 0; line < 4; line++) team.energy[k][line] = m.energy[k][line];
+            }
+            team.skaters = m.skaters;
+            team.penalty_code = m.penalty_code;
+            for (int i = 0; i < kTacticSituations; i++) {
+                team.effort[i] = m.effort[i];
+                team.offence[i] = m.offence[i];
+            }
+        }
+        out.push_back(t);
+    }
+    return out;
+}
+
+}  // namespace em

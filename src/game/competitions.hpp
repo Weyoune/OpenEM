@@ -44,6 +44,10 @@ struct HumanSide {
 std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw,
                                 GameRandom& rng, const HumanSide& human = {});
 
+// The same round with the cup display on: all pairs minute by minute (see competitions.cpp); updates the computer teams' records.
+std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
+                                     const HumanSide& human, BorlandRandom* brng);
+
 // Native redraw: twenty random swaps, then home ice for the lower division.
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng);
 

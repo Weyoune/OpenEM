@@ -179,7 +179,7 @@ int strength_from_kinds(const HokTeam& t, const int k[2], StrengthMode mode = St
 }
 
 MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool whole, GameRandom& rng, int level,
-                        const HumanSquad* hh = nullptr, const HumanSquad* ha = nullptr, bool special = false) {
+                        const HumanSquad* hh = nullptr, const HumanSquad* ha = nullptr, bool special = false, int total = 60) {
     const int bonus_h = offence_bonus(h, rng), bonus_a = offence_bonus(a, rng);
     const int sh = playing_strength(h, hh, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1], g_goal_kinds[0]);
     const int sa = playing_strength(a, ha, StrengthMode::Neutral, minute, a.skaters - h.skaters, a.current_line[0], a.current_line[1], g_goal_kinds[1]);
@@ -250,7 +250,7 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     if (h.skaters < a.skaters) home >>= 2;
     if (a.skaters < h.skaters) away >>= 2;
     if (minute < 58 && ((h.flags | a.flags) & 0x08)) home = away = 9;  // bit 3: goalkeeper pulled (ovl06_34f6)
-    if (!whole && special) {  // the extra point belongs to play-off mode only (REAL-CODE test), not to overtime
+    if (!whole && (special || total > 60)) {  // 162c:22B8: byte_32092 == 1 (play-off) or the total length argument above 60 (the overtime loop of the cup, REAL-CODE)
         home++;
         away++;
     }
@@ -289,8 +289,8 @@ bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, Ga
 // FUN_162c_1e9c(home, away, minute, 60) for one minute: the goal points give chances (1 in 20 per point);
 // a home chance sets the event value to 1, each away chance adds 2.
 int minute_events(const HokTeam& h, const HokTeam& a, int minute, GameRandom& rng, int level, const HumanSquad* hh,
-                  const HumanSquad* ha, bool special) {
-    const MatchResult pts = goal_points(h, a, minute, false, rng, level, hh, ha, special);
+                  const HumanSquad* ha, bool special, int total) {
+    const MatchResult pts = goal_points(h, a, minute, false, rng, level, hh, ha, special, total);
     int events = 0;
     for (int i = 0; i < pts.home; i++)
         if (rng.range(1, 20) == 1) events = 1;
@@ -584,22 +584,25 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
 // Penalty decisions: ovl06_161d quick path and ovl06_3adb after a full minute game.
 void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool human = false) {
     int x = 0, y = 0;
+    // the original draws the shoot-out with Borland rand (REAL-CODE: (2,5) pairs of the cup overtime)
+    auto draw = [&](int lo, int hi) { return rng.borland ? rng.borland->range(lo, hi) : int(rng.range(lo, hi)); };
     if (minute_game && human) {
         // ovl06_3adb: five complete pairs, then complete sudden-death pairs.
         // A shot succeeds when Borland rand(0,10) > 6. The simulation still uses
         // its supplied GameRandom stream; native RNG restoration remains separate.
-        const int first = int(rng.range(0, 1));
+        const int first = draw(0, 1);
         int goals[2] = {};
         for (int pair = 0; pair < 5 || goals[0] == goals[1]; pair++) {
-            goals[first] += rng.range(0, 10) > 6;
-            goals[1 - first] += rng.range(0, 10) > 6;
+            goals[first] += draw(0, 10) > 6;
+            goals[1 - first] += draw(0, 10) > 6;
         }
         x = goals[0]; y = goals[1];
     } else {
-        // Full CPU display: rand(2,5), distinct totals. Quick path: rand(0,2).
+        // Full CPU display: a coin (0,1), then rand(2,5) pairs until the totals differ (REAL-CODE cup overtime). Quick path: rand(0,2).
+        if (minute_game) draw(0, 1);
         do {
-            x = int(rng.range(minute_game ? 2 : 0, minute_game ? 5 : 2));
-            y = int(rng.range(minute_game ? 2 : 0, minute_game ? 5 : 2));
+            x = draw(minute_game ? 2 : 0, minute_game ? 5 : 2);
+            y = draw(minute_game ? 2 : 0, minute_game ? 5 : 2);
         } while (r.home + x == r.away + y);
     }
     r.home += x;
@@ -756,6 +759,7 @@ struct MatchRun::Impl {
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     bool watched = false;
+    bool shootout_done = false;
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool step() {
         if (forfeit || minute >= last) return false;
@@ -776,7 +780,7 @@ struct MatchRun::Impl {
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
         if (ap) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line);
-        const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff);
+        const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff, minute > 60 ? 70 : 60);
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
@@ -839,7 +843,13 @@ struct MatchRun::Impl {
             last = 70;
             score.decision_marker = 30;  // ovl05_3573, before minutes 61-70
         }
-        return minute < last;
+        const bool more = minute < last;
+        // a knock-out game that is still level after its last minute goes to the shoot-out at once (the other games go on)
+        if (!more && opts.knockout && !shootout_done && score.home == score.away) {
+            shootout(score, rng, true, hp || ap);
+            shootout_done = true;
+        }
+        return more;
     }
 
     MatchResult finish() {
@@ -848,7 +858,6 @@ struct MatchRun::Impl {
         // the original leaves running penalties of a team without manager on the record (skaters, +0x33)
         if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
         if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
-        if (opts.knockout && score.home == score.away) shootout(score, rng, true, hp || ap);
         if (stats) {
             stats->final_teams = {h, a};
             stats->penalties[0] += hbox.started();
