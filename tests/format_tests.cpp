@@ -753,7 +753,11 @@ static void day_loop(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(g.season_day() == 70 && d.day == 18 && d.month == 11);
     for (int l = 0; l < 3; l++) {
         CHECK(g.next_matchday(l) == 20);
-        for (const HokTableRow& r : g.league(l).rows) CHECK(r.total(r.games) == 19);
+    }
+    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+        int all = 0;
+        for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
+        CHECK(all == 36 * 19);
     }
     CHECK(g.budget().home_games == g.league(0).rows[size_t(g.human_team())].games[0]);
     CHECK(g.budget().home_games == 9 && home_games >= g.budget().home_games);
@@ -802,8 +806,11 @@ static void full_season(const fs::path& em_dir, const fs::path& ref_dir) {
         g.advance_day();
         g.clear_log();
     }
-    for (int l = 0; l < 3; l++)
-        for (const HokTableRow& r : g.league(l).rows) CHECK(r.total(r.games) == 44);
+    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+        int all = 0;
+        for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
+        CHECK(all == 36 * 44);
+    }
     CHECK(g.euro_champion() >= 0);
     const League& first = g.league(0);
     CHECK(g.champion() >= first.first_team && g.champion() < first.first_team + kHokLeagueSize &&
@@ -997,8 +1004,11 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         g.advance_day();
         g.clear_log();
     }
-    for (int l = 0; l < 3; l++)
-        for (const HokTableRow& r : g.league(l).rows) CHECK(r.total(r.games) == 44);
+    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+        int all = 0;
+        for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
+        CHECK(all == 36 * 44);
+    }
     for (int t = 0; t < 36; t++) {  // new season values in the class bounds (162c:1c5b)
         if (t == g.human_team()) continue;  // follows its squad (162c:146c)
         const HokTeam& tm = g.save().teams[size_t(t)];
@@ -3730,6 +3740,9 @@ static void league_results_save(const fs::path& em_dir, const fs::path& ref_dir)
     const Bytes exe = read_file(em_dir / "EM.EXE");
     const ScheduleTables schedule = load_schedule_tables(exe);
     auto check = [&](const HokFile& h) {
+        // The pair-table error of the original (DEVIATIONS.md) books Oberliga results to team 0, so those rows
+        // are checked only through the totals over all leagues.
+        std::array<int, 10> total{}, booked{};
         for (size_t league = 0; league < 3; league++) {
             std::array<std::array<int, 2>, 12> gf{}, ga{}, games{}, wins{}, losses{};
             for (int day = 0; day < h.matchday[league] - 1; day++) {
@@ -3747,12 +3760,17 @@ static void league_results_save(const fs::path& em_dir, const fs::path& ref_dir)
             for (size_t team = 0; team < 12; team++) {
                 const HokTableRow& row = h.table[league * 12 + team];
                 for (size_t side = 0; side < 2; side++) {
+                    const int want[5] = {gf[team][side], ga[team][side], games[team][side], wins[team][side], losses[team][side]};
+                    const int have[5] = {row.goals_for[side], row.goals_against[side], row.games[side], row.wins[side], row.losses[side]};
+                    for (size_t k = 0; k < 5; k++) { total[side * 5 + k] += want[k]; booked[side * 5 + k] += have[k]; }
+                    if (league == 2 || (league == 0 && team == 0)) continue;
                     CHECK(row.goals_for[side] == gf[team][side] && row.goals_against[side] == ga[team][side]);
                     CHECK(row.games[side] == games[team][side] && row.wins[side] == wins[team][side]);
                     CHECK(row.losses[side] == losses[team][side]);
                 }
             }
         }
+        CHECK(total == booked);
     };
     if (fs::exists(ref_dir / "MONAT1.HOK")) check(decode_hok(read_file(ref_dir / "MONAT1.HOK")));
     Game game(exe, read_file(ref_dir / "START.HOK"), 9);

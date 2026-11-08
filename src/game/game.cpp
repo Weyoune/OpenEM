@@ -510,8 +510,10 @@ void Game::play_league_day() {
             update_series(ai, 1, results[k].away, results[k].home);
             update_records(hi, ai, results[k].home, results[k].away);
             // 1238:114f: scorers of the computer clubs (player records), home first
-            if (hi != human_team_) credit_club_scorers(save_.players, save_.state, hi, results[k].home, results[k].away, true, brng_);
-            if (ai != human_team_) credit_club_scorers(save_.players, save_.state, ai, results[k].away, results[k].home, true, brng_);
+            // a team of another league in an Oberliga pair (pair-table error) finds no player of this league: no draws
+            auto in_league = [&](int t) { return t >= lg.first_team && t < lg.first_team + kHokLeagueSize; };
+            if (hi != human_team_ && in_league(hi)) credit_club_scorers(save_.players, save_.state, hi, results[k].home, results[k].away, true, brng_);
+            if (ai != human_team_ && in_league(ai)) credit_club_scorers(save_.players, save_.state, ai, results[k].away, results[k].home, true, brng_);
             if (hi != human_team_ && ai != human_team_) continue;
             record_head_to_head(hi, ai, results[k].home, results[k].away);
             const bool forfeited = book_forfeit(stats);
