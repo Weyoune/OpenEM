@@ -325,6 +325,7 @@ private:
                          bool credit_goals = true);
     void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr, const std::vector<HokSquadPlayer>* working = nullptr);
     void credit_opponent_goal(int competition, bool goal, const HokTeam& scorer);
+    bool message_step_pending_ = true;  // a loaded game stands in the menu: the next play step sorts and counts the messages
     int last_scorer_slot_ = 0;  // DS:3277 (byte_33277): slot of the last scorer pick, reused when a club without a squad scores
     void reset_wm();
     void new_season();

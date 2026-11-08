@@ -71,6 +71,8 @@
 //   balance += price * A * 3 (raw); league totals/extrema/count are updated here,
 //   while Game writes the league attendance graph to the manager block.
 // Checked: Köln (MONAT1) sells out its 7500 places, as in all four home games of the original.
+#include <functional>
+#include <string>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -171,6 +173,9 @@ void finance_day(const FinanceTables& t, ManagerBudget& b, int day, int month_da
 
 // ovl08_0376: weekly wear followed by the eleven construction countdowns.
 // Planned levels/place counts and remaining weeks live in the native manager block.
-int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng);
+// `message` (optional) receives the two native text lines of a wear loss (ovr032:0000, sub_24D24 with kind 2); it must
+// draw the message date rand(0, 3) itself (native_add_message). Without it only that draw is made.
+int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng,
+                 const std::function<void(const std::string&, const std::string&)>& message = nullptr);
 
 }  // namespace em

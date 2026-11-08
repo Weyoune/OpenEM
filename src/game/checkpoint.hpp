@@ -43,6 +43,8 @@ struct GameCheckpoint {
     std::array<uint8_t,3> annual_distribution_cursors{};
     // Version6: DS:3277 (byte_33277), slot of the last scorer pick (ovl14_2349).
     uint8_t last_scorer_slot = 0;
+    // Version7: the message sort/count of the next play step is still due (a game saved in the menu).
+    bool message_step_pending = true;
 };
 
 bool is_game_checkpoint(const Bytes& data);

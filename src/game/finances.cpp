@@ -279,8 +279,22 @@ void finance_day(const FinanceTables& t, ManagerBudget& b, int day, int month_da
     }
 }
 
-int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng) {
+int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng,
+                 const std::function<void(const std::string&, const std::string&)>& message) {
     if (manager < 0 || manager >= 4) throw FormatError("Stadium: invalid manager");
+    // ovr032:0000 texts (DS:0484 item names, DS:4F19 endings of "Ihre", DS:0D10.. two-line texts, DS:04A8 place kinds)
+    static const char* const kItem[9] = {"]berdachung", "Anzeigetafel", "K}hlanlage", "Sitzkomfort", "Zustand",
+                                         "Verkehrsanb.", "Gastronomie", "Kino", "Bowlingbahn"};
+    static const char* const kEnding[9] = {"r", "r", "r", "", "", "r", "r", "m", "r"};
+    static const char* const kPlaceKinds[2] = {"Sitzpl{tze", "Stehpl{tze"};
+    auto report = [&](const std::string& a, const std::string& b2) {
+        if (message) message(a, b2); else rng.range(0, 3);  // the date draw of the message
+    };
+    auto thousands = [](long v) {  // sub_19CB2 with DS:235D = 0: digits grouped by '.'
+        std::string s = std::to_string(v);
+        for (int i = int(s.size()) - 3; i > 0; i -= 3) s.insert(size_t(i), ".");
+        return s;
+    };
     const size_t block = kManagerBlock + size_t(manager) * kManagerSize;
     // ovl08_0000 returns after the first actual loss. Even an empty item
     // consumes the preceding probability and division draws.
@@ -292,13 +306,20 @@ int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int man
             if (item < 9) {
                 if (b.stadium[size_t(item)] == 0) continue;
                 b.stadium[size_t(item)]--;
-                rng.range(0, 3);  // message text of the loss (REAL-CODE test)
+                if (item == 3 || item == 4)
+                    report("Ihre Fans sind einfach zu st}rmisch...",
+                           item == 3 ? "Der Sitzkomfort mu~ leider etwas schlechter beurteilt werden."
+                                     : "Das schl{gt sich auch auf den Allgemeinzustand des Stadions nieder.");
+                else
+                    report("Der Zahn der Zeit nagt auch an IHREM Stadion...",
+                           std::string("Er knabberte etwas an Ihre") + kEnding[item] + " " + kItem[item] + ".");
             } else {
                 int& places = b.places[size_t(item - 9)];
                 if (places == 0) continue;
                 const int loss = (rng.range(places / 20, places / 6) + 150) / 100 * 100;
                 places = uint16_t(places - loss);
-                rng.range(0, 3);  // message text of the loss (REAL-CODE test)
+                report("Der DEB hat die Sicherheit Ihres Stadions ger}gt !",
+                       thousands(loss) + " " + kPlaceKinds[item - 9] + " wurden gesperrt.");
             }
             break;
         }

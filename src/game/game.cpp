@@ -274,6 +274,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         save_history_=checkpoint.save_history;
         annual_distribution_cursors_=checkpoint.annual_distribution_cursors;
         last_scorer_slot_=checkpoint.last_scorer_slot;
+        message_step_pending_=checkpoint.message_step_pending;
         for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
         human_rotation_ = checkpoint.club_rotation;
         national_rotation_ = checkpoint.national_rotation;
@@ -319,6 +320,7 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.save_history=save_history_;
     checkpoint.annual_distribution_cursors=annual_distribution_cursors_;
     checkpoint.last_scorer_slot=uint8_t(last_scorer_slot_);
+    checkpoint.message_step_pending=message_step_pending_;
     checkpoint.club_rotation = human_rotation_;
     checkpoint.national_rotation = national_rotation_;
     checkpoint.injured_roles = injured_role_;
@@ -2901,7 +2903,9 @@ void Game::new_season() {
     // There are no matches, transfer offers or normal training in this loop.
     for (int summer_day = 234; summer_day <= 365; summer_day++) {
         const GameDate summer_date = date_of_season_day(summer_day, save_.year);
-        if (summer_day % 7 == 0) stadium_week(finance_, budget_, save_.state, 0, brng_);
+        if (summer_day % 7 == 0) stadium_week(finance_, budget_, save_.state, 0, brng_, [&](const std::string& a, const std::string& b) {
+            native_add_message(save_.state, brng_, {summer_date.day, summer_date.month, summer_date.year, summer_day}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, 0, true);
+        });
         const int month_days = kMonthDays[size_t(summer_date.month - 1)];
         stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
         if (summer_date.day == month_days / 2 || summer_date.day == month_days) {
@@ -3103,6 +3107,11 @@ Bytes Game::native_save_bytes() {
 }
 
 void Game::advance_day() {
+    if (message_step_pending_) {  // ovr038:3019 / 3067 when the play step starts from the menu
+        native_sort_messages(save_.state);
+        native_message_step(save_.state);
+        message_step_pending_ = false;
+    }
     interactive_played_ = false;
     expire_advert_options();
     if (day_ + 1 >= int(calendar_.events.size())) {
@@ -3210,7 +3219,12 @@ g_draw_scope = "weekly-injuries-offers-training";
         train_squad();
     }
 g_draw_scope = "stadium-week";
-    if ((day_ + 1) % 7 == 0) stadium_week(finance_, budget_, save_.state, 0, brng_);
+    if ((day_ + 1) % 7 == 0) {
+        const GameDate wear_date = date_of_season_day(day_ + 1, save_.year);
+        stadium_week(finance_, budget_, save_.state, 0, brng_, [&](const std::string& a, const std::string& b) {  // ovr032:0000 wear message
+            native_add_message(save_.state, brng_, {wear_date.day, wear_date.month, wear_date.year, day_ + 1}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, 0, true);
+        });
+    }
     if (world_phase) heal_squad((day_ + 1) % 7 == 0);
     prepare_human_lineup();
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
@@ -3233,8 +3247,8 @@ g_draw_scope = "stadium-week";
         daily_luck_ = brng_.range(85, 115);
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
         // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
-        native_sort_messages(save_.state);
-        native_message_step(save_.state);
+        // (REAL-CODE period 16: only when the next play step leaves the menu, so a message of this step keeps its count)
+        message_step_pending_ = true;
         // before a DEB cup day the original prepares the energies of the 28 cup clubs outside the three leagues (REAL-CODE)
         if (next_event == kEventCup && cup_game_ == 0)
             for (int t = 36; t < 64; t++)
