@@ -122,9 +122,11 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
     struct Entry {
         size_t day, pair;
         int home, away;
+        int scheduled[2] = {0, 0};  // the teams of the pair table before the pair-table error; the table booking uses them (REAL-CODE period 28)
         MatchStats local;
         MatchStats* stats = nullptr;
         int before[2] = {0, 0};
+        int frozen[2] = {-1, -1};  // penalty minutes of a side when the pair-table error replaced its team
         std::unique_ptr<MatchRun> run;
     };
     std::vector<std::unique_ptr<Entry>> entries;
@@ -138,6 +140,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             e->pair = k;
             e->home = league.first_team + pairings[d][k].home;
             e->away = league.first_team + pairings[d][k].away;
+            e->scheduled[0] = e->home; e->scheduled[1] = e->away;
             e->stats = (e->home == human_team || e->away == human_team) && human_stats ? human_stats : &e->local;
             e->before[0] = e->stats->penalty_minutes[0];
             e->before[1] = e->stats->penalty_minutes[1];
@@ -177,6 +180,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (!found) continue;
             shared[next] = copy;
             side_state(*f, side) = copy.team;
+            // the replaced team keeps the penalty minutes it had so far; the shared record counts on for the new team (REAL-CODE period 28)
+            if (f->frozen[side] < 0) f->frozen[side] = side_box(*f, side).minutes_assessed();
             side_box(*f, side) = copy.box;
             id = next;
             if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d\n", f->pair, side, next);
@@ -218,7 +223,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 if (team >= ld.league->first_team && team < ld.league->first_team + kHokLeagueSize) return &ld.league->rows[size_t(team - ld.league->first_team)];
             return nullptr;
         };
-        if (played) { if (played->size() < days.size()) played->resize(days.size()); (*played)[e->day].push_back({e->home, e->away}); }
+        if (played) { if (played->size() < days.size()) played->resize(days.size()); (*played)[e->day].push_back({e->scheduled[0], e->scheduled[1]}); }
         {  // the original plays on the real team records: the match state stays there (the human club is booked by the game)
             for (int side = 0; side < 2; side++) {
                 if ((side == 0 ? e->home : e->away) == human_team) continue;
@@ -234,7 +239,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
             }
         }
-        book_result_rows(row_of(e->home), row_of(e->away), r);
+        book_result_rows(row_of(e->scheduled[0]), row_of(e->scheduled[1]), r);
         if (false && brng) {  // moved to Game::play_league_day (per league, before the scorers)  // ovl13 table booking (sub_5C067, twice): the morale byte +0x17 follows the goal difference, clamped to 47..53
             const int diff = r.home - r.away;
             auto morale = [&](int team, int d) {
@@ -244,8 +249,10 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             morale(e->home, diff);
             morale(e->away, -diff);
         }
-        if (HokTableRow* rh = row_of(e->home)) rh->penalty_minutes = uint16_t(rh->penalty_minutes + e->stats->penalty_minutes[0] - e->before[0]);
-        if (HokTableRow* ra = row_of(e->away)) ra->penalty_minutes = uint16_t(ra->penalty_minutes + e->stats->penalty_minutes[1] - e->before[1]);
+        const int pm0 = e->frozen[0] >= 0 ? e->frozen[0] : e->stats->penalty_minutes[0] - e->before[0];
+        const int pm1 = e->frozen[1] >= 0 ? e->frozen[1] : e->stats->penalty_minutes[1] - e->before[1];
+        if (HokTableRow* rh = row_of(e->scheduled[0])) rh->penalty_minutes = uint16_t(rh->penalty_minutes + pm0);
+        if (HokTableRow* ra = row_of(e->scheduled[1])) ra->penalty_minutes = uint16_t(ra->penalty_minutes + pm1);
         results[e->day].push_back(r);
     }
     for (size_t d = 0; d < days.size(); d++) {
