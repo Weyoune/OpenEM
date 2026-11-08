@@ -766,9 +766,12 @@ struct MatchRun::Impl {
         minute++;
         LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
         LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
-        if (minute == 21 || minute == 41 || (std::getenv("EM_OT_BREAK") && (minute == 61 || minute == 66) && (hp || ap))) {  // the overtime breaks only recover the managed match (REAL-CODE)
-            prepare_match_energy(h, hp ? &hsq : nullptr, true);
-            prepare_match_energy(a, ap ? &asq : nullptr, true);
+        if (minute == 21 || minute == 41 || ((minute == 61 || minute == 66) && (hp || ap))) {  // the breaks of the overtime reach the managed match here, the other pairs through overtime_break()
+            const int times = 1;
+            for (int i = 0; i < times; i++) {
+                prepare_match_energy(h, hp ? &hsq : nullptr, true);
+                prepare_match_energy(a, ap ? &asq : nullptr, true);
+            }
         }
         // ovr030:3680..3772 (called by the minute loop for a match with a manager): one draw rand(0, 200 + 200 * level + 20 * v) per
         // human manager of the match, v = min(40, 60 - byte); a zero starts an interactive event (not simulated)
@@ -883,6 +886,7 @@ MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, in
 MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
 void MatchRun::set_watched(bool on) { p_->watched = on; }
+void MatchRun::overtime_break() { if (p_->hp || p_->ap) return; prepare_match_energy(p_->h, nullptr, true); prepare_match_energy(p_->a, nullptr, true); }
 MatchResult MatchRun::finish() { return p_->finish(); }
 const HokTeam& MatchRun::home_state() const { return p_->h; }
 const HokTeam& MatchRun::away_state() const { return p_->a; }

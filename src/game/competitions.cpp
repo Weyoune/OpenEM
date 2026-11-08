@@ -218,6 +218,8 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
+        if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
+            for (auto& e : entries) e.run->overtime_break();
         for (auto& e : entries) more = e.run->step() || more;
         minute_number++;
         if (minute_number == 20 && std::any_of(entries.begin(), entries.end(), [&](const Entry& e) { return e.home == human.team; }))

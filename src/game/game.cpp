@@ -586,39 +586,44 @@ void Game::play_cup_day() {
                       save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away,
                       t.result.shootout ? " (shoot-out)" : "");
         log_.push_back(line);
+        if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "%s marker %d\n", line, t.result.decision_marker);
         if (!forfeited && t.home == human_team_ && !gate_before)
             home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                       team_rank(t.away));
     }
-    if (live) {  // after a cup display game: all cup clubs are rested to 90, the human squad recovers 2 x 19 (REAL-CODE)
+    if (live) {  // after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
         bool human_in = false;
-        int opponent = -1;
         for (const Tie& t : ties)
-            if (t.home == human_team_ || t.away == human_team_) {
-                human_in = true;
-                opponent = t.home == human_team_ ? t.away : t.home;
-            }
+            if (t.home == human_team_ || t.away == human_team_) human_in = true;
         for (int team = 0; team < 64; team++) {
             if (team == human_team_) continue;
-            if (team == opponent) {  // the opponent of the manager game recovers like the manager squad
-                for (auto& kind : save_.teams[size_t(team)].energy)
-                    for (auto& e : kind) e = std::min(90, e + 38);
-            } else {
-                bool in_round = false;
-                for (const Tie& t : ties) in_round |= t.home == team || t.away == team;
-                if (true || !in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);  // clubs outside the round: energy 90, no mode bits, shifts 0; the players of the round keep their final state (REAL-CODE)
-            }
+            bool in_round = false;
+            for (const Tie& t : ties) in_round |= t.home == team || t.away == team;
+            if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);  // energy 90, no mode bits, shifts 0
         }
         if (human_in) {
-            for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-                uint8_t& f = save_.state.at(kSquad + slot * kSquadRecord + 0x1B);
-                f = uint8_t(std::min(90, int(f) + 38));
-                save_.squad[slot].fitness = f;
+            // REAL-CODE: after the game the managed match recovers 2 x 19, less what its overtime breaks (61, 66) gave already
+            int played = 0;
+            for (int line = 0; line < 4; line++) played += stats.line_minutes[0][line];
+            const int recover = 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0);  // the rest after the game is worth 2 x 19 in all, minus the breaks taken inside the overtime (REAL-CODE)
+            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d\n", played, recover);
+            if (recover > 0) {
+                int opponent = -1;
+                for (const Tie& t : ties)
+                    if (t.home == human_team_ || t.away == human_team_) opponent = t.home == human_team_ ? t.away : t.home;
+                for (int team : {opponent, human_team_})
+                    if (team >= 0)
+                        for (auto& kind : save_.teams[size_t(team)].energy)
+                            for (auto& e : kind) e = uint8_t(std::min(90, e + recover));
+                for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                    uint8_t& f = save_.state.at(kSquad + slot * kSquadRecord + 0x1B);
+                    f = uint8_t(std::min(90, int(f) + recover));
+                    save_.squad[slot].fitness = f;
+                }
             }
-            for (auto& kind : save_.teams[size_t(human_team_)].energy)
-                for (auto& e : kind) e = std::min(90, e + 38);
-            save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == human_team_ || p.away == human_team_) return p.home; return 0; }());
         }
+        if (human_in)
+            save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == human_team_ || p.away == human_team_) return p.home; return 0; }());
     }
     cup_game_++;
     bool open = false;
