@@ -2923,6 +2923,14 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
     const SeasonCalendar calendar = load_season_calendar(exe);
     auto check = [](Game& game, int days) {
         const HokFile h = decode_hok(game.save_bytes());
+        // a final decided 2:0 is closed at once (REAL-CODE period 28): game index and wins 0, the winner twice in the cup
+        // grid, winner and losing finalist booked
+        if (days >= 14 && game.cup_winner() >= 0 && h.state[0x8E51] == h.state[0x8E52]) {
+            CHECK(h.cup_round == 5 && h.state[0x031B] == 0 && h.state[0x037C] == 0 && h.state[0x037D] == 0);
+            CHECK(h.state[0x8E51] == game.cup_winner() && h.state[0x0DC7] == game.cup_winner() && h.state[0x0DCC] != game.cup_winner());
+            CHECK(game.cup_series().empty());
+            return;
+        }
         const int round = std::min(days / 3 + 1, 5), played = days == 15 ? 2 : days % 3;
         CHECK(h.cup_round == round && h.state[0x031B] == played && h.state[0x8F84] == round);
         CHECK(h.cup_draw.size() == size_t(16 >> std::min(days / 3, 4)));
@@ -2968,6 +2976,11 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const Bytes bytes = game.save_bytes();
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
+            if (resumed.save_bytes() != bytes) {
+                const HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
+                for (size_t i = 0; i < x.state.size(); i++)
+                    if (x.state[i] != y.state[i]) { std::fprintf(stderr, "cup resume diff at state %zx: %02x vs %02x (checkpoint %d)\n", i, x.state[i], y.state[i], checkpoint); break; }
+            }
             CHECK(resumed.save_bytes() == bytes);
             if (checkpoint < 15) {
                 while (resumed.season_day() < calendar.nth_day(kEventCup, checkpoint + 1)) resumed.advance_day();
@@ -3848,7 +3861,7 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const size_t slot = size_t(base) + pair * 2;
             const int first = h.state[0x8E91 + slot];
             CHECK(first == s.higher || first == s.lower);
-            CHECK(h.state[0x024B + slot] == (first == s.higher ? s.wins_higher : s.wins_lower));
+            CHECK(std::min(int(h.state[0x024B + slot]), 3) == (first == s.higher ? s.wins_higher : s.wins_lower));  // 0x14 marks a lower-seed winner
             int higher_wins = 0, lower_wins = 0;
             for (size_t match = 0; match < s.games.size(); match++) {
                 const size_t o = 0x0205 + match * 14 + slot;
@@ -4499,7 +4512,12 @@ static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_
         const Bytes original_working = continuous.save().state;
         const Bytes expected = continuous.save_bytes(), actual = resumed->save_bytes();
         CHECK(continuous.save().state == original_working);  // export is observational
-        if (expected != actual) std::fprintf(stderr, "checkpoint HOK mismatch after %s\n", scenario.name);
+        if (expected != actual) {
+            std::fprintf(stderr, "checkpoint HOK mismatch after %s\n", scenario.name);
+            const HokFile x = decode_hok(expected), y = decode_hok(actual);
+            for (size_t i = 0; i < x.state.size(); i++)
+                if (x.state[i] != y.state[i]) std::fprintf(stderr, "  state %zx: %02x vs %02x\n", i, x.state[i], y.state[i]);
+        }
         CHECK(expected == actual);
         std::printf("checkpoint continuation: %s seed %u, %d days, save/reload after every day\n",
                     scenario.name, unsigned(seed), scenario.days);

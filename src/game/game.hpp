@@ -378,6 +378,7 @@ private:
     InjuryTables injuries_;
     NationalTeamTables national_tables_;
     std::array<int, 30> injured_role_{};  // role (+0x0A) of an injured player before he got hurt
+    std::array<bool, 30> hurt_in_match_{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     int daily_luck_ = 100;                // DS:E1A4: valuation factor 85..115 of the current play step
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
     bool human_played_ = false;          // the human club played today
