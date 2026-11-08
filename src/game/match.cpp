@@ -188,7 +188,7 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
         std::fprintf(stderr, "gpall %d %d %d %d lines %d/%d %d/%d sk %d/%d eff %d/%d fl %d/%d\n", minute, counter++ % 18, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, h.effort_current, a.effort_current, h.flags, a.flags);
     }
     if (std::getenv("EM_DEBUG_GP2")) std::fprintf(stderr, "gp2 min %d flags %d/%d shift %d,%d/%d,%d\n", minute, h.flags, a.flags, h.shift[0], h.shift[1], a.shift[0], a.shift[1]);
-    if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
+    if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "G=%zu goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", g_game_log ? g_game_log->size() : size_t(0), minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
     if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP")) {
         std::fprintf(stderr, "globals: level %d per %d/%d minute %d\n", hh->level, hh->per_line[0], hh->per_line[1], minute);
         std::fprintf(stderr, "team11: flags %d effort %d lines %d/%d energy %d %d %d %d %d %d %d %d skill1 %d/%d skill2 %d/%d form %d/%d bonus %d\n", h.flags, h.effort_current,
@@ -499,6 +499,9 @@ void recount_on_ice(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const 
     if (total > limit) attackers = 3 - (total - limit);
     per_line[0] = defenders;
     per_line[1] = attackers;
+    // ovr030:35F4..: the recount overwrites the skater count of the record (defenders + attackers) and sets/clears the pulled-goalie bit (six skaters)
+    t.skaters = defenders + attackers;
+    if (defenders + attackers == 6) t.flags |= 0x08; else t.flags &= uint8_t(~0x08);
 }
 
 struct PenaltySide {
@@ -512,8 +515,8 @@ struct PenaltySide {
 };
 
 // ovl06_02d8: the paired call also ticks its side, as in the original.
-bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRandom& rng) {
-    const int running = side.box.tick(side.team, side.squad);
+bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRandom& rng, bool tick = true) {
+    const int running = tick ? side.box.tick(side.team, side.squad) : side.box.running();
     if (running > 1) return false;
     const int effort = side.human ? std::clamp(side.team.effort_current + side.human->penalty_effort_adjustment,
                                                0, 100) : side.team.effort_current;
@@ -537,7 +540,7 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     }
     side.box.start(side.team, major, slot, side.squad);
     if (selection_failed) return false;  // native sentinel aborts the paired call after the team penalty
-    if (pair && !penalty_minute(other, side, false, rng) && side.stats) side.stats->rollback(token);
+    if (pair && !penalty_minute(other, side, false, rng, true) && side.stats) side.stats->rollback(token);
     return true;
 }
 }  // namespace
