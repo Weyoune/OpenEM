@@ -1598,6 +1598,14 @@ void Game::play_euro_day() {
             for (size_t slot = 0; slot < 4; slot++)
                 save_.state.at(kEuroFinalTeams + slot) = uint8_t(euro_final_.teams[slot]);
             store_group_schedule(save_.state, euro_final_, 3, 0, schedule_);
+            // the final group is stored in the five-team layout: third pair of every round 6:2, order slots 4 and 5
+            // identical (REAL-CODE period 15; only when the group is formed, native saves keep their own bytes)
+            for (int round = 0; round < 6; round++) {
+                save_.state.at(kGroupSchedule + size_t(3 * 0x48 + round * 6) + 4) = 6;
+                save_.state.at(kGroupSchedule + size_t(3 * 0x48 + round * 6) + 5) = 2;
+            }
+            save_.state.at(kGroupOrder + 3 * 12 + 4) = 4;
+            save_.state.at(kGroupOrder + 3 * 12 + 5) = 5;
             std::fill(save_.state.begin() + long(kGroupResults + 3 * 0x48),
                       save_.state.begin() + long(kGroupResults + 4 * 0x48), uint8_t(0));
             std::string line = "European cup final round:";
@@ -1616,9 +1624,22 @@ void Game::play_euro_day() {
             log_.push_back("European cup winner: " + save_.teams[size_t(euro_champion_)].name);
         }
     }
-    if (r == 0)  // the first EuroCup day lists both groups in the slots DS:5D5B (state 0x8EB1, REAL-CODE period 13)
+    // every EuroCup day leaves the pairs of the round in the slots DS:5D5B (state 0x8EB1): home, away, home, away per group;
+    // the final round has one group of four and FF behind it (REAL-CODE periods 13-15)
+    if (r < 6) {
         for (size_t g = 0; g < 2; g++)
-            for (size_t t = 0; t < 4; t++) save_.state.at(0x8EB1 + g * 4 + t) = uint8_t(euro_groups_[g].teams[t]);
+            for (size_t i = 0; i < 2 && i < save_.euro_rounds[g][size_t(r)].size(); i++) {
+                save_.state.at(0x8EB1 + g * 4 + i * 2) = uint8_t(save_.euro_rounds[g][size_t(r)][i].home);
+                save_.state.at(0x8EB1 + g * 4 + i * 2 + 1) = uint8_t(save_.euro_rounds[g][size_t(r)][i].away);
+            }
+    } else if (r < 12) {
+        const auto pairs = round_robin_pairings(schedule_.teams4, r - 6);
+        for (size_t i = 0; i < 2 && i < pairs.size(); i++) {
+            save_.state.at(0x8EB1 + i * 2) = uint8_t(euro_final_.teams[size_t(pairs[i].home)]);
+            save_.state.at(0x8EB1 + i * 2 + 1) = uint8_t(euro_final_.teams[size_t(pairs[i].away)]);
+        }
+        for (size_t s = 4; s < 8; s++) save_.state.at(0x8EB1 + s) = 0xFF;
+    }
     if (!human_euro && !minute_path) {
         // a EuroCup day without the human club rests the 64 clubs like a cup day without him: energy 90, shifts 0, the
         // human squad's fitness 90 and match load, DS:A88D = FF (REAL-CODE period 13)
