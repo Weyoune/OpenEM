@@ -25,6 +25,9 @@ int better_of(int a, int b, GameRandom& rng) {
     return coin == 0 ? b : std::max(a, b); }
 
 int offence_bonus(const HokTeam& t, GameRandom& rng) {
+    if (std::getenv("EM_DEBUG_OB") && g_game_log && g_game_log->size() + 40 > size_t(std::atoi(std::getenv("EM_DEBUG_OB"))) &&
+        g_game_log->size() < size_t(std::atoi(std::getenv("EM_DEBUG_OB"))) + 5)
+        std::fprintf(stderr, "offence %s flags %02x base %d eff %d at G%zu\n", t.name.c_str(), t.flags, t.offence_base, t.effort_current, g_game_log->size());
     int r = int(rng.range((t.flags & 0x70) >> 4, 7));
     return std::max(0, r - 5);
 }
@@ -261,6 +264,9 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
         home++;
         away++;
     }
+    if (std::getenv("EM_DEBUG_GOALCALLS"))  // the same shape as GOALCALLS of em_realcode_boot: minute@G=home:away
+        std::fprintf(stderr, "goalcall %s-%s %d@%zu=%d:%d sh %d sa %d\n", h.name.c_str(), a.name.c_str(), minute,
+                     g_game_log ? g_game_log->size() : size_t(0), home, away, sh, sa);
     return {home, away};
 }
 
@@ -582,7 +588,7 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
     const int own = playing_strength(t, nullptr, StrengthMode::Neutral, 0, 0, t.current_line[0], t.current_line[1]) * 2;
     const int other = playing_strength(opp, nullptr, StrengthMode::Neutral, 0, 0, opp.current_line[0], opp.current_line[1]) * 2;
     const bool stronger = other <= own;
-    if ((human || std::getenv("EM_DEBUG_ALL")) && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup %s: own %d other %d (doubled playing strength), effort before %d/%d, close=%d\n", human ? "human" : "cpu", own, other, t.effort_current, opp.effort_current, std::abs(own - other) < 25);
+    if ((human || std::getenv("EM_DEBUG_ALL")) && std::getenv("EM_DEBUG_SETUP")) std::fprintf(stderr, "setup %s %s vs %s: own %d other %d lines %d/%d en %d %d %d %d form %d/%d bonus %d s1 %d/%d s2 %d/%d, effort before %d/%d, close=%d\n", human ? "human" : "cpu", t.name.c_str(), opp.name.c_str(), own, other, t.current_line[0], t.current_line[1], t.energy[0][0], t.energy[0][1], t.energy[1][0], t.energy[1][1], t.form[0], t.form[1], t.bonus, t.skill1[0], t.skill1[1], t.skill2[0], t.skill2[1], t.effort_current, opp.effort_current, std::abs(own - other) < 25);
     t.flags = stronger ? (t.flags | 0x80) : (t.flags & 0x7F);
     const bool close = std::abs(own - other) < 25;
     const bool automatic_effort = !human || human->effort_control == 0;

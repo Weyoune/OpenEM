@@ -357,8 +357,11 @@ Bytes Game::checkpoint_bytes() const {
 int Game::team_rank(int team) const {
     for (int l = 0; l < 3; l++) {
         const League& lg = leagues_[size_t(l)];
+        // the position byte of the table row (+0x31); within the season it equals the place in the table order, after the
+        // season change it still holds the last season's place (REAL-CODE period 31: the gate of matchday 1)
         if (team >= lg.first_team && team < lg.first_team + kHokLeagueSize)
-            return int(std::find(lg.ranking.begin(), lg.ranking.end(), team - lg.first_team) - lg.ranking.begin());
+            return std::getenv("EM_OLD_RANK") ? int(std::find(lg.ranking.begin(), lg.ranking.end(), team - lg.first_team) - lg.ranking.begin())
+                                              : lg.rows[size_t(team - lg.first_team)].position;
     }
     return 5;
 }
@@ -376,6 +379,10 @@ void Game::home_game(int guest, int kind, int home_class, int guest_class, int h
     m.kind = kind;
     m.league_statistics = league_statistics;
     const uint8_t previous_home_games = uint8_t(budget_.home_games);
+    if (std::getenv("EM_DEBUG_GATE"))
+        std::fprintf(stderr, "gate vs %d: class %d/%d strength %d/%d rank %d/%d kind %d places %d/%d price %d games %d image %d\n", guest, m.home_class, m.away_class,
+                     m.home_strength, m.away_strength, m.home_rank, m.away_rank, kind, int(budget_.places[0]), int(budget_.places[1]),
+                     int(budget_.ticket_price), int(budget_.home_games), image_);
     const long spectators = home_attendance(finance_, budget_, m, brng_);
     match_attendance_ = spectators;
     match_sold_out_ = spectators == long(budget_.places[0]) + budget_.places[1];
