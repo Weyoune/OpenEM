@@ -10,9 +10,8 @@
 //     endless loop, crowd) and restarts it whenever the voice is idle (status word DS:59E4 == 0, ovr038:4E80/4EDB/4F07);
 //     a frame whose byte +3 is s = 1..4 stops the voice and plays KB\(237 + s) (ovr038:4EB5); the end of the scene
 //     stops the voice (ovr038:4FB2). One frame lasts one BIOS tick (sub_1E7F8(1) / sub_1E83E). The Sound Blaster
-//     plays one voice at a time, so a frame sample interrupts the loop. OpenEM does not draw goal scenes yet; on a goal
-//     of a match with a board, with Torszenen switched on, it plays the sound track of a random scene of the scoring side
-//     (TORE\<2..MAXSZENE>.h t / .a t) over the match display.
+//     plays one voice at a time, so a frame sample interrupts the loop. OpenEM starts the track with the first frame of
+//     a drawn goal scene (ClassicMatchFrame::scene, classic_goal_scene.cpp) and stops it after the last one.
 // There is no other sound in EM.EXE: the only callers of the voice and FM wrappers are ovr038 and ovr034.
 #include "formats/sound.hpp"
 #include "formats/tore.hpp"
@@ -74,7 +73,9 @@ public:
     bool available() const { return device_ != 0; }
     void play_title_music();
     void stop_title_music();
-    void play_goal_scene(bool home);
+    // The sound track of a TORE\ script (ClassicMatchFrame::scene), one frame per BIOS tick; stop_scene ends it.
+    void play_scene(const std::string& script);
+    void stop_scene();
     static ClassicSound* instance() { return instance_; }
 
 private:
@@ -83,7 +84,6 @@ private:
     ClassicSoundMixer mixer_;
     uint32_t device_ = 0;
     int rate_ = 44100;
-    int max_scene_ = 11;
     bool title_done_ = false;
     std::vector<float> buffer_;
     static ClassicSound* instance_;
@@ -91,6 +91,6 @@ private:
 
 // Hook for the match display: called when the shown frame changes. Plays the goal-scene sound for board goals when
 // the Torszenen switch is on and a ClassicSound exists; does nothing otherwise.
-void classic_sound_match_frame(const ClassicMatchFrame& before, const ClassicMatchFrame& after, bool goal_scenes);
+void classic_sound_match_frame(const ClassicMatchFrame& before, const ClassicMatchFrame& after);
 
 }  // namespace em::ui

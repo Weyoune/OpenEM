@@ -2,6 +2,7 @@
 #include "ui/classic_match_view.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "game/game.hpp"
 #include "ui/classic_cup.hpp"
@@ -220,6 +221,10 @@ int speak_ms(const std::string& text, int speed) {
 }  // namespace
 
 void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
+    if (frame.scene) {
+        draw_classic_goal_scene(c, *frame.scene);
+        return;
+    }
     c.background(22);
     if (frame.boards.empty()) {
         // ovr030:2642: "Spiele laufen" (DS:0620) centred in font 1, a plain panel and the minute display
@@ -365,13 +370,48 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
     return out;
 }
 
-std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes) {
-    if (speed >= 70) return frames;
+std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, int goal_scenes,
+                                                      const std::filesystem::path& data) {
+    const bool scenes = goal_scenes && !data.empty();
+    // Stufe 2 ("Eisfeld bleibt an", DS:5A55): ovl06_161d opens the rink once (ovl14_4938 mode 1) instead of the boards;
+    // the minute loop only renews "<m>.MINUTE" (FUN_1bbf_30b5 + ovl14_5258), the scenes run in place (mode 2) and end
+    // without restoring a board; DS:5A56 stays 0, so there are neither board messages nor goal flashes.
+    const bool rink_stays = scenes && goal_scenes == 2;
+    if (speed >= 70 && !scenes) return frames;
+    int chance_count = 0;
     std::vector<ClassicMatchFrame> out;
     std::optional<ClassicMatchFrame> last;
+    std::optional<ClassicGoalScene> rest;  // Stufe 2: the view between the scenes
+    const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {  // the match ovl06_161d opens (first board)
+        return f.boards.empty() ? nullptr : &f.boards.front();
+    };
+    const auto shirt_colours = [](const ClassicBoard& b) {
+        std::array<int, 2> colour{b.team[0].colour, b.team[1].colour};
+        int distance = 0;  // ovl14 1D69: sum of the nibble differences
+        for (int shift = 0; shift < 12; shift += 4) distance += std::abs((colour[0] >> shift & 15) - (colour[1] >> shift & 15));
+        if (distance < 6) colour[1] = colour[0] ^ 0xFFF;
+        return colour;
+    };
+    const auto scene_of = [&](const ClassicBoard& b, int minute) {
+        ClassicGoalScene s;
+        s.arena = b.arena;
+        s.colour = shirt_colours(b);
+        s.names = {b.team[0].name, b.team[1].name};
+        s.goals = {b.goals[0] % 30, b.goals[1] % 30};
+        // DS:54BE / DS:54C9: the attendance of the manager's home game, else "AUSWÄRTS"
+        s.info = b.team[0].human ? std::to_string(b.attendance) + " ZUSCHAUER" : "AUSWÄRTS";
+        s.minute = minute;
+        return s;
+    };
     for (ClassicMatchFrame& frame : frames) {
+        if (rink_stays && frame.flash) continue;  // no goal flashes without a board
         // cup tables and goal flashes (classic_goal_flashes runs first) pass unchanged
-        if (frame.cup_table || frame.flash || frame.message) { out.push_back(std::move(frame)); continue; }
+        if (frame.cup_table || frame.flash || frame.message || frame.scene) { out.push_back(std::move(frame)); continue; }
+        if (rink_stays && !rest)
+            if (const ClassicBoard* b = human_board(frame)) {
+                rest = scene_of(*b, frame.minute);  // camera (0, 0), no objects
+                rest->info.clear();                // ovl06_161d opens the rink without the attendance line (DOSBox)
+            }
         if (last && !frame.boards.empty() && last->boards.size() == frame.boards.size()) {
             ClassicMatchFrame base = *last;
             base.minute = frame.minute;
@@ -379,12 +419,38 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                 const ClassicBoard& now = frame.boards[b];
                 const ClassicBoard& before = last->boards[b];
                 if (now.team[0].name != before.team[0].name || now.team[1].name != before.team[1].name) continue;
+                // ovl14_1dc7: the goal scene of every chance of a match on a board (FUN_162c_23c4 var_9 != 0x1E; DS:5A56)
+                const bool scene_board = scenes;
+                std::array<int, 2> running{before.goals[0], before.goals[1]};
                 for (int side = 0; side < 2; side++) {
                     const ClassicBoardTeam& t = now.team[size_t(side)];
                     const ClassicBoardTeam& p = before.team[size_t(side)];
                     const auto emit = [&](ClassicBoardMessage m) {
+                        if (scene_board && m.kind <= 1) {
+                            ClassicGoalScene s = scene_of(now, frame.minute);
+                            s.goals = {running[0] % 30, running[1] % 30};
+                            // ovr038:4CBD: the j scenes when the attacking side has skaters + running penalties = 6
+                            const int penalties = ((t.penalty_code & 7) != 0) + ((t.penalty_code >> 4 & 7) != 0);
+                            s.script = classic_goal_scene_script(2 + (frame.minute * 7 + chance_count * 3 + side) % 10, side,
+                                                                 m.kind == 1, false, t.skaters + penalties == 6);
+                            ClassicMatchFrame scene_base = base;
+                            if (rink_stays) { scene_base.boards.clear(); scene_base.reported.clear(); }
+                            // ovl14_1dc7: delay(30) before the scene (the board, at Stufe 2 the resting rink)
+                            ClassicMatchFrame wait = scene_base;
+                            wait.message.reset();
+                            wait.flash.reset();
+                            if (rink_stays && rest) { wait.scene = *rest; wait.scene->minute = frame.minute; wait.scene->final = false; }
+                            wait.hold_ms = 30 * 54925 / 3000;
+                            out.push_back(std::move(wait));
+                            for (ClassicMatchFrame& f : classic_goal_scene_frames(data, scene_base, s, side, m.kind == 1, rink_stays))
+                                out.push_back(std::move(f));
+                            if (rink_stays) rest = out.back().scene;
+                            chance_count++;
+                        }
+                        if (m.kind == 1) running[size_t(side)]++;
+                        if (speed >= 70 || rink_stays) return;
                         m.team = t.name;
-                        for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, goal_scenes)) out.push_back(std::move(f));
+                        for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, goal_scenes != 0)) out.push_back(std::move(f));
                     };
                     const int minutes = t.penalty_minutes - p.penalty_minutes;
                     if (minutes == 2 || minutes == 5) emit(ClassicBoardMessage{minutes == 2 ? 2 : 3});
@@ -404,6 +470,15 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
             }
         }
         last = frame;
+        if (rink_stays && rest && human_board(frame)) {
+            // the minute frame shows the rink as the last scene left it, with the new minute
+            ClassicGoalScene view = *rest;
+            view.minute = frame.minute;
+            view.final = false;
+            frame.boards.clear();
+            frame.reported.clear();
+            frame.scene = view;
+        }
         out.push_back(std::move(frame));
     }
     return out;
@@ -449,6 +524,8 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
             for (int k = 0; k < 3; k++) t.chances[k] = p.period_chances[k][side];
             t.penalty_minutes = p.penalty_minutes[side];
             t.shootout_goals = p.score.shootout_goals[side];
+            t.colour = team < 150 ? h.state.at(0x17E7 + size_t(team) * 61 + 0x3B) | h.state.at(0x17E7 + size_t(team) * 61 + 0x3C) << 8 : 0;
+            t.human = team == game.human_team();
             if (team == game.human_team()) {
                 // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
                 // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
@@ -463,7 +540,13 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
                 }
             }
         }
-        if (m.home == game.human_team()) { b.attendance = attendance; b.sold_out = sold_out; }
+        if (m.home == game.human_team()) {
+            b.attendance = attendance;
+            b.sold_out = sold_out;
+            // ovl14_2630: fill level (attendance << 2) / capacity, 2 without places
+            const long capacity = long(game.budget().places[0]) + game.budget().places[1];
+            b.arena = capacity ? int((attendance << 2) / capacity) : 2;
+        }
         frame.boards.push_back(std::move(b));
     }
     return frame;

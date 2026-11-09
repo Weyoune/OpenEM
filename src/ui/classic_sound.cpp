@@ -6,9 +6,7 @@
 #include <SDL.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <random>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -127,15 +125,6 @@ ClassicSound::ClassicSound(const fs::path& em_dir) : em_dir_(em_dir) {
     }
     mixer_.set_voices(std::move(voices));
     mixer_.set_music(load([&] { return std::optional<CmfSong>(decode_cmf(read_file(em_dir / "KB" / (std::to_string(kSoundMusic) + ".vga")))); }));
-    // TORE\anzahl: "MAXSZENE:<normal>|<e>|<j>" (ovl15_0000)
-    if (auto text = load([&] { return std::optional<Bytes>(read_file(em_dir / "TORE" / "anzahl")); })) {
-        const std::string s(text->begin(), text->end());
-        const auto colon = s.find(':');
-        if (colon != std::string::npos) {
-            const int n = std::atoi(s.c_str() + colon + 1);
-            if (n >= 2 && n < 100) max_scene_ = n;
-        }
-    }
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) return;
     SDL_AudioSpec want{}, have{};
@@ -181,14 +170,9 @@ void ClassicSound::stop_title_music() {
     SDL_UnlockAudioDevice(device_);
 }
 
-void ClassicSound::play_goal_scene(bool home) {
+void ClassicSound::play_scene(const std::string& script) {
     if (!device_) return;
-    // ovl15_0143 rolls the scene number 2..MAXSZENE from the game's random stream; the frontend must not draw from it,
-    // so it uses its own generator.
-    static std::minstd_rand random(unsigned(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const int n = 2 + int(random() % unsigned(max_scene_ - 1));
-    const fs::path file = em_dir_ / "TORE" / (std::to_string(n) + (home ? ".ht" : ".at"));
-    auto scene = load([&] { return std::optional<TorScene>(decode_tor(read_file(file))); });
+    auto scene = load([&] { return std::optional<TorScene>(decode_tor(read_file(em_dir_ / "TORE" / script))); });
     if (!scene) return;
     std::vector<uint8_t> sounds;
     for (const TorFrame& f : scene->frames) sounds.push_back(f.sound);
@@ -197,11 +181,18 @@ void ClassicSound::play_goal_scene(bool home) {
     SDL_UnlockAudioDevice(device_);
 }
 
-void classic_sound_match_frame(const ClassicMatchFrame& before, const ClassicMatchFrame& after, bool goal_scenes) {
-    ClassicSound* sound = ClassicSound::instance();
-    if (!sound || !goal_scenes) return;
-    const std::vector<bool> goals = classic_board_goals(before, after);
-    if (!goals.empty()) sound->play_goal_scene(goals.back());
+void ClassicSound::stop_scene() {
+    if (!device_) return;
+    SDL_LockAudioDevice(device_);
+    mixer_.stop_scene();
+    SDL_UnlockAudioDevice(device_);
 }
 
+void classic_sound_match_frame(const ClassicMatchFrame& before, const ClassicMatchFrame& after) {
+    ClassicSound* sound = ClassicSound::instance();
+    if (!sound) return;
+    // ovr038:4C25 starts the crowd with the first frame of a scene; ovr038:4FB2 stops the voice at its end mark
+    if (after.scene && after.scene->frame == 1 && !after.scene->final) sound->play_scene(after.scene->script);
+    else if (before.scene && !before.scene->final && (!after.scene || after.scene->final)) sound->stop_scene();
+}
 }  // namespace em::ui

@@ -13,6 +13,7 @@ public:
     const Image& pixels() const { return pixels_; }
     const Palette& palette() const { return palette_; }
     const ClassicFont& font() const { return font_; }
+    const std::filesystem::path& data() const { return data_; }
     const Image& asset(int id);
     void background(int id = 22);
     void reset_palette();

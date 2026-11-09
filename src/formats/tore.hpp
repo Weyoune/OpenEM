@@ -88,4 +88,13 @@ Image decode_rink(const Bytes& tiles_a, const Bytes& tiles_b, const Bytes& map);
 // Sprite sheet (233, 234, 235) as a column of 32 x 32 images.
 std::vector<Image> decode_tor_sprites(const Bytes& data);
 
+// KB\246.vga: the panel of the goal scene (the bottom 40 lines, shown through the VGA split screen), a plain RLE stream
+// without length (FUN_1bbf_54bf: c < 0x80 -> c + 1 literal bytes, c > 0x80 -> (c & 0x7F) + 1 copies of the next byte,
+// 0x80 ends) of 320 x 40 pixels row by row.
+constexpr int kTorPanelWidth = 320, kTorPanelHeight = 40;
+Image decode_tor_panel(const Bytes& data);
+
+// The puck (object type 1) and type 0 as 5 x 5 bitmaps of the renderer (seg007:0054 / seg007:006D), 0 = transparent.
+extern const std::array<uint8_t, 25> kTorPuck, kTorDot;
+
 }  // namespace em

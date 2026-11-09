@@ -93,7 +93,7 @@ void ClassicApplication::begin_match_view(){
     // FUN_162c_23c4 goal flashes between the minutes, then the board messages of ovl14_0690 (speed < 70; with goal scenes,
     // DS:0226 = flag 9, only the final lines)
     const GameSettings settings=session_.game().settings();
-    match_frames_=classic_board_messages(classic_goal_flashes(std::move(frames)),settings.speed,settings.flags[9]!=0);match_frame_=0;
+    match_frames_=classic_board_messages(classic_goal_flashes(std::move(frames)),settings.speed,settings.flags[9],canvas_.data());match_frame_=0;replay_key_=false;
     match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_frame_ms(match_frames_[0],session_.game().settings().speed));
 }
 bool ClassicApplication::tick_match_view(){
@@ -101,9 +101,17 @@ bool ClassicApplication::tick_match_view(){
     const uint64_t now=SDL_GetTicks64();
     if(match_frames_[match_frame_].cup_table)return true;  // the cup table waits for a click (FUN_199f_0118)
     if(now<match_frame_until_)return true;
+    if(match_frames_[match_frame_].after_scene){
+        // ovl14_1dc7: after delay(20) a typed 'r' / 'w' plays the chance again (at most three plays)
+        if(replay_key_){
+            auto replay=classic_goal_scene_replay(canvas_.data(),match_frames_[match_frame_]);
+            match_frames_.insert(match_frames_.begin()+std::ptrdiff_t(match_frame_+1),replay.begin(),replay.end());
+        }
+        replay_key_=false;
+    }
     if(match_frame_+1>=match_frames_.size()){match_frames_.clear();return false;}
     match_frame_++;
-    classic_sound_match_frame(match_frames_[match_frame_-1],match_frames_[match_frame_],session_.game().settings().flags[9]!=0);  // goal-scene sound (classic_sound.hpp)
+    classic_sound_match_frame(match_frames_[match_frame_-1],match_frames_[match_frame_]);  // goal-scene sound (classic_sound.hpp)
     // the last minute stays a moment (the original waits for the period end, FUN_199f_0118)
     match_frame_until_=now+uint64_t(classic_match_frame_ms(match_frames_[match_frame_],session_.game().settings().speed))+(match_frame_+1==match_frames_.size()?1000u:0u);
     return true;
@@ -519,6 +527,8 @@ void ClassicApplication::motion(int x,int y){
     }
 }
 void ClassicApplication::key(int key){
+    // the key buffer read by ovl14_1dc7 after a goal scene
+    if(!match_frames_.empty()&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
     if(native_notice_until_||sale_quote_)return;
     if(career_key(key))return;
     if(screen_==ClassicScreen::NewManager){key_misc(key);return;}
