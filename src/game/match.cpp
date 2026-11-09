@@ -35,6 +35,20 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 }
 }  // namespace
 
+int g_goal_scenes = 0;
+
+// ovl15_0143: the scene of one chance on Borland rand (docs/logic/TORSZENEN_HOOK.md): number rand(2, 11), then
+// rand(0, goal ? 0xD2 : 0xFF) whose 0 forces the penalty variant e, then for e (or else for six skaters, j) rand(2, 2)
+GoalScene draw_goal_scene(BorlandRandom& b, int side, bool goal, bool penalty, bool six_skaters) {
+    GoalScene s;
+    s.side = side; s.goal = goal; s.penalty = penalty;
+    s.number = int(b.range(2, 11));
+    const bool forced = b.range(0, goal ? 0xD2 : 0xFF) == 0;
+    if (penalty || forced) { s.variant = 'e'; s.number = int(b.range(2, 2)); }
+    else if (six_skaters) { s.variant = 'j'; s.number = int(b.range(2, 2)); }
+    return s;
+}
+
 std::vector<std::pair<long, long>>* g_game_log = nullptr;
 std::vector<const char*>* g_game_scopes = nullptr;
 std::vector<uint32_t>* g_game_states = nullptr;
@@ -617,7 +631,8 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
 }
 
 // Penalty decisions: ovl06_161d quick path and ovl06_3adb after a full minute game.
-void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool human = false) {
+void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool human = false, bool scenes = false,
+              std::vector<GoalScene>* scene_log = nullptr) {
     int x = 0, y = 0;
     // the original draws the shoot-out with Borland rand (REAL-CODE: (2,5) pairs of the cup overtime)
     auto draw = [&](int lo, int hi) { return rng.borland ? rng.borland->range(lo, hi) : int(rng.range(lo, hi)); };
@@ -627,9 +642,18 @@ void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool hu
         // its supplied GameRandom stream; native RNG restoration remains separate.
         const int first = draw(0, 1);
         int goals[2] = {};
+        // with goal scenes every shot then draws its scene with the forced variant e (ovl14_1dc7 with penalty = 1)
+        auto shot = [&](int side) {
+            const bool hit = draw(0, 10) > 6;
+            if (scenes && rng.borland) {
+                const GoalScene s = draw_goal_scene(*rng.borland, side, hit, true, false);
+                if (scene_log) scene_log->push_back(s);
+            }
+            goals[side] += hit;
+        };
         for (int pair = 0; pair < 5 || goals[0] == goals[1]; pair++) {
-            goals[first] += draw(0, 10) > 6;
-            goals[1 - first] += draw(0, 10) > 6;
+            shot(first);
+            shot(1 - first);
         }
         x = goals[0]; y = goals[1];
     } else {
@@ -835,9 +859,13 @@ struct MatchRun::Impl {
     bool watched = false;
     bool shootout_done = false;
     MatchProgress shown;  // display bookkeeping only (ovl14_1dc7), never read by the simulation
+    // a match with a board (team byte +0x34 bit 7 at home or away) draws goal scenes when they are switched on
+    bool board() const { return (h.raw && (h.raw[0x34] & 0x80)) || (a.raw && (a.raw[0x34] & 0x80)); }
+    bool scenes_on() const { return g_goal_scenes != 0 && rng.borland && board() && !std::getenv("EM_OLD_NOSCENES"); }
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool step() {
         if (forfeit || minute >= last) return false;
+        shown.scenes.clear();
         minute++;
         static std::set<std::string> scope_pool;
         const bool scope_dbg = std::getenv("EM_DEBUG_SCOPE") != nullptr;
@@ -884,6 +912,7 @@ struct MatchRun::Impl {
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
+        if ((events & 1) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 0, home_goal, false, h.skaters + hbox.running() == 6));
         if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
         if ((events & 1) && ap && ap->on_opponent_chance) ap->on_opponent_chance(home_goal, h);
         if ((events & 1) && minute <= 60) { shown.period_chances[(minute - 1) / 20][0]++; if (home_goal) shown.period_goals[(minute - 1) / 20][0]++; }
@@ -898,6 +927,7 @@ struct MatchRun::Impl {
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
+        if ((events & 2) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 1, away_goal, false, a.skaters + away_penalties().running() == 6));
         if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a, asq);
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
         if ((events & 2) && minute <= 60) { shown.period_chances[(minute - 1) / 20][1]++; if (away_goal) shown.period_goals[(minute - 1) / 20][1]++; }
@@ -967,7 +997,7 @@ struct MatchRun::Impl {
         const bool more = minute < last;
         // a knock-out game that is still level after its last minute goes to the shoot-out at once (the other games go on)
         if (!more && opts.knockout && !shootout_done && score.home == score.away) {
-            shootout(score, rng, true, hp || ap);
+            shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes);
             shootout_done = true;
         }
         return more;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/result_books.hpp"
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
 #include <vector>
@@ -47,6 +49,7 @@ void book_head_to_head(Bytes& state, int home, int away, int home_goals, int awa
             for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i);
             for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i + 1);
         }
+        if (std::getenv("EM_DEBUG_H2H") && opp >= 52) std::fprintf(stderr, "h2h opp %d side %d value %02x\n", opp, side, v);
         for (uint8_t* p : slots)
             if (*p == 0xFF) {
                 *p = v;

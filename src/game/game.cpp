@@ -1196,11 +1196,44 @@ void Game::expire_contracts() {
             continue;
         }
         const ContractPlayer cp = contract_player(save_, 0, int(slot));
-        const long demand = renewal_demand(contracts_, cp, 2, 100, kMatchdays, kMatchdays, 233, brng_);
-        const int years = contract_decider_ ? contract_decider_(cp, demand) : 2;
-        const long offer = demand + demand / 10;
         HokSquadPlayer& sp = save_.squad[slot];
         HokPlayer& pl = save_.players[size_t(sp.player)];
+        if (!std::getenv("EM_OLD_CONTRACTS")) {
+            // ovl02_0000 (ovr026:0DC5..0E71, Amiga FUN_00133378) proposes 1 year at ovl11_3d36(record, 1) * (147 - age) / 100
+            // (no random draw); ovl11_41db shows it. "Mach' ich!" on the unchanged proposal takes it without the acceptance
+            // roll (ovr035:4C3C) and drops a pending message of the player (ovl12_0180). REAL-CODE period 58: 25 of 25.
+            const long proposal = long(int32_t(player_worth(contracts_, cp, Worth::Salary, brng_) * (147 - int(pl.age)) / 100));
+            const int years = contract_decider_ ? contract_decider_(cp, proposal) : 1;  // the default takes the proposal
+            if (years == 1) {
+                r[0x0B] = 1;
+                r[0x18] = 0;
+                for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(proposal >> (8 * b));
+                uint8_t* praw = save_.state.data() + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+                if (praw[0x1E] >= 1 && praw[0x1E] <= 24) native_delete_message(save_.state, praw[0x1E]);
+                sp.contract_years = 1;
+                sp.salary = proposal / 3;
+                log_.push_back(pl.name + " stays for 1 year at " + std::to_string(proposal / 3) + " DM");
+                slot++;
+                continue;
+            }
+            if (years > 1) {  // the manager changed the years: the player decides (player_accepts, ovl11_3a3b)
+                const long demand = renewal_demand(contracts_, cp, years, 100, kMatchdays, kMatchdays, 233, brng_);
+                if (player_accepts(contracts_, cp, years, demand, kMatchdays, kMatchdays, 233, brng_)) {
+                    r[0x0B] = uint8_t(years);
+                    r[0x18] = 0;
+                    for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(demand >> (8 * b));
+                    sp.contract_years = years;
+                    sp.salary = demand / 3;
+                    log_.push_back(pl.name + " signs for " + std::to_string(years) + " years at " + std::to_string(demand / 3) + " DM");
+                    slot++;
+                    continue;
+                }
+                r[0x18] = uint8_t(brng_.range(10, 18));  // a refusal: the wish counter starts again
+            }
+        }
+        const long demand = std::getenv("EM_OLD_CONTRACTS") ? renewal_demand(contracts_, cp, 2, 100, kMatchdays, kMatchdays, 233, brng_) : 0;
+        const int years = std::getenv("EM_OLD_CONTRACTS") ? (contract_decider_ ? contract_decider_(cp, demand) : 2) : 0;
+        const long offer = demand + demand / 10;
         if (years > 0 && player_accepts(contracts_, cp, years, offer, kMatchdays, kMatchdays, 233, brng_)) {
             r[0x0B] = uint8_t(years);
             for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(offer >> (8 * b));
@@ -3322,6 +3355,9 @@ void Game::new_season() {
         sp.goals_against = sp.league_goals_byte = sp.cup_goals_byte = sp.other_goals_byte = 0;
         sp.major_penalties = sp.minor_penalties = 0;
         r[0x00] = r[0x01] = 0;
+        // ovl02_0000 clears +0x00, +0x01 and +0x03..+0x08 in the raw records before the contract dialogs, whose salary
+        // formula reads the goals and penalties (REAL-CODE period 58)
+        if (!std::getenv("EM_OLD_CONTRACTS")) r[0x03] = r[0x04] = r[0x05] = r[0x08] = 0;
     }
     log_.push_back(std::to_string(retired) + " players retired");
     manager_offers_.clear();  // the offer flags are cleared above (ovl02_0000)
@@ -3639,6 +3675,7 @@ Bytes Game::native_save_bytes() {
 }
 
 void Game::advance_day() {
+    g_goal_scenes = save_.state.at(0xA525);  // DS:0226 goal scenes (docs/logic/TORSZENEN_HOOK.md)
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     // leaving the club calendar's last day (13.04., "Saisonende") clears the season flags of a manager without WM appointment

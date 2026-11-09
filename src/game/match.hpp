@@ -218,7 +218,22 @@ struct MatchProgress {
     int period_chances[3][2] = {};
     int penalty_minutes[2] = {};
     int penalty_code[2] = {};
+    std::vector<struct GoalScene> scenes;  // the goal scenes drawn in the last minute (empty without goal scenes)
 };
+
+// A goal scene of a chance (ovl15_0143, docs/logic/TORSZENEN_HOOK.md): file TORE\<number>.<h|a><v|t>[e|j].
+struct GoalScene {
+    int side = 0;          // 0 home attacks, 1 away attacks
+    bool goal = false;
+    int number = 2;        // 2..11, or 2 for the special variants
+    char variant = 0;      // 0, 'e' (penalty shot / forced) or 'j' (six skaters)
+    bool penalty = false;  // a shot of the shoot-out
+};
+
+// DS:0226 (state 0xA525): goal scenes 0 off, 1 on, 2 "ice stays on". With scenes on, every chance of a match with a board
+// (team byte +0x34 bit 7 at home or away) draws the scene with Borland rand between the goal decision and the scorer pick;
+// set by Game from the settings before the matches of a day.
+extern int g_goal_scenes;
 
 // One league match played minute by minute: the original plays all matches of a day interleaved (minute 1 of every
 // match, then minute 2 ...), see Game::play_league_day.
