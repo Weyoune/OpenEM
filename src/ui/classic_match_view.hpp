@@ -101,8 +101,8 @@ struct ClassicBoardMessage {
 };
 
 
-// A goal scene of ovl14_4938 (Torszenen on, DS:0226): with the scenes switched on, ovl14_1dc7 plays one for every chance
-// of the match of the manager's club before the board message. The scene replaces the whole screen: the rink of the
+// A goal scene of ovl14_4938 (Torszenen on, DS:0226): with the scenes switched on, ovl14_1dc7 plays one (after delay(30))
+// for every chance of every match on a board before its message. The scene replaces the whole screen: the rink of the
 // TORE\ script (KB231/232 tiles, map KB236 or KB242..245) as a 320 x 200 window at the camera with the puck and the 12
 // skaters of the script (KB233..235), palette KB247 with the team colours in 0xFE / 0xFD, and below it the panel KB246
 // (VGA split screen, ovl14_504d) with the club names, the score, "<n> ZUSCHAUER" / "AUSWÄRTS" and "<m>.MINUTE".
@@ -195,7 +195,7 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
 // or 5) and the chances of the home side, then the away side (chances of the regular time from the chance counters,
 // goals from the score; the goals of the manager's club name scorer and assist from the squad counters). The steps are
 // drawn over the previous minute's screen with the new minute display, like the goal flashes. Nothing at speed >= 70.
-// With goal scenes (the Torszenen level 1 or 2) and a data path, every chance of the board of the manager's club first
+// With goal scenes (the Torszenen level 1 or 2) and a data path, every chance of a board first waits delay(30) and
 // plays its goal scene (classic_goal_scene_frames), followed by delay(20) (ovl14_1dc7) on the board, or at level 2
 // ("Eisfeld bleibt an") on the rink, which then also stays between the scenes with the minute renewed (no boards,
 // messages or goal flashes). The script number n = 2..11 is rolled by the original with the Borland rand of the game

@@ -373,19 +373,17 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
 std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, int goal_scenes,
                                                       const std::filesystem::path& data) {
     const bool scenes = goal_scenes && !data.empty();
-    // Stufe 2 ("Eisfeld bleibt an", DS:0045): ovl06_161d opens the rink once (ovl14_4938 mode 1) instead of the boards;
+    // Stufe 2 ("Eisfeld bleibt an", DS:5A55): ovl06_161d opens the rink once (ovl14_4938 mode 1) instead of the boards;
     // the minute loop only renews "<m>.MINUTE" (FUN_1bbf_30b5 + ovl14_5258), the scenes run in place (mode 2) and end
-    // without restoring a board; DS:0046 and DS:5A56 stay 0, so there are neither board messages nor goal flashes.
+    // without restoring a board; DS:5A56 stays 0, so there are neither board messages nor goal flashes.
     const bool rink_stays = scenes && goal_scenes == 2;
     if (speed >= 70 && !scenes) return frames;
     int chance_count = 0;
     std::vector<ClassicMatchFrame> out;
     std::optional<ClassicMatchFrame> last;
     std::optional<ClassicGoalScene> rest;  // Stufe 2: the view between the scenes
-    const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {
-        for (const ClassicBoard& b : f.boards)
-            if (b.team[0].human || b.team[1].human) return &b;
-        return nullptr;
+    const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {  // the match ovl06_161d opens (first board)
+        return f.boards.empty() ? nullptr : &f.boards.front();
     };
     const auto shirt_colours = [](const ClassicBoard& b) {
         std::array<int, 2> colour{b.team[0].colour, b.team[1].colour};
@@ -421,8 +419,8 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                 const ClassicBoard& now = frame.boards[b];
                 const ClassicBoard& before = last->boards[b];
                 if (now.team[0].name != before.team[0].name || now.team[1].name != before.team[1].name) continue;
-                // ovl14_1dc7: the goal scene of a chance (only the match of the manager's club, DS:5A56 / DS:5A55)
-                const bool scene_board = scenes && (now.team[0].human || now.team[1].human);
+                // ovl14_1dc7: the goal scene of every chance of a match on a board (FUN_162c_23c4 var_9 != 0x1E; DS:5A56)
+                const bool scene_board = scenes;
                 std::array<int, 2> running{before.goals[0], before.goals[1]};
                 for (int side = 0; side < 2; side++) {
                     const ClassicBoardTeam& t = now.team[size_t(side)];
@@ -437,6 +435,13 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                                                                  m.kind == 1, false, t.skaters + penalties == 6);
                             ClassicMatchFrame scene_base = base;
                             if (rink_stays) { scene_base.boards.clear(); scene_base.reported.clear(); }
+                            // ovl14_1dc7: delay(30) before the scene (the board, at Stufe 2 the resting rink)
+                            ClassicMatchFrame wait = scene_base;
+                            wait.message.reset();
+                            wait.flash.reset();
+                            if (rink_stays && rest) { wait.scene = *rest; wait.scene->minute = frame.minute; wait.scene->final = false; }
+                            wait.hold_ms = 30 * 54925 / 3000;
+                            out.push_back(std::move(wait));
                             for (ClassicMatchFrame& f : classic_goal_scene_frames(data, scene_base, s, side, m.kind == 1, rink_stays))
                                 out.push_back(std::move(f));
                             if (rink_stays) rest = out.back().scene;
