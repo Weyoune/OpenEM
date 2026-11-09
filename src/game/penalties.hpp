@@ -28,11 +28,29 @@ int pick_penalized_player(const HokTeam& team, const std::vector<HokSquadPlayer>
                           const std::vector<HokPlayer>& players, BorlandRandom& rng,
                           bool displayed = true);
 
+// The squad slot and saved role of the two native timers of a manager (DS:D096 + 6 * manager, 3 bytes per timer: role,
+// slot + 1, minutes). They are not in the save file and outlive the match: the match end (ovr0xx:6198x) restores the
+// players and clears the slots but keeps the roles, so the next match starts with the roles of the last penalties
+// (REAL-CODE period 31). slot -1 is the native 0 ("no player": a release then writes through DS:5D8F).
+struct PenaltyTimers {
+    int slot[2] = {-1, -1};
+    int role[2] = {0, 0};
+};
+
 // The two native penalty timers and the saved roles of their players. Player
 // removal affects live strength. Preserve the original's asymmetric timer/player
 // association after a goal with two active penalties (ovl06_0151).
 class PenaltyBox {
 public:
+    PenaltyBox() = default;
+    PenaltyBox(const PenaltyBox& o) { *this = o; }
+    PenaltyBox& operator=(const PenaltyBox& o) {
+        entries_[0] = o.entries_[0]; entries_[1] = o.entries_[1];
+        local_ = o.local_;
+        timers_ = o.timers_ == &o.local_ ? &local_ : o.timers_;
+        started_ = o.started_; assessed_ = o.assessed_; phantom_role_ = o.phantom_role_; finishing_ = o.finishing_;
+        return *this;
+    }
     int running() const;
     bool start(HokTeam& team, bool major, int player, std::vector<HokSquadPlayer>* squad);
     int tick(HokTeam& team, std::vector<HokSquadPlayer>* squad);
@@ -45,14 +63,18 @@ public:
     // DS:5D8F into the pair table, DEVIATIONS.md); returns the saved role it writes there (the role of the last player
     // penalised in that timer, it is never cleared) or -1; reading clears the mark.
     int take_phantom_release() { const int r = phantom_role_; phantom_role_ = -1; return r; }
+    void use_timers(PenaltyTimers* timers) { timers_ = timers ? timers : &local_; }  // the persistent timers of a manager
 
 private:
-    struct Entry { int minutes = 0; bool major = false; int player = -1, role = 0; };
+    struct Entry { int minutes = 0; bool major = false; };
     Entry entries_[2];
+    PenaltyTimers local_;
+    PenaltyTimers* timers_ = &local_;
     int started_ = 0, assessed_ = 0;
     int phantom_role_ = -1;
     bool finishing_ = false;
     void release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* squad);
+    void release_slot(int entry, std::vector<HokSquadPlayer>& squad);
     void compact();
 };
 

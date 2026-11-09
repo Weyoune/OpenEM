@@ -187,6 +187,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (f->frozen[side] < 0) f->frozen[side] = side_box(*f, side).minutes_assessed();
             side_box(*f, side) = copy.box;
             id = next;
+            if (f->home == f->away) f->run->mark_same_club();
             if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d\n", f->pair, side, next);
         }
         (void)trigger;

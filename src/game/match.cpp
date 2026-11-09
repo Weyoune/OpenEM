@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/match.hpp"
+#include <set>
+#include <string>
 #include <cstdio>
 #include <cstdlib>
 #include "game/penalties.hpp"
@@ -25,7 +27,7 @@ int better_of(int a, int b, GameRandom& rng) {
     return coin == 0 ? b : std::max(a, b); }
 
 int offence_bonus(const HokTeam& t, GameRandom& rng) {
-    if (std::getenv("EM_DEBUG_OB") && g_game_log && g_game_log->size() + 40 > size_t(std::atoi(std::getenv("EM_DEBUG_OB"))) &&
+    if (std::getenv("EM_DEBUG_OB") && g_game_log && g_game_log->size() + size_t(std::getenv("EM_DEBUG_OBW") ? std::atoi(std::getenv("EM_DEBUG_OBW")) : 40) > size_t(std::atoi(std::getenv("EM_DEBUG_OB"))) &&
         g_game_log->size() < size_t(std::atoi(std::getenv("EM_DEBUG_OB"))) + 5)
         std::fprintf(stderr, "offence %s flags %02x base %d eff %d at G%zu\n", t.name.c_str(), t.flags, t.offence_base, t.effort_current, g_game_log->size());
     int r = int(rng.range((t.flags & 0x70) >> 4, 7));
@@ -793,12 +795,27 @@ struct MatchRun::Impl {
         h.skaters = a.skaters = 5;
         h.penalty_code = a.penalty_code = 0;
         for (int kind = 0; kind < 2; kind++) h.shift[kind] = a.shift[kind] = 0;
+        hbox.use_timers(hp ? hp->timers : nullptr);
+        abox.use_timers(ap ? ap->timers : nullptr);
         hpen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp,
                                                           hp && hp->selection_rng ? *hp->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 0});
         apen = std::make_unique<PenaltySide>(PenaltySide{a, abox, ap ? &asq : nullptr, ap,
                                                           ap && ap->selection_rng ? *ap->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 1});
         hpen->same_club = apen->same_club = same_club;
+        if (same_club) share_box();
     }
+
+    // One club on both sides: the running penalties live in the one team record (+0x32/+0x33), so both sides tick and
+    // fill the same timers (sub_42E90 is called per team id). The away side then works on the home record and box.
+    bool box_shared = false;
+    bool synced_away = false;  // the pair-table error made the pair one club after the start: a_own follows h
+    void share_box() {
+        box_shared = true;
+        apen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp, hpen->selection_rng, stats, 1});
+        hpen->same_club = apen->same_club = true;
+    }
+    void sync_away() { if (synced_away) a_own = h; }
+    PenaltyBox& away_penalties() { return box_shared ? hbox : abox; }
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     bool watched = false;
@@ -808,6 +825,10 @@ struct MatchRun::Impl {
     bool step() {
         if (forfeit || minute >= last) return false;
         minute++;
+        static std::set<std::string> scope_pool;
+        const bool scope_dbg = std::getenv("EM_DEBUG_SCOPE") != nullptr;
+        auto scope = [&](const char* ph) { if (!scope_dbg) return; char b[96]; std::snprintf(b, 96, "m%d:%s-%s:%s", minute, h.name.c_str(), a.name.c_str(), ph); for (char* c = b; *c; c++) if (*c == ' ') *c = '_'; g_draw_scope = scope_pool.insert(b).first->c_str(); };
+        scope("start");
         LineRotation& hrotation = hp && hp->rotation ? *hp->rotation : hlocal;
         LineRotation& arotation = ap && ap->rotation ? *ap->rotation : alocal;
         if (minute == 21 || minute == 41 || ((minute == 61 || minute == 66) && (hp || ap))) {  // the breaks of the overtime reach the managed match here, the other pairs through overtime_break()
@@ -841,6 +862,7 @@ struct MatchRun::Impl {
         const int shown_home = score.home, shown_away = score.away;  // the original passes the score of the previous minute to the mode and effort updates
         if (hp) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line);
         if (ap) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line);
+        scope("events");
         const int events = minute_events(h, a, minute, rng, level, hp, ap, opts.playoff, minute > 65 ? 70 : minute > 60 ? 65 : 60);
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
@@ -853,7 +875,8 @@ struct MatchRun::Impl {
             if (stats && h.skaters + a.skaters != 11 && h.skaters > a.skaters) stats->power_play_goals[0]++;
             if (stats && h.skaters + a.skaters != 11 && h.skaters < a.skaters) stats->short_handed_goals[0]++;
             const bool equal = h.skaters == a.skaters;
-            { const int before = abox.code(); abox.goal_against(a, ap ? &asq : nullptr);
+            if (box_shared) { hbox.goal_against(h, hp ? &hsq : nullptr); sync_away(); }
+            else { const int before = abox.code(); abox.goal_against(a, ap ? &asq : nullptr);
               if (ap && abox.code() != before) recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line); }  // ovr030:0151 (sub_42FE1) ends with the recount (REAL-CODE)
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
@@ -868,6 +891,7 @@ struct MatchRun::Impl {
             const bool equal = h.skaters == a.skaters;
             { const int before = hbox.code(); hbox.goal_against(h, hp ? &hsq : nullptr);
               if (hp && hbox.code() != before) recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line); }
+            sync_away();
             if (stats) stats->after_goal(1, equal, a.skaters, h.skaters, ap != nullptr, hp != nullptr);
         }
         // ovl06_2522 (whole-program differential test): energy, line changes and effort only run for a match with a manager
@@ -878,17 +902,20 @@ struct MatchRun::Impl {
         if (hp && std::getenv("EM_DEBUG_SCORE")) std::fprintf(stderr, "minute %d score %d:%d draws %zu\n", minute, score.home, score.away, g_game_log ? g_game_log->size() : size_t(0));
         if (hp || ap || (watched && minute <= 60)) {  // REAL-CODE: the watched list of the other matches ends with the regular time (the overtime minutes of the other pairs skip energy, swap and line changes)
             const bool decided_now = opts.knockout && minute > 60 && score.home != score.away;  // the golden goal of the overtime: the minute ends without energy (REAL-CODE)
+            scope("energy");
             if (!decided_now) {
                 energy_minute(h, hp ? &hsq : nullptr, rng);
                 energy_minute(a, ap ? &asq : nullptr, rng);
                 if (hp) refresh_line_energy(h, *hp);
                 if (ap) refresh_line_energy(a, *ap);
             }
+            scope("swap");
             swap_sides = !decided_now && (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
             if (minute % 2 != 0) {  // the swapped side is team A of the routine (its rules are not symmetric)
                 if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute, kinds_a, kinds_h);
                 else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute, kinds_h, kinds_a);
             }
+            scope("lines");
             if (swap_sides) {  // ovr030:2AD9: the swapped side changes lines first (mode 3 follows the already changed line)
                 change_lines(a, h, ap, arotation);
                 change_lines(h, a, hp, hrotation);
@@ -901,9 +928,11 @@ struct MatchRun::Impl {
                 apply_effort(a, shown_away, shown_home, ap ? &asq : nullptr, ap ? ap->effort_control : 0, ap ? ap->offence_control : 0);
             }
         }
+        scope("penalty");
         if (minute != 60 && minute != 70 && !(opts.knockout && minute > 60 && score.home != score.away)) {  // no penalties in the minute of the golden goal (REAL-CODE)
             penalty_minute(swap_sides ? *apen : *hpen, swap_sides ? *hpen : *apen, true, rng);
             penalty_minute(swap_sides ? *hpen : *apen, swap_sides ? *apen : *hpen, true, rng);
+            sync_away();
         }
         if (stats)
             for (int kind = 0; kind < 2; kind++) stats->line_minutes[kind][h.current_line[kind]]++;
@@ -930,7 +959,8 @@ struct MatchRun::Impl {
         if (std::getenv("EM_DEBUG_FIN"))
             std::fprintf(stderr, "finish %s - %s: code %d/%d skaters %d/%d score %d:%d\n", h.name.c_str(), a.name.c_str(), hbox.code(), abox.code(), h.skaters, a.skaters, score.home, score.away);
         if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
-        if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
+        if (box_shared) { a.penalty_code = h.penalty_code; sync_away(); }
+        else if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
         if (stats) {
             stats->final_teams = {h, a};
             stats->penalties[0] += hbox.started();
@@ -965,11 +995,17 @@ MatchResult MatchRun::finish() { return p_->finish(); }
 HokTeam& MatchRun::home_mut() { return p_->h; }
 HokTeam& MatchRun::away_mut() { return p_->a; }
 PenaltyBox& MatchRun::home_box() { return p_->hbox; }
-PenaltyBox& MatchRun::away_box() { return p_->abox; }
+PenaltyBox& MatchRun::away_box() { return p_->away_penalties(); }
 int MatchRun::take_phantom_release() {
     const int h = p_->hp ? p_->hbox.take_phantom_release() : -1;
     const int a = p_->ap ? p_->abox.take_phantom_release() : -1;
     return h >= 0 ? h : a;
+}
+void MatchRun::mark_same_club() {
+    if (!p_->hpen || p_->box_shared) return;
+    p_->synced_away = true;
+    p_->share_box();
+    p_->sync_away();
 }
 const HokTeam& MatchRun::home_state() const { return p_->h; }
 const HokTeam& MatchRun::away_state() const { return p_->a; }

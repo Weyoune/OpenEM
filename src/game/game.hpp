@@ -407,6 +407,7 @@ private:
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.
     std::array<std::array<uint8_t,2>,6> line_counts_{};
     LineRotation human_rotation_, national_rotation_;
+    PenaltyTimers human_timers_, national_timers_;  // DS:D096 rows of manager 0 and the national coach (not saved; zero after loading)
     ManagerBudget budget_;
     SponsorOffers offers_{};
     int image_ = 0;

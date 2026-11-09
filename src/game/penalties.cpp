@@ -79,19 +79,21 @@ bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSqu
     const int next = running();
     if (next == 2) return false;
     Entry e;
-    e.role = entries_[next].role;  // the saved role of the timer stays until a bound player overwrites it (REAL-CODE period 28)
     e.minutes = major ? 5 : 2;
     e.major = major;
     if (squad && player >= 0) {
         auto& p = squad->at(size_t(player));
         if (p.player < 0 || p.role == 0) return false;
-        e.player = player;
-        e.role = p.role;
+        // ovr030 (43450..): only a bound player writes slot and role of the timer; without one both stay as they were
+        // (the role of an earlier penalty, REAL-CODE periods 28 and 31)
+        timers_->slot[next] = player;
+        timers_->role[next] = p.role;
         p.role = 0;
         if (major) p.major_penalties = uint8_t(p.major_penalties + 1);
         else p.minor_penalties = uint8_t(p.minor_penalties + 1);
     }
     entries_[next] = e;
+    if (squad && std::getenv("EM_DEBUG_BOX")) std::fprintf(stderr, "box start %s timer %d slot %d role %d major %d\n", team.name.c_str(), next, timers_->slot[next], timers_->role[next], int(major));
     team.skaters--;
     started_++;
     assessed_ += e.minutes;
@@ -101,16 +103,29 @@ bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSqu
 void PenaltyBox::release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* squad) {
     Entry& e = entries_[entry];
     if (!e.minutes) return;
-    if (squad && e.player >= 0) squad->at(size_t(e.player)).role = e.role;
-    if (squad && e.player < 0 && !finishing_) phantom_role_ = e.role;  // slot -1: the original writes through DS:5D8F
-    const int saved_role = e.role;
     e = Entry{};
-    e.role = saved_role;
     team.skaters++;
+    if (squad) release_slot(entry, *squad);
 }
 
+// sub_42FE1 (ovr030:0151): the role goes back to the player of the slot (slot 0 = none: the write lands in the pair table
+// through DS:5D8F), the slot is cleared, and a released lower timer takes slot and role of the upper one (which keeps both)
+void PenaltyBox::release_slot(int entry, std::vector<HokSquadPlayer>& squad) {
+    PenaltyTimers& t = *timers_;
+    if (t.slot[entry] >= 0 && size_t(t.slot[entry]) < squad.size()) squad[size_t(t.slot[entry])].role = t.role[entry];
+    else if (t.slot[entry] < 0) phantom_role_ = t.role[entry];
+    t.slot[entry] = -1;
+    if (entry == 0) { t.slot[0] = t.slot[1]; t.role[0] = t.role[1]; }
+}
+
+// sub_42E90: a free lower timer takes the minutes of the upper one, with its slot and role (the upper timer keeps them)
 void PenaltyBox::compact() {
-    if (!entries_[0].minutes && entries_[1].minutes) std::swap(entries_[0], entries_[1]);
+    if (!entries_[0].minutes && entries_[1].minutes) {
+        entries_[0] = entries_[1];
+        entries_[1] = Entry{};
+        timers_->slot[0] = timers_->slot[1];
+        timers_->role[0] = timers_->role[1];
+    }
 }
 
 int PenaltyBox::tick(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
@@ -133,21 +148,22 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
     // clears the upper timer but restores the FIRST queued player. The second
     // player inherits the lower timer, including its major flag. Keep this
     // asymmetric association instead of silently substituting hockey rules.
-    if (squad && entries_[0].player >= 0)
-        squad->at(size_t(entries_[0].player)).role = entries_[0].role;
-    else if (squad && entries_[0].player < 0) phantom_role_ = entries_[0].role;
-    entries_[0].player = entries_[1].player;
-    entries_[0].role = entries_[1].role;
-    const int saved_role = entries_[1].role;
     entries_[1] = Entry{};
-    entries_[1].role = saved_role;
     team.skaters++;
+    if (squad) release_slot(0, *squad);
 }
 
+// ovr0xx:61982 (match end): every timer with a slot gives the role back and clears the slot; a timer without slot
+// writes nothing (no pair-table write at the end), the roles stay for the next match
 void PenaltyBox::finish(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
-    finishing_ = true;
-    for (int i = 0; i < 2; i++) release(i, team, squad);
-    finishing_ = false;
+    for (int i = 0; i < 2; i++)
+        if (entries_[i].minutes) { entries_[i] = Entry{}; team.skaters++; }
+    if (!squad) return;
+    PenaltyTimers& t = *timers_;
+    for (int i = 0; i < 2; i++) {
+        if (t.slot[i] >= 0 && size_t(t.slot[i]) < squad->size()) (*squad)[size_t(t.slot[i])].role = t.role[i];
+        t.slot[i] = -1;
+    }
 }
 
 }  // namespace em

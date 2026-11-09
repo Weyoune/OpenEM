@@ -150,6 +150,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     rng_.borland = &brng_;
     human_.minimum_players = 9;
     human_.rotation = &human_rotation_;
+    human_.timers = &human_timers_;
     budget_ = budget_from_save(save_, 0);
     offers_ = sponsor_offers_from_save(save_.state, 0);
     for (int d = 0; d < kTrainingDays; d++)
@@ -295,6 +296,8 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
         human_rotation_ = checkpoint.club_rotation;
         national_rotation_ = checkpoint.national_rotation;
+        human_timers_ = checkpoint.club_timers;
+        national_timers_ = checkpoint.national_timers;
         injured_role_ = checkpoint.injured_roles;
         for (size_t slot = 0; slot < save_.squad.size(); slot++)
             save_.squad[slot].status = SquadStatus(checkpoint.squad_status.at(slot));
@@ -341,6 +344,8 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.table_copies_frozen=table_copies_frozen_;checkpoint.league_since_refresh=league_since_refresh_;
     checkpoint.club_rotation = human_rotation_;
     checkpoint.national_rotation = national_rotation_;
+    checkpoint.club_timers = human_timers_;
+    checkpoint.national_timers = national_timers_;
     checkpoint.injured_roles = injured_role_;
     for (size_t slot = 0; slot < save_.squad.size(); slot++)
         checkpoint.squad_status.at(slot) = uint8_t(save_.squad[slot].status);
@@ -2424,6 +2429,7 @@ void Game::play_wm_day() {
     squad.level = finance_.level;
     squad.selection_rng = &brng_;
     squad.rotation = &national_rotation_;
+    squad.timers = &national_timers_;
     configure_human_tactics(squad, save_, 5);
     if (national_coach_ >= 0) squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, national_team());
     const int nation = national_team();
