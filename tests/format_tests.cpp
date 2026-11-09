@@ -2989,12 +2989,19 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const Bytes bytes = game.save_bytes();
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
-            if (resumed.save_bytes() != bytes) {
-                const HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
-                for (size_t i = 0; i < x.state.size(); i++)
+            // Loading recomputes the club record from the squad (162c:146c, as the original after loading). After a cup day
+            // without a game that was also a training day the saved record still holds the weekly drift (REAL-CODE period 49),
+            // so only skill1/skill2/form of the own club may change; everything else must survive the round trip.
+            {
+                HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
+                const int own = x.state.at(0x0DCD + 0x14);
+                if (own >= 0 && own < kHokTeams)
+                    for (size_t f = 0x18; f < 0x1E; f++) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
+                bool same = x.state == y.state;
+                for (size_t i = 0; i < x.state.size() && !same; i++)
                     if (x.state[i] != y.state[i]) { std::fprintf(stderr, "cup resume diff at state %zx: %02x vs %02x (checkpoint %d)\n", i, x.state[i], y.state[i], checkpoint); break; }
+                CHECK(same);
             }
-            CHECK(resumed.save_bytes() == bytes);
             if (checkpoint < 15) {
                 while (resumed.season_day() < calendar.nth_day(kEventCup, checkpoint + 1)) resumed.advance_day();
                 check(resumed, checkpoint + 1);

@@ -383,6 +383,8 @@ private:
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
     bool human_played_ = false;          // the human club played today
     bool interactive_played_ = false;
+    bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
+    bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
     std::vector<ManagerOffer> manager_offers_;
     std::vector<std::string> manager_news_;
     std::vector<std::string> immediate_messages_;

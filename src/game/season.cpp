@@ -263,8 +263,23 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         }
         const int pm0 = e->frozen[0] >= 0 ? e->frozen[0] : e->stats->penalty_minutes[0] - e->before[0];
         const int pm1 = e->frozen[1] >= 0 ? e->frozen[1] : e->stats->penalty_minutes[1] - e->before[1];
+        if (std::getenv("EM_DEBUG_PM") && (e->frozen[0] >= 0 || e->frozen[1] >= 0 || e->home == e->away))
+            std::fprintf(stderr, "pm pair %zu scheduled %d-%d now %d-%d: pm %d/%d frozen %d/%d stats %d/%d before %d/%d\n", e->pair, e->scheduled[0], e->scheduled[1], e->home, e->away, pm0, pm1, e->frozen[0], e->frozen[1], e->stats->penalty_minutes[0], e->stats->penalty_minutes[1], e->before[0], e->before[1]);
         if (HokTableRow* rh = row_of(e->scheduled[0])) rh->penalty_minutes = uint16_t(rh->penalty_minutes + pm0);
         if (HokTableRow* ra = row_of(e->scheduled[1])) ra->penalty_minutes = uint16_t(ra->penalty_minutes + pm1);
+        // a side replaced by the pair-table error: the new team of the same league also gets the whole game of that side
+        // (REAL-CODE period 47: (26,33) -> (26,32) books 4 to 33 and 16 to 32; team 0 of the Bundesliga gets nothing)
+        if (!std::getenv("EM_OLD_PMSWAP")) {
+            const League& own = *days[e->day].league;
+            for (int side = 0; side < 2; side++) {
+                const int now = side == 0 ? e->home : e->away;
+                if (e->frozen[side] < 0 || now == e->scheduled[side] || e->home == e->away) continue;  // one club: its shared box already counts both sides
+                if (now < own.first_team || now >= own.first_team + kHokLeagueSize) continue;
+                const int total = e->stats->penalty_minutes[side] - e->before[side];
+                HokTableRow& row = days[e->day].league->rows[size_t(now - own.first_team)];
+                row.penalty_minutes = uint16_t(row.penalty_minutes + total);
+            }
+        }
         results[e->day].push_back(r);
     }
     for (size_t d = 0; d < days.size(); d++) {

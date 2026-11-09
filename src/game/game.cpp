@@ -320,7 +320,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             human_.penalty_effort_adjustment=penalty_effort_adjustment(save_,human_team_);
             configure_human_tactics(human_,save_,0);
         }else {
-            prepare_human_lineup();
+            prepare_human_lineup();  // the original recomputes the club after loading (DOSBox FINEV_loaded: 321 -> 320)
             // The cold club model already uses its active pair. Persist that
             // same pair; otherwise a checkpoint would replace it with BSS0/0.
             line_counts_[0]={uint8_t(human_.per_line[0]),uint8_t(human_.per_line[1])};
@@ -441,6 +441,7 @@ void Game::manager_day(bool home_game_today) {
     x = std::clamp(x, 0, 30);
     if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
     g_draw_scope = "randomize";
+    if (std::getenv("EM_DEBUG_MDAY")) std::fprintf(stderr, "manager_day day %d slots %d home %d B%zu\n", day_, slots, int(home_game_today), g_borland_log ? g_borland_log->size() : size_t(0));
     const int spin = brng_.range(100, 300);
     for (int i = 0; i < spin; i++) rng_.range(0, 1);
 }
@@ -661,7 +662,10 @@ void Game::play_cup_day() {
             }
             break;
         }
-    if (live && std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
+    // a cup day on which every series is already decided plays no game: no live round, no spin (REAL-CODE period 49)
+    empty_cup_day_ = draw.empty();
+    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) &&
+        std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
         // without the human club the live round still starts with the match load of the human squad (manager +0xF0,
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
         if (human_team_ >= 0 && human_team_ < kHokTeams)
@@ -720,7 +724,7 @@ void Game::play_cup_day() {
             home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                       team_rank(t.away));
     }
-    if (live) {  // after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
+    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP"))) {  // (no game on the day: nothing of this, REAL-CODE period 49) after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
         bool human_in = false;
         for (const Tie& t : ties)
             if (t.home == human_team_ || t.away == human_team_) human_in = true;
@@ -1480,7 +1484,7 @@ void Game::train_squad() {
         sp.exhaustion = p.exhaustion * 2 / 3;
         sp.raw_exhaustion = p.exhaustion;
     }
-    refresh_human_team();
+    if (std::getenv("EM_OLD_TRAINREFRESH")) refresh_human_team();  // the training does not refresh the club record (REAL-CODE period 49: the drift of the day reaches the month end)
 }
 
 // ovl14_2e0f restores the saved automatic-lineup mode before entering the next
@@ -1488,7 +1492,8 @@ void Game::train_squad() {
 void Game::prepare_human_lineup(bool restore_saved_mode) {
     if(restore_saved_mode)save_.state.at(0x078A) = save_.state.at(0x078B);
     auto_lineup(save_, 0);
-    refresh_human_team();
+    if (!skip_refresh_once_) refresh_human_team();
+    skip_refresh_once_ = false;
     human_.penalty_effort_adjustment = penalty_effort_adjustment(save_, human_team_);
     configure_human_tactics(human_, save_, 0);
 }
@@ -1542,6 +1547,7 @@ void Game::refresh_human_team() {
         team.form[kind] = sum[2] / 3;
     }
     budget_.team_strength = team.skill1[0] + team.skill1[1] + team.skill2[0] + team.skill2[1];
+    if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "strength day %d [%s]: %d (skaters %d) s1 %d/%d s2 %d/%d at %zu\n", day_, g_draw_scope, budget_.team_strength, team.skaters, team.skill1[0], team.skill1[1], team.skill2[0], team.skill2[1], (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
 }
 
 bool Game::enter_advertising() {
@@ -3611,7 +3617,8 @@ void Game::advance_day() {
             return;
         }
     }
-    refresh_human_team();  // 162c:146c, daily (not in the WM branch without a national coach, see there)
+    // 162c:146c runs in the event block of the day loop (ovr038:2F1A): days without a calendar event skip it (REAL-CODE period 49)
+    if (std::getenv("EM_OLD_DAYREFRESH") || (calendar_.event(day_ + 1) != 0 && calendar_.event(day_ + 1) != 0xFF)) refresh_human_team();  // 162c:146c (not in the WM branch without a national coach, see there)
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
     // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
@@ -3694,6 +3701,13 @@ g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stder
         }
     }
 g_draw_scope = "finance";
+    // ovr032:16B7 reads skill1 + skill2 of the club record itself: a weekly drift of the record on this day counts before the
+    // next 146c refresh (REAL-CODE period 49: drift to 230 on the training day, booked at the month end, then refreshed to 228)
+    if (finance_date.day == finance_month_days && human_team_ >= 0 && !std::getenv("EM_OLD_INCOMESTRENGTH")) {
+        const HokTeam& own = save_.teams[size_t(human_team_)];
+        budget_.team_strength = own.skill1[0] + own.skill1[1] + own.skill2[0] + own.skill2[1];
+        if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "month end day %d (%d.%d.): strength %d at %zu\n", day_, finance_date.day, finance_date.month, budget_.team_strength, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
+    }
     finance_day(finance_, budget_, finance_date.day, finance_month_days);
     if (finance_date.day == finance_month_days) {
         char line[128];
@@ -3726,7 +3740,10 @@ g_draw_scope = "stadium-week";
     // The evening restores the saved selection mode (DS:0376 -> DS:0375) and runs its automatic lineup. The original does
     // this at the menu only and leaves DS:0375 at 0 within a step (docs/DEVIATIONS.md); the saved mode DS:0376 is the same
     // in both, as the copy runs once per step (above), so the lineups agree (REAL-CODE periods 2-29).
+    // after a cup day without a game the evening lineup runs, but the club record is not refreshed (REAL-CODE period 49)
+    skip_refresh_once_ = empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP");
     prepare_human_lineup();
+    empty_cup_day_ = false;
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
     // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
     // (DS:E1A4, ovr034:1CD2). REAL-CODE: both draws end every period of the original.
