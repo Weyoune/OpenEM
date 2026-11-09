@@ -802,7 +802,7 @@ static void attendance_history(const fs::path& em_dir, const fs::path& ref_dir) 
 static void full_season(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 9);
-    for (int i = 0; i < 232; i++) {  // day 232 (29.04.) is the last one
+    for (int i = 0; i < 231; i++) {  // day 231 (28.04.) is the last one played; the next call changes the season (REAL-CODE period 30)
         g.advance_day();
         g.clear_log();
     }
@@ -844,7 +844,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 4);
     g.set_database(decode_db(read_file(em_dir / "KB" / "23.vga")));
-    for (int i = 0; i < 232; i++) {
+    for (int i = 0; i < 231; i++) {  // the WM final on day 231; the next call changes the season
         g.advance_day();
         g.clear_log();
     }
@@ -875,6 +875,8 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         if (g.league(2).rows[size_t(s)].position >= 10) oberliga_down.push_back(g.save().teams[size_t(24 + s)].name);
     const int euro = g.euro_champion();  // a German European cup winner enters again (ovl05_51a5)
     const std::string euro_winner = euro >= 0 && euro < 64 ? g.save().teams[size_t(euro)].name : champion;
+    g.advance_day();  // the season change stops in the menu before the first matchday (REAL-CODE period 30)
+    CHECK(g.seasons_completed() == 1 && g.season_day() == 0);
     g.advance_day();  // new season, day 1
     CHECK(g.seasons_completed() == 1 && g.save().year == 1994 && g.season_day() == 1);
     const HokFile next_titles = decode_hok(g.save_bytes());
@@ -1000,7 +1002,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(idx >= 0 && idx < 24);
     }
     CHECK(g.save().teams[size_t(g.human_team())].name == human);
-    for (int i = 1; i < 232; i++) {
+    for (int i = 1; i < 231; i++) {
         g.advance_day();
         g.clear_log();
     }
@@ -1063,9 +1065,10 @@ static void financial_license_save(const fs::path& em_dir, const fs::path& ref_d
         const bool cup_rescue = name == std::string("LICCUP02");
         if (cup_rescue) {
             Game april(exe, read_file(path), 6);
-            for (int day = 0; day < 16; day++) april.advance_day();
-            // Native CUP02_after_capture_timeout: only the two empty WM dates
-            // run club training. Five blanket weekly calls were incorrect.
+            for (int day = 0; day < 13; day++) april.advance_day();
+            // Without a national coach the squad day (sub_15369, with the training) runs on the WM match dates of
+            // the weekly rhythm only: 217 and 221 up to day 229, then 231 (REAL-CODE period 30, whose trend nibbles
+            // fall by 3 up to the season change). Five blanket weekly calls were incorrect.
             const HokFile before_review = decode_hok(april.save_bytes());
             for (int slot : {1, 2, 3, 4, 5, 6}) {
                 const size_t at = 0x696D + size_t(slot) * 0x34 + 0x14;
@@ -1707,7 +1710,9 @@ static void player_insurance(const fs::path& em_dir, const fs::path& ref_dir) {
         covered_disability.set_contract_decider([&](const ContractPlayer& p, long) { CHECK(p.age != 0); callbacks++; return 2; });
         for (int day = 0; day < 17; day++) { covered_disability.advance_day(); uncovered_disability.advance_day(); }
         CHECK(callbacks == 0);  // the disabled player's two-year contract is removed before expiry talks
-        CHECK(covered_disability.budget().balance - uncovered_disability.budget().balance == 177000);
+        // the payout only: the season change follows the WM final directly, without the April month-end that charged
+        // one more premium (REAL-CODE period 30)
+        CHECK(covered_disability.budget().balance - uncovered_disability.budget().balance == 180000);
         CHECK(covered_disability.save().squad.size() == 24 && uncovered_disability.save().squad.size() == 24);
         for (const auto& player : covered_disability.save().squad)
             CHECK(covered_disability.save().players[size_t(player.player)].raw !=
@@ -3622,8 +3627,7 @@ static void national_squads(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(ended.state[0x164C] == 0xFD && le32(ended.state, 0x17C7) == 1500000);
         CHECK(ended.state[0x0788] == 0 && ended.state[0x0789] == 0);
         CHECK(!restored.auto_select_national_squad());
-        while (restored.season_day() < int(calendar.events.size()) - 1) restored.advance_day();
-        restored.advance_day();
+        restored.advance_day();  // after the WM final (day 231) the next call changes the season (REAL-CODE period 30)
         CHECK(restored.seasons_completed() == 1 && restored.national_coach() == -1);
         CHECK(restored.national_squad().empty());
         CHECK((decode_hok(restored.save_bytes()).state[0x0DCD + 0xF3] & 0x40) != 0);
@@ -3674,7 +3678,9 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
                 if (rounds >= stage + 6)
                     for (int pair = 0; pair < 4; pair++) {
                         const size_t o = 0x8F60 + size_t(stage * 8 + pair * 2);
-                        CHECK(h.state[o] % 30 > h.state[o + 1] % 30);
+                        // the quick shoot-out of the original can leave a level score (the away team wins, REAL-CODE
+                        // periods 28 and 30)
+                        CHECK(h.state[o] % 30 >= h.state[o + 1] % 30);
                     }
             }
         }
@@ -5146,6 +5152,7 @@ static void reference_hok(const fs::path& dir) {
 }
 
 int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // progress lines in order with the CHECK messages on stderr
     try {
         unit_tests();
         cup_draws();

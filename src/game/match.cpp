@@ -635,7 +635,7 @@ MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_g
 }
 
 MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                                    GameRandom& rng, int level, bool knockout, bool playoff) {
+                                    GameRandom& rng, int level, bool knockout, bool playoff, bool wm) {
     // ovl06_161d, quick path: whole-match results (FUN_162c_1e9c), German clubs (team < 64) +6,
     // re-rolled up to min(4, |difference / 3|) times while the favourite does not win
     int sh = playing_strength(home, StrengthMode::Neutral, 0, 0, home.current_line[0], home.current_line[1]) + (home_german ? 6 : 0);
@@ -647,7 +647,17 @@ MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bo
     MatchResult r;
     do {
         r = quick_match(home, away, rng, level, playoff);  // play-offs: halved goal points (DS:76B2)
-        if (level == 0) {
+        if (wm) {
+            // ovr030:205D, the branch of DS:012B != 0 (WM): both blocks move the home score only (REAL-CODE period 30)
+            if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 2) != 0)) {
+                r.home -= int(rng.range(0, r.home));
+                r.home += int(rng.range(0, r.home));
+            }
+            if (rng.range(0, 3) == 0 || (sh > sa && rng.range(0, 1) != 0)) {
+                r.home += int(rng.range(0, r.home));
+                r.home -= int(rng.range(0, r.home));
+            }
+        } else if (level == 0) {
             if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 2) != 0)) r.home -= int(rng.range(0, r.home));
             if (rng.range(0, 3) == 0 || (sh < sa && rng.range(0, 1) != 0)) r.away += int(rng.range(0, 4));
         }

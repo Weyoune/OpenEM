@@ -156,7 +156,7 @@ MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_g
 // Same ovl06_161d fast event path; group matches permit draws and omit the
 // shoot-out. Its postprocessing can add away goals even after a zero-strength 0:0.
 MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                                    GameRandom& rng, int level, bool knockout, bool playoff = false);
+                                    GameRandom& rng, int level, bool knockout, bool playoff = false, bool wm = false);
 
 // A league match as the matchday loop ovl06_2522 plays it: for every minute 1..60 the goal points
 // of FUN_162c_1e9c (with the fatigue of that minute, capped at 10) give chances (1 in 20 per
