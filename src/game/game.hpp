@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,7 @@
 #include "game/settings.hpp"
 #include "game/season.hpp"
 #include "game/season_end.hpp"
+#include "game/season_review.hpp"
 #include "game/sponsors.hpp"
 #include "game/stadium.hpp"
 #include "game/save_history.hpp"
@@ -218,6 +220,8 @@ public:
     const std::vector<std::string>& manager_news() const { return manager_news_; }
     // Messages the original shows at once and deletes again (season review ovr026:09EB), native text, oldest first.
     const std::vector<std::string>& immediate_messages() const { return immediate_messages_; }
+    // The manager's season-review page (ovl02_0000) when the last step changed the season, not in a checkpoint.
+    const std::optional<SeasonReview>& season_review() const { return season_review_; }
     // Third contract-dialog row: half a freshly computed salary per month.
     // New cover is locked through the next month-end; injured players cannot
     // change cover. Returns true if the requested state is already set or applied.
@@ -386,6 +390,7 @@ private:
     std::vector<ManagerOffer> manager_offers_;
     std::vector<std::string> manager_news_;
     std::vector<std::string> immediate_messages_;
+    std::optional<SeasonReview> season_review_;
     ContractDecider contract_decider_;
     MatchMinuteObserver match_observer_;
     long match_attendance_ = 0;

@@ -38,6 +38,18 @@ size_t manager_block(const HokFile& h) {
 }
 }  // namespace
 
+std::string classic_history_place(int place, int league, int width) {
+    if ((place & 0x7F) < 0x32 && !(place & 0x80)) {
+        if (league < 0 || league > 3) throw FormatError("classic club statistics: invalid league");
+        return number((place & 0x7F) - kLeagueFirst[size_t(league)], width) + "." + " Platz der " + std::string(kLeagues[size_t(league)]);
+    }
+    if (place & 0x80) return "Deutscher Meister";
+    int round = (place & 0x7F) - 0x33;
+    if (round == 2) round = 3;
+    if (round < 0 || round > 3) throw FormatError("classic club statistics: invalid play-off code");
+    return "Play-Off " + std::string(kPlayoff[size_t(round)]);
+}
+
 int classic_stats_club_years(const HokFile& h) {
     return std::min<int>(le16(h.state, kCareerYear), 50);
 }
@@ -114,20 +126,8 @@ void draw_classic_stats_club(ClassicCanvas& c, const HokFile& h, int selected) {
         c.text_native(mini, 0x42, 0xD3, "...spielten Sie noch gar nicht mit !", 30, 0);
         return;
     }
-    std::string text;
-    uint8_t color = 0x0B;
-    if ((place & 0x7F) < 0x32 && !(place & 0x80)) {
-        const int league = s.at(row + 1);
-        if (league > 3) throw FormatError("classic club statistics: invalid league");
-        text = number((place & 0x7F) - kLeagueFirst[size_t(league)], 1) + "." + " Platz der " + std::string(kLeagues[size_t(league)]);
-    } else if (place & 0x80) {
-        text = "Deutscher Meister"; color = 7;
-    } else {
-        int round = (place & 0x7F) - 0x33;
-        if (round == 2) round = 3;
-        if (round < 0 || round > 3) throw FormatError("classic club statistics: invalid play-off code");
-        text = "Play-Off " + std::string(kPlayoff[size_t(round)]);
-    }
+    std::string text = classic_history_place(place, s.at(row + 1));
+    uint8_t color = (place & 0x80) ? 7 : 0x0B;  // "Deutscher Meister" is white
     c.text_native(mini, 0x42, 0xD3, text, color, 0);
     const int cup = s.at(row + 2);
     text = "DEB-Pokal: ";

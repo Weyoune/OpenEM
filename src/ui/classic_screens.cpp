@@ -178,34 +178,7 @@ std::string ClassicApplication::recent_results(const HokFile& h,int team) const{
 void ClassicApplication::draw_main(){
     canvas_.background();canvas_.blit(20,0,0);
     if(!session_.loaded())return;
-    const auto& h=snapshot();const auto& g=session_.game();const int own=g.human_team();
-    canvas_.rect(2,22,317,74,2);
-    canvas_.line(2,22,317,22,7);canvas_.line(1,23,1,74,7);
-    canvas_.line(2,75,317,75,3);canvas_.line(318,23,318,74,3);
-    canvas_.line(3,76,319,76,29);canvas_.line(319,24,319,75,29);
-    bevel(6,35,107,74,1,2);
-    canvas_.blit(3,111,48,0,231,27,11);canvas_.blit(3,111,61,27,231,27,11);
-    const auto [other,away]=opponent();
-    const auto event=calendar_.event(le16(h.state,0xB953));
-    int event_type=0;for(int bit=0;bit<8;bit++)if(event&(1<<bit))event_type=bit+1;
-    constexpr int icons[]={0,0,0,0,1,2,3,5,1};const int icon=event==kEventSectionEnd?4:icons[std::clamp(event_type,0,8)];
-    canvas_.blit(3,111,35,78+14*icon,231,14,11);
-    if(other>=0&&other<52)canvas_.blit(3,126,35,66-12*away,231,12,11);
-    const int face=h.state.at(0x01EE)%12;
-    canvas_.blit(0,233,34,41*(face%3)+1,41*(face/3)+1,38,38);
-    const int crest=80+(h.teams.at(size_t(own)).raw[0x34]&63);canvas_.blit(crest,275,34,0,0,38,38);
-    bevel(234,35,274,75,255,0);bevel(276,35,316,75,255,0);
-    const auto status=classic_status(h,g.budget());
-    for(int i=0;i<6;i++)canvas_.blit(3,226,33+7*i,196,219+6*int(status[size_t(i)]),6,6);
-    const auto d=session_.date();
-    constexpr const char* weekdays[]={"Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"};
-    constexpr const char* months[]={"Januar","Februar","März","April","Mai","Juni","Juli","August","Sept.","Okt.","Nov.","Dez."};
-    const std::string date=std::string(weekdays[std::clamp(d.weekday,0,6)])+", "+std::to_string(d.day)+". "+months[std::clamp(d.month-1,0,11)]+padded(d.year,5);
-    canvas_.text(mini,6,29,date,24,0);
-    canvas_.text(mini,108,29,h.manager,24,0,229);canvas_.text(mini,232,29,h.teams[size_t(own)].name,24,0,313);
-    canvas_.text(mini,138,42,other>=0?h.teams.at(size_t(other)).name:event==kEventSectionEnd?"Saisonende":"Spielfrei",7,0,230);
-    canvas_.text(mini,138,55,recent_results(h,other),7,0,230);canvas_.text(mini,138,68,money(g.budget().balance),7,0,230);
-    draw_classic_ranking_graph(canvas_,h,own,other<0?255:other,calendar_.league_day(g.season_day()+1));
+    draw_main_header(nullptr);
     for(int row=0;row<2;row++)for(int col=0;col<4;col++){
         canvas_.frame(8+77*col,80+60*row,3,3);canvas_.rect(12+77*col,84+60*row,75+77*col,132+60*row,30);
         canvas_.blit(3,15+77*col,87+60*row,1+59*col,1+43*row,58,42);
@@ -219,6 +192,42 @@ void ClassicApplication::draw_main(){
             else{const int index=offsets[category_]+item;int sx=1+39*(index%6),sy=87+29*(index/6);if((category_==3||category_==4)&&item>2)sx+=39;canvas_.blit(3,8+53*item,206,sx,sy,38,28);}
         }
     }
+}
+// Header of the main menu (ovl10_0cd1). The season review calls it with 0xFE (ovl01_0f6a): no ranking graph and
+// no status lights, its own date and balance, the section-end symbol and "Saisonende".
+void ClassicApplication::draw_main_header(const SeasonReview* review){
+    const auto& h=snapshot();const auto& g=session_.game();const int own=g.human_team();
+    canvas_.rect(2,22,317,74,2);
+    canvas_.line(2,22,317,22,7);canvas_.line(1,23,1,74,7);
+    canvas_.line(2,75,317,75,3);canvas_.line(318,23,318,74,3);
+    canvas_.line(3,76,319,76,29);canvas_.line(319,24,319,75,29);
+    bevel(6,35,107,74,1,2);
+    canvas_.blit(3,111,48,0,231,27,11);canvas_.blit(3,111,61,27,231,27,11);
+    const auto [other,away]=review?std::pair<int,int>{-1,0}:opponent();
+    const auto event=review?uint8_t(kEventSectionEnd):calendar_.event(le16(h.state,0xB953));
+    int event_type=0;for(int bit=0;bit<8;bit++)if(event&(1<<bit))event_type=bit+1;
+    constexpr int icons[]={0,0,0,0,1,2,3,5,1};const int icon=event==kEventSectionEnd?4:icons[std::clamp(event_type,0,8)];
+    canvas_.blit(3,111,35,78+14*icon,231,14,11);
+    if(other>=0&&other<52)canvas_.blit(3,126,35,66-12*away,231,12,11);
+    const int face=h.state.at(0x01EE)%12;
+    canvas_.blit(0,233,34,41*(face%3)+1,41*(face/3)+1,38,38);
+    const int crest=80+(h.teams.at(size_t(own)).raw[0x34]&63);canvas_.blit(crest,275,34,0,0,38,38);
+    bevel(234,35,274,75,255,0);bevel(276,35,316,75,255,0);
+    if(!review){
+        const auto status=classic_status(h,g.budget());
+        for(int i=0;i<6;i++)canvas_.blit(3,226,33+7*i,196,219+6*int(status[size_t(i)]),6,6);
+    }
+    const auto d=review?review->date:session_.date();
+    constexpr const char* weekdays[]={"Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"};
+    constexpr const char* months[]={"Januar","Februar","März","April","Mai","Juni","Juli","August","Sept.","Okt.","Nov.","Dez."};
+    const std::string date=std::string(weekdays[std::clamp(d.weekday,0,6)])+", "+std::to_string(d.day)+". "+months[std::clamp(d.month-1,0,11)]+padded(d.year,5);
+    canvas_.text(mini,6,29,date,24,0);
+    canvas_.text(mini,108,29,h.manager,24,0,229);canvas_.text(mini,232,29,h.teams[size_t(own)].name,24,0,313);
+    canvas_.text(mini,138,42,other>=0?h.teams.at(size_t(other)).name:event==kEventSectionEnd?"Saisonende":"Spielfrei",7,0,230);
+    if(!review)canvas_.text(mini,138,55,recent_results(h,other),7,0,230);
+    canvas_.text(mini,138,68,money(review?review->balance:g.budget().balance),7,0,230);
+    if(!review)draw_classic_ranking_graph(canvas_,h,own,other<0?255:other,calendar_.league_day(g.season_day()+1));
+    else{canvas_.line(5,46,5,69,6);canvas_.line(6,70,101,70,8);}  // 0xFE: the graph routine draws its axes only
 }
 
 void ClassicApplication::draw_files(){

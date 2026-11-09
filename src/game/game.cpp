@@ -3120,6 +3120,21 @@ void Game::new_season() {
     const bool promoted = (season_flags & 3) == 1;
     const long prize = season_prizes(promoted, league, scorer_award, goalkeeper_award,
                                      fair_play_winner == human_team_);
+    // The manager's page of the season review (ovl02_0000): history line, symbols and prizes; the header shows the
+    // balance before the review prizes (ovl01_0f6a runs first).
+    SeasonReview review;
+    review.date = date_of_season_day(int(calendar_.events.size()), save_.year);  // the closing day, 30.04.
+    review.balance = budget_.balance;
+    const size_t review_row = kManagerBlock + 0x18 + 4 * size_t(std::min<int>(le16(save_.state, kCareerYear), 49));
+    review.place = save_.state.at(review_row);
+    review.league = save_.state.at(review_row + 1);
+    for (int bit = 0; bit < 7; bit++)
+        if (season_flags & (1 << bit)) review.icons.push_back(kSeasonFlagIcons[bit]);
+    if (scorer_award) review.icons.push_back(kIconScorer);
+    if (goalkeeper_award) review.icons.push_back(kIconGoalkeeper);
+    if (fair_play_winner == human_team_) review.icons.push_back(kIconFairPlay);
+    if (std::find(german.begin(), german.end(), human_team_) != german.end()) review.icons.push_back(kIconEuroEntrant);
+    review.prizes = (cup_winner_ == human_team_ ? kCupPrize : 0) + prize;
     if (promoted)
         for (auto& advert : budget_.adverts) advert.flags |= 0x80;
     if (prize) {
@@ -3134,6 +3149,7 @@ void Game::new_season() {
         for(int attempt=0;attempt<attempts;++attempt){
             const auto intake=youth_intake(save_,contracts_,0,save_.state.at(0x06ba),draw);
             if(!intake)continue;
+            review.icons.push_back(kIconYouth);
             HokPlayer* player=player_by_exe_index(intake->player);
             if(!player)throw FormatError("Season: youth player ID missing");
             player->age=player->raw[0x14];player->skill_a=player->raw[0x15];
@@ -3148,6 +3164,7 @@ void Game::new_season() {
         }
         refresh_budget_roster();
     }
+    if (human_team_ >= 0) season_review_ = std::move(review);
     // 4184 first pass: byte birthdays and contract decrement precede the
     // second-pass retirement gates. Zero-year contracts wrap to255.
     for(int id=1;id<=kHokPlayers;++id){
