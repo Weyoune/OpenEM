@@ -140,6 +140,83 @@ void goal_flash(ClassicCanvas& c, const ClassicGoalFlash& f) {
     while (home > 0x1D) home -= 0x1E;  // only the home goals lose their +30 marker (seg003:2B48)
     score(c, home, f.goals[1], 0xEF, 0xCC);
 }
+
+// ovl14_0690: caption (DS:5456 / 545E / 5469 / 5473) and result (DS:547C ...) of an event kind.
+const char* message_caption(int kind) {
+    if (kind <= 1) return "Chance:";
+    if (kind <= 3) return "Strafzeit:";
+    if (kind == 4) return "Verletzt:";
+    return "Penalty:";
+}
+const char* message_result(int kind) {
+    static const char* const results[7] = {"Vergeben", "TOR!", "2 Minuten", "5 Minuten", "", "Vergeben", "TOR!"};
+    return results[std::clamp(kind, 0, 6)];
+}
+std::string message_second(const ClassicBoardMessage& m) {
+    if (m.kind <= 1 || m.kind == 4) return m.second.empty() ? std::string() : "Vorlage: " + m.second;  // DS:54AC
+    if (m.kind <= 3) return m.second;  // the reason of a penalty
+    return {};
+}
+constexpr int kMessageX = 0xC7, kMessageY = 0xB7, kMessageW = 0x6F, kMessageH = 0x20;
+
+// ovl14_0690 / ovl14_05a0: the work buffer (dword_31107) is drawn with 1902:0885 between x 0 and 0x6F and copied
+// without colour 0 (sub_21D23) over the panel restored from the background page (sub_20265 from 0x4B00).
+void board_message(ClassicCanvas& c, const ClassicBoardMessage& m) {
+    Image work(kMessageW, kMessageH, 0);
+    const ClassicFont& font = c.font();
+    const auto put = [&](ClassicFontId face, int baseline, const std::string& text, uint8_t color) {
+        if (text.empty()) return;
+        const int width = font.measure(face, text);
+        int x = kMessageW / 2 - width / 2;
+        if (x < 0 || x + width > 0x13F) x = 0;
+        font.draw(work, face, x + 1, baseline + 1, text, 255);  // black shadow (index 255, see ClassicCanvas::text)
+        font.draw(work, face, x, baseline, text, color);
+    };
+    switch (m.step) {
+    case ClassicBoardMessage::Step::Caption:
+        if (m.text) put(kBold, 0x14, message_caption(m.kind), 0x18);
+        break;
+    case ClassicBoardMessage::Step::Team:
+        put(kBold, 0x14, message_caption(m.kind), 0x18);
+        put(kMini, 0x1E, m.team, 7);
+        break;
+    case ClassicBoardMessage::Step::Result:
+        if (m.text) put(kBold, 0x16, message_result(m.kind), 0x18);
+        break;
+    case ClassicBoardMessage::Step::Final:
+        put(kMini, 0x0A, message_result(m.kind), 0x18);
+        put(kMini, 0x12, m.player, 0x18);
+        if (m.lines > 1) put(kMini, 0x1A, message_second(m), 0x18);
+        break;
+    }
+    copy(c, work, 0, 0, kMessageX, kMessageY, kMessageW, kMessageH);
+}
+
+// ovl14_03be: one entry 0 per vowel ("25AEIOU", DS:541D; the character after a vowel is skipped), at most 0x1C, padded
+// with 9 to eight entries.
+std::vector<int> lip_sync(const std::string& utf8) {
+    const std::string s = ClassicFont::utf8_to_native(utf8);
+    std::vector<int> out;
+    for (size_t i = 0; i < s.size(); i++) {
+        char ch = s[i];
+        if (ch >= 'a' && ch <= 'z') ch = char(ch - 0x20);
+        for (const char v : std::string("25AEIOU"))
+            if (v == ch && out.size() < 0x1C) { i++; out.push_back(0); }
+    }
+    while (out.size() < 8) out.push_back(9);
+    return out;
+}
+// 2115:019E waits value / 3 BIOS ticks; ovl14_04f2 (speed < 41) shows seven mouth sprites and the closed mouth, one per
+// vertical retrace (FUN_199f_010e).
+int units_ms(int units) { return units * 54925 / 3000; }
+int mouth_ms(int speed) { return speed < 41 ? 8 * 1000 / 70 : 0; }
+// ovl14_05a0 after drawing a line: per lip-sync entry the mouth (0) or delay(6), only below speed 41.
+int speak_ms(const std::string& text, int speed) {
+    if (speed >= 41) return 0;
+    int ms = 0;
+    for (const int e : lip_sync(text)) ms += e == 0 ? mouth_ms(speed) : units_ms(6);
+    return ms;
+}
 }  // namespace
 
 void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
@@ -163,6 +240,7 @@ void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
     lamp(c, 10, 0xE4, frame.settings_lamp);
     c.blit(kSpriteKb, 0x9A, 0xCB, frame.blink ? 0x80 : 0x50, 0, 0xC, 4, true, kKey);
     if (frame.flash) goal_flash(c, *frame.flash);
+    if (frame.message) board_message(c, *frame.message);
 }
 
 void draw_classic_cup_minute(ClassicCanvas& c, const HokFile& before_day, const SeasonCalendar& calendar, int minute,
@@ -206,6 +284,7 @@ int classic_match_minute_ms(int speed) {
 
 int classic_match_frame_ms(const ClassicMatchFrame& frame, int speed) {
     // 2115:019E waits value / 3 BIOS ticks of 54.925 ms
+    if (frame.hold_ms >= 0) return frame.hold_ms;
     if (frame.flash) return (frame.flash->score ? 70 / 3 : 50 / 3) * 54925 / 1000;
     return classic_match_minute_ms(speed);
 }
@@ -234,6 +313,94 @@ std::vector<ClassicMatchFrame> classic_goal_flashes(std::vector<ClassicMatchFram
                         f.flash->score = true;
                         out.push_back(std::move(f));
                     }
+            }
+        }
+        last = frame;
+        out.push_back(std::move(frame));
+    }
+    return out;
+}
+
+std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFrame& base, const ClassicBoardMessage& message,
+                                                           int speed, bool goal_scenes) {
+    std::vector<ClassicMatchFrame> out;
+    if (speed >= 70) return out;
+    const auto step = [&](ClassicBoardMessage::Step s, bool text, int lines, int ms) {
+        ClassicMatchFrame f = base;
+        f.flash.reset();
+        f.cup_table = 0;
+        f.cup.clear();
+        f.message = message;
+        f.message->step = s;
+        f.message->text = text;
+        f.message->lines = lines;
+        f.hold_ms = ms;
+        out.push_back(std::move(f));
+    };
+    const int slow = speed == 50 ? 5 : 0;
+    if (!goal_scenes) {
+        const std::vector<int> caption = lip_sync(message_caption(message.kind));
+        const int blinks = 4 - 2 * (speed == 60);
+        for (int i = 0; i < blinks; i++)  // odd steps show the caption, even ones the cleared buffer
+            step(ClassicBoardMessage::Step::Caption, i % 2 != 0, 1,
+                 units_ms(slow + 2) + (caption[size_t(i)] ? units_ms(4) : mouth_ms(speed)));
+        out.back().hold_ms += units_ms(80 - speed);
+        step(ClassicBoardMessage::Step::Team, true, 1,
+             speak_ms(message.team, speed) + (speed == 60 || speed == 50 ? units_ms(25) : 0));
+        if (message.kind != 4) {
+            const std::vector<int> result = lip_sync(message_result(message.kind));
+            const int blinks2 = 4 - 3 * (speed == 60);
+            for (int i = 0; i < blinks2; i++)  // even steps show the result
+                step(ClassicBoardMessage::Step::Result, i % 2 == 0, 1,
+                     units_ms(slow + 1 + (speed == 50)) + (result[size_t(i)] ? units_ms(4) : mouth_ms(speed)));
+        }
+    }
+    // the final lines reach the screen only through ovl14_05a0 with a player name
+    if (!message.player.empty()) {
+        step(ClassicBoardMessage::Step::Final, true, 1, speak_ms(message.player, speed));
+        const std::string second = message_second(message);
+        if (!second.empty()) step(ClassicBoardMessage::Step::Final, true, 2, speak_ms(second, speed));
+    }
+    if (!out.empty()) out.back().hold_ms += units_ms(45 - 10 * (speed > 49));
+    return out;
+}
+
+std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes) {
+    if (speed >= 70) return frames;
+    std::vector<ClassicMatchFrame> out;
+    std::optional<ClassicMatchFrame> last;
+    for (ClassicMatchFrame& frame : frames) {
+        // cup tables and goal flashes (classic_goal_flashes runs first) pass unchanged
+        if (frame.cup_table || frame.flash || frame.message) { out.push_back(std::move(frame)); continue; }
+        if (last && !frame.boards.empty() && last->boards.size() == frame.boards.size()) {
+            ClassicMatchFrame base = *last;
+            base.minute = frame.minute;
+            for (size_t b = 0; b < frame.boards.size(); b++) {
+                const ClassicBoard& now = frame.boards[b];
+                const ClassicBoard& before = last->boards[b];
+                if (now.team[0].name != before.team[0].name || now.team[1].name != before.team[1].name) continue;
+                for (int side = 0; side < 2; side++) {
+                    const ClassicBoardTeam& t = now.team[size_t(side)];
+                    const ClassicBoardTeam& p = before.team[size_t(side)];
+                    const auto emit = [&](ClassicBoardMessage m) {
+                        m.team = t.name;
+                        for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, goal_scenes)) out.push_back(std::move(f));
+                    };
+                    const int minutes = t.penalty_minutes - p.penalty_minutes;
+                    if (minutes == 2 || minutes == 5) emit(ClassicBoardMessage{minutes == 2 ? 2 : 3});
+                    int chances = 0;
+                    for (int k = 0; k < 3; k++) chances += t.chances[k] - p.chances[k];
+                    const int goals = (now.goals[side] - t.shootout_goals) - (before.goals[side] - p.shootout_goals);
+                    for (int g = 0; g < goals; g++) {
+                        ClassicBoardMessage m{1};
+                        for (size_t i = 0; i < t.scorers.size() && i < p.scorers.size(); i++) {
+                            if (t.scorers[i].goals > p.scorers[i].goals && m.player.empty()) m.player = t.scorers[i].name;
+                            if (t.scorers[i].assists > p.scorers[i].assists && m.second.empty()) m.second = t.scorers[i].name;
+                        }
+                        emit(m);
+                    }
+                    for (int miss = goals; miss < chances; miss++) emit(ClassicBoardMessage{0});
+                }
             }
         }
         last = frame;
@@ -281,6 +448,20 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
             t.offence = live.flags >> 4 & 7;
             for (int k = 0; k < 3; k++) t.chances[k] = p.period_chances[k][side];
             t.penalty_minutes = p.penalty_minutes[side];
+            t.shootout_goals = p.score.shootout_goals[side];
+            if (team == game.human_team()) {
+                // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
+                // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
+                for (const HokSquadPlayer& sp : h.squad) {
+                    if (sp.player < 0 || size_t(sp.player) >= h.players.size()) continue;
+                    const HokPlayer& player = h.players[size_t(sp.player)];
+                    ClassicBoardTeam::Scorer s;
+                    s.name = player.name;
+                    s.goals = sp.league_goals + sp.cup_goals + sp.other_goals;
+                    s.assists = player.raw ? player.raw[0x1F] | player.raw[0x20] << 8 : 0;
+                    t.scorers.push_back(std::move(s));
+                }
+            }
         }
         if (m.home == game.human_team()) { b.attendance = attendance; b.sold_out = sold_out; }
         frame.boards.push_back(std::move(b));

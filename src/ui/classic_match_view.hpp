@@ -35,6 +35,11 @@ struct ClassicBoardTeam {
     int offence = 0;    // +0x2C bits 4..6
     int chances[3] = {};   // per period, shown up to 9
     int penalty_minutes = 0;
+    int shootout_goals = 0;  // goals of a shoot-out (part of the score, no chance message)
+    // The manager's club only: goal and assist counters of the squad players (squad goals of all competitions,
+    // player record +0x1F). The board message of a goal names the players whose counters rose in that minute.
+    struct Scorer { std::string name; int goals = 0, assists = 0; };
+    std::vector<Scorer> scorers;
 };
 
 struct ClassicBoard {
@@ -70,11 +75,35 @@ struct ClassicGoalFlash {
     bool score = false;      // second stage: the digits are drawn
 };
 
+// The board message of ovl14_0690 (only at speed < 70, DS:0262): an event of a match with a board, shown in the message
+// panel through a 0x6F x 0x20 work buffer copied to (0xC7, 0xB7) over the panel restored from the background page.
+//   kind (ovl14_0690 argument 2): 0 / 1 chance missed / goal ("Chance:" DS:5456, "Vergeben" / "TOR!"),
+//   2 / 3 penalty ("Strafzeit:" DS:545E, "2 Minuten" / "5 Minuten"), 5 / 6 penalty shot ("Penalty:" DS:5473).
+// Steps (ovl14_0690 without goal scenes; with goal scenes, DS:0226, only the final lines):
+//   Caption  the caption in font 1 (colour 0x18, black shadow) on baseline 0x14, blinking 4 times (2 at speed 60);
+//   Team     plus the club name in font 3 (colour 7) on baseline 0x1E;
+//   Result   the result in font 1 on baseline 0x16, blinking 4 times (once at speed 60);
+//   Final    the result in font 3 on baseline 0x0A, the player on 0x12 and "Vorlage: <assist>" (DS:54AC) or the reason of
+//            a penalty on 0x1A, all colour 0x18. Only drawn with a player: a computer club passes player record 0, which
+//            has no name (ovl14_1dc7, DOSBox 09.11.2026), so its message ends with the font 1 result.
+struct ClassicBoardMessage {
+    enum class Step { Caption, Team, Result, Final };
+    int kind = 0;
+    std::string team;    // UTF-8
+    std::string player;  // scorer or penalised player; empty for a computer club
+    std::string second;  // assist (without "Vorlage: ") or the penalty reason
+    Step step = Step::Caption;
+    bool text = true;    // Caption / Result: blink phase with the text (false: the cleared buffer)
+    int lines = 1;       // Final: 1 = player, 2 = player and second line
+};
+
 struct ClassicMatchFrame {
     int minute = 1;                   // shown minute (1..70); before minute 1 the original shows 1
     std::vector<ClassicBoard> boards; // empty: "Spiele laufen"
     std::vector<ClassicReportedMatch> reported;  // reported matches without a board (goal flashes)
     std::optional<ClassicGoalFlash> flash;       // a goal flash drawn over this frame
+    std::optional<ClassicBoardMessage> message;  // a board message drawn over this frame
+    int hold_ms = -1;                 // how long a message step stays (-1: classic_match_frame_ms decides)
     bool settings_lamp = false;       // DS:878A, the switch bottom left (opens the Einstellungen)
     bool blink = false;               // ovl14_045c: reporter eyes closed (KB38 0x80) instead of open (KB38 0x50)
     int cup_table = 0;                // 60 / 65 / 70: the DEB-Pokal table of the round, waits for a click
@@ -104,6 +133,20 @@ int classic_match_frame_ms(const ClassicMatchFrame& frame, int speed);
 // them). Home goals of a minute come first (the minute loop asks the home side first). The original only flashes while a
 // board is shown (DS:5A56 stays 0 with "Spiele laufen"; DOSBox probe 08.11.2026). Cup table frames are left as they are.
 std::vector<ClassicMatchFrame> classic_goal_flashes(std::vector<ClassicMatchFrame> frames);
+
+// The steps of one board message (ovl14_0690) over `base`, each with its hold time at this speed: the blink loops wait
+// (5 at speed 50) + 2 (Caption) or 1 (+1 at speed 50, Result) units of 2115:019E per step plus 4 units for a step whose
+// lip-sync entry (ovl14_03be: one 0 per vowel of "25AEIOU", padded with 9) is not 0, or the mouth animation below speed
+// 41; after the caption delay(80 - speed), after the club name delay(25) at speed 50 / 60, after the final lines
+// delay(45 - 10 * (speed > 49)). None at speed >= 70.
+std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFrame& base, const ClassicBoardMessage& message,
+                                                           int speed, bool goal_scenes);
+
+// Inserts the board messages into the observed minutes: per board and minute the penalties (penalty minutes rising by 2
+// or 5) and the chances of the home side, then the away side (chances of the regular time from the chance counters,
+// goals from the score; the goals of the manager's club name scorer and assist from the squad counters). The steps are
+// drawn over the previous minute's screen with the new minute display, like the goal flashes. Nothing at speed >= 70.
+std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes);
 
 // Builds the frame of one observed minute (season.cpp / competitions.cpp observer) from the day's matches. Boards follow
 // ovl14_2630: every match in pair order where a club has reporting mode 2, at most four; the attendance of the human home

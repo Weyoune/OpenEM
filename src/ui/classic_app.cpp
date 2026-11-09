@@ -89,7 +89,10 @@ void ClassicApplication::prepare_match_view(bool human_match){
 void ClassicApplication::begin_match_view(){
     auto frames=std::move(pending_match_frames_);pending_match_frames_.clear();
     if(frames.empty()||!classic_match_display_wanted(session_.game(),pending_human_match_,!pending_league_day_))return;
-    match_frames_=classic_goal_flashes(std::move(frames));match_frame_=0;  // FUN_162c_23c4 goal flashes between the minutes
+    // FUN_162c_23c4 goal flashes between the minutes, then the board messages of ovl14_0690 (speed < 70; with goal scenes,
+    // DS:0226 = flag 9, only the final lines)
+    const GameSettings settings=session_.game().settings();
+    match_frames_=classic_board_messages(classic_goal_flashes(std::move(frames)),settings.speed,settings.flags[9]!=0);match_frame_=0;
     match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_frame_ms(match_frames_[0],session_.game().settings().speed));
 }
 bool ClassicApplication::tick_match_view(){
