@@ -2928,22 +2928,15 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
     const SeasonCalendar calendar = load_season_calendar(exe);
     auto check = [](Game& game, int days) {
         const HokFile h = decode_hok(game.save_bytes());
-        // a final decided 2:0 is closed at once (REAL-CODE period 28): game index and wins 0, the winner twice in the cup
-        // grid, winner and losing finalist booked
-        // the third final day still runs the cup routine: winner against winner as game 1 of a new series (REAL-CODE period 29)
-        if (days == 15 && game.cup_winner() >= 0 && h.state[0x8E51] == h.state[0x8E52]) {
-            CHECK(h.cup_round == 5 && h.state[0x031B] == 1 && h.state[0x037C] + h.state[0x037D] == 1 && h.state[0x077C] == 1);
-            CHECK(h.state[0x8E51] == game.cup_winner() && h.state[0x0DC7] == game.cup_winner() && h.state[0x0DCC] != game.cup_winner());
-            const auto& series = game.cup_series();
-            CHECK(series.size() == 1 && series[0].higher == game.cup_winner() && series[0].lower == game.cup_winner() && series[0].games.size() == 1);
+        // the third final day closes the final (sub_42756 at game index 2, REAL-CODE period 57): winner and runner-up
+        // booked, wins 0, game index stays 2, DS:D0E4 = 1, the grid pair keeps both finalists; nothing is booked earlier
+        if (days == 15 && game.cup_winner() >= 0) {
+            CHECK(h.cup_round == 5 && h.state[0x031B] == 2 && h.state[0x037C] == 0 && h.state[0x037D] == 0 && h.state[0x077C] == 1);
+            CHECK(h.state[0x0DC7] == game.cup_winner() && h.state[0x0DCC] != game.cup_winner() && h.state[0x8E51] != h.state[0x8E52]);
+            CHECK(h.state[0x8E51] == game.cup_winner() || h.state[0x8E52] == game.cup_winner());
             return;
         }
-        if (days >= 14 && game.cup_winner() >= 0 && h.state[0x8E51] == h.state[0x8E52]) {
-            CHECK(h.cup_round == 5 && h.state[0x031B] == 0 && h.state[0x037C] == 0 && h.state[0x037D] == 0);
-            CHECK(h.state[0x8E51] == game.cup_winner() && h.state[0x0DC7] == game.cup_winner() && h.state[0x0DCC] != game.cup_winner());
-            CHECK(game.cup_series().empty());
-            return;
-        }
+        if (days < 15) CHECK(game.cup_winner() < 0);
         const int round = std::min(days / 3 + 1, 5), played = days == 15 ? 2 : days % 3;
         CHECK(h.cup_round == round && h.state[0x031B] == played && h.state[0x8F84] == round);
         CHECK(h.cup_draw.size() == size_t(16 >> std::min(days / 3, 4)));

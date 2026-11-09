@@ -182,6 +182,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
                 const size_t o = kCupScores + size_t(game) * 32 + pair * 2;
                 const int a = save_.state.at(o), b = save_.state.at(o + 1);
                 if (a == 100 || b == 100) continue;
+                if (a == 0 && b == 0 && cup_round_ == 5 && !std::getenv("EM_OLD_FINALCLOSE")) continue;  // the unplayed game of a closed final
                 const bool a_home = (game % 2 == 0) == (s.higher == p.home);
                 const int marker = (a / 30 + b / 30) * 30;
                 const MatchResult r{(a_home ? a : b) % 30, (a_home ? b : a) % 30, marker >= 60, marker};
@@ -190,8 +191,8 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             }
             cup_series_.push_back(s);
         }
-        // a final decided after two games already has its winner (play_cup_day, REAL-CODE period 28)
-        if (cup_round_ == 5 && cup_winner_ < 0 && cup_series_.size() == 1 && (cup_series_[0].wins_higher == 2 || cup_series_[0].wins_lower == 2))
+        // (EM_OLD_FINALCLOSE: a final decided after two games had its winner at once; now the third final day books it)
+        if (std::getenv("EM_OLD_FINALCLOSE") && cup_round_ == 5 && cup_winner_ < 0 && cup_series_.size() == 1 && (cup_series_[0].wins_higher == 2 || cup_series_[0].wins_lower == 2))
             cup_winner_ = cup_series_[0].winner();
     }
     if (playoff_day_ > 0) {
@@ -614,13 +615,44 @@ bool Game::human_in_next_euro() const {
     return false;
 }
 
+// sub_42756 at game index 2 of the final (the third final day after a 2:0, or right after game 3): the winner's manager gets
+// the round reached (+0xE6 = 6), DS:0387 / DS:038B book winner and runner-up (then the "DEB-Pokalsieger" screen), the wins
+// are cleared, the game index stays 2, the grid pair keeps its places (restored after the screen) and DS:D0E4 = 1
+// (REAL-CODE period 57; the reading of period 28 was a snapshot inside this routine)
+void Game::close_cup_final() {
+    const Series& s = cup_series_[0];
+    cup_winner_ = s.winner();
+    save_.state.at(kStateCupWinner) = uint8_t(cup_winner_);
+    save_.state.at(kStateCupRunnerUp) = uint8_t(s.winner() == s.higher ? s.lower : s.higher);
+    if (cup_winner_ == human_team_) save_.state.at(kManagerBlock + 0xE6) = uint8_t(cup_round_ + 1);
+    std::fill(save_.state.begin() + long(kCupWins), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
+    for (int game = 0; game < 3; game++)  // no 100 mark for an unplayed game
+        if (save_.state.at(kCupScores + size_t(game) * 32) == 100)
+            save_.state.at(kCupScores + size_t(game) * 32) = save_.state.at(kCupScores + size_t(game) * 32 + 1) = 0;
+    cup_game_ = 2;
+    save_.state.at(kCupGame) = 2;
+    save_.state.at(kCupPending) = 1;
+    log_.push_back("DEB cup winner: " + save_.teams[size_t(cup_winner_)].name);
+    store_cup_participants(save_, cup_draw_, cup_round_);
+}
+
 void Game::play_cup_day() {
     cup_day_++;
     // A final closed after two games leaves the winner twice in the cup grid; a remaining cup day of the calendar still
     // runs sub_42756, which plays that pair (winner against winner) as game 1 of a new series and books it like any cup
     // game: index 1, scores, one win, DS:D0E4 = 1 (REAL-CODE period 29)
+    // (the pair "winner against winner" only exists in a save taken inside sub_42756, as in period 28's recording on the
+    // "DEB-Pokalsieger" screen; a final played through in C++ never reaches it)
     const bool replay = cup_winner_ >= 0 && cup_round_ == 5 && cup_draw_.size() == 1 && cup_draw_[0].home == cup_winner_ &&
                         cup_draw_[0].away == cup_winner_ && cup_game_ < 2;
+    // sub_4379C on the third final day after a 2:0 (game index 2, nothing open): no match screen, sub_42756(0) closes the final
+    // (Amiga FUN_0013213a, DOS sub_42756; REAL-CODE period 57): winner and runner-up booked, wins 0, game index stays 2,
+    // the grid pair is restored as read at the start, DS:D0E4 = 1
+    if (cup_round_ == 5 && cup_winner_ < 0 && cup_series_.size() == 1 && cup_game_ == 2 && !std::getenv("EM_OLD_FINALCLOSE") &&
+        (cup_series_[0].wins_higher == 2 || cup_series_[0].wins_lower == 2)) {
+        close_cup_final();
+        return;
+    }
     if (cup_draw_.empty() || (cup_winner_ >= 0 && !replay)) return;
     if (cup_game_ == 0) {
         cup_series_.clear();
@@ -800,16 +832,16 @@ void Game::play_cup_day() {
                 save_.state.at(kCupScores + size_t(game) * 32 + pair * 2) =
                     save_.state.at(kCupScores + size_t(game) * 32 + pair * 2 + 1) = 100;
     }
-    // the final: as soon as its series is decided the original books the cup winner (DS:0387) and the losing finalist
-    // (DS:038B) - after two games already (REAL-CODE period 28: 2:0, winner and runner-up set on the next days)
-    if (cup_game_ < 3 && cup_series_.size() == 1 && !open && cup_winner_ < 0) {
+    // (EM_OLD_FINALCLOSE: the former reading of period 28, booking and closing right after a decided second game)
+    const bool old_close = std::getenv("EM_OLD_FINALCLOSE") != nullptr;
+    if (old_close && cup_game_ < 3 && cup_series_.size() == 1 && !open && cup_winner_ < 0) {
         const Series& s = cup_series_[0];
         cup_winner_ = s.winner();
         save_.state.at(kStateCupWinner) = uint8_t(cup_winner_);
         save_.state.at(kStateCupRunnerUp) = uint8_t(s.winner() == s.higher ? s.lower : s.higher);
         log_.push_back("DEB cup winner: " + save_.teams[size_t(cup_winner_)].name);
     }
-    if (cup_winner_ >= 0 && cup_series_.size() == 1 && cup_round_ == 5 && !replay) {
+    if (old_close && cup_winner_ >= 0 && cup_series_.size() == 1 && cup_round_ == 5 && !replay) {
         // sub_42756 closes the decided final: game index and wins back to 0, no 100 for the unplayed game, the loser's
         // place in the cup grid gets the winner (REAL-CODE period 28: 01 01 at DS:5CFB)
         cup_game_ = 0;
@@ -831,6 +863,11 @@ void Game::play_cup_day() {
         if (std::find(winners.begin(), winners.end(), human_team_) != winners.end())
             save_.state.at(kManagerBlock + 0xE6) = uint8_t(cup_round_ + 1);
         if (winners.size() == 1) {
+            if (!old_close) {  // game 3 of the final: sub_42756 closes in the same call (see close_cup_final)
+                cup_game_ = 2;
+                close_cup_final();
+                return;
+            }
             cup_winner_ = winners[0];
             cup_game_ = 2;  // ovl05_5646 leaves the final results visible at index 2
             log_.push_back("DEB cup winner: " + save_.teams[size_t(cup_winner_)].name);
@@ -840,6 +877,8 @@ void Game::play_cup_day() {
             for (size_t pair = 0; pair < cup_series_.size() && pair < 16; pair++)
                 if (save_.state.at(0x8E51 + pair * 2) != uint8_t(winners[pair])) save_.state.at(0x8E51 + pair * 2) = uint8_t(winners[pair]);
             cup_draw_ = draw_cup_round(winners, brng_);
+            // the draw of the final ends with two coins (REAL-CODE period 54, after the 20 swaps; with the cup display on)
+            if (winners.size() == 2 && live && !std::getenv("EM_OLD_FINALCOINS")) { brng_.range(0, 1); brng_.range(0, 1); }
             cup_series_.clear();
             cup_round_++;
             save_.state.at(0x8F84) = uint8_t(cup_round_);
@@ -2148,9 +2187,9 @@ void Game::reset_wm() {
 // out in the groups get 11 there). The placement also determines the next trainer grant.
 void Game::begin_world_championship() {
     if (national_coach_ >= 0 || wm_round_ > 0 || save_.state.at(0x025A) == 2) return;
-    // ovl14_2e0f clears last season's achievement flags before a new WM
-    // appointment. Its 0x40 achievement then survives the following summer.
-    save_.state.at(kManagerBlock + 0xF3) = 0;
+    // ovl14_2e0f clears last season's achievement flags with a new WM appointment (below); its 0x40 achievement then survives
+    // the following summer. Without an appointment the flags are cleared only when 13.04. is left (REAL-CODE period 57).
+    if (std::getenv("EM_OLD_WMBEGIN")) save_.state.at(kManagerBlock + 0xF3) = 0;
     if (human_team_ < 0 || human_team_ >= 12 || team_rank(human_team_) >= 5) return;
     // ovl05_5239 appoints the first human manager in the top five, rather than
     // every qualifying manager. Other human managers in an imported save retain their claim.
@@ -2173,7 +2212,7 @@ void Game::begin_world_championship() {
     save_.state.at(block + 0xEB) = 0;
     const long budget = int32_t(le32(save_.state, block + 0x18F)) + national_team_grant(save_);
     for (int byte = 0; byte < 4; byte++) save_.state.at(block + 0x18F + size_t(byte)) = uint8_t(uint32_t(budget) >> (byte * 8));
-    save_.state.at(kManagerBlock + 0xF3) |= 0x40;
+    save_.state.at(kManagerBlock + 0xF3) = 0x40;  // last season's flags cleared, the appointment mark set
     const size_t team = size_t(save_.teams[size_t(nation)].raw - save_.state.data());
     save_.state.at(team + 0x16) = 6;
     save_.state.at(team + 0x34) |= 0x80;
@@ -3572,6 +3611,10 @@ Bytes Game::native_save_bytes() {
 void Game::advance_day() {
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
+    // leaving the club calendar's last day (13.04., "Saisonende") clears the season flags of a manager without WM appointment
+    // (DOS sub_6153F asm 171379, Amiga 17802; REAL-CODE period 57: on 13.04. the licence mark 0x04 of the last season end is still set)
+    if (!std::getenv("EM_OLD_WMBEGIN") && calendar_.event(day_) == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship && national_coach_ < 0)
+        save_.state.at(kManagerBlock + 0xF3) = 0;
     const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
     // The day loop sub_6153F (ovr038:2E5E..3067) passes the manager block and the count-down before every day with a calendar
     // event (byte not 0, 9 or 0xFF), also a cup / EuroCup / playoff day without a manager inside a play step; the WM branch
@@ -3647,6 +3690,8 @@ g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::
     if (event == kEventEuroCup) play_euro_day();
     if (event == kEventPlayoff) play_playoff_day();
     if (event == kEventWorldChampionship) play_wm_day();
+    // the WM appointment on 13.04. (DOSBox NATPRE1 -> NATAUTO: the national manager's menu on that day); a manager without
+    // appointment keeps last season's flags until the day is left (see the top of advance_day)
     if (event == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
         begin_world_championship();
 g_draw_scope = "match-injuries";

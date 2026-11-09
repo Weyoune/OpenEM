@@ -309,6 +309,7 @@ private:
     void update_records(int home, int away, int home_goals, int away_goals);
     void book_special_teams(const MatchStats& stats, int side, int manager = 0);
     void play_cup_day();
+    void close_cup_final();  // sub_42756 at game index 2 of the final
     bool human_in_next_cup() const;
     bool human_in_next_playoff() const;
     void quick_setup(int home, int away, HokTeam& h, HokTeam& a);

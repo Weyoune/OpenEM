@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
+#include <cstdlib>
+#include <vector>
 namespace fs=std::filesystem;
 namespace {
 #ifdef _WIN32
@@ -24,13 +26,31 @@ void SDLCALL input_message(void* user,void* window,unsigned message,Uint64 key,S
 }
 #endif
 fs::path project_root(fs::path start){for(int n=0;n<7&&!start.empty();n++,start=start.parent_path())if(fs::is_directory(start/"work"/"EM"))return start;return fs::current_path();}
+// A folder with the user's own copy of the original game: EM.EXE plus the picture folder KB.
+bool is_game_folder(const fs::path& p){
+    std::error_code ec;
+    return !p.empty()&&(fs::exists(p/"EM.EXE",ec)||fs::exists(p/"EM.exe",ec)||fs::exists(p/"em.exe",ec))&&
+           (fs::is_directory(p/"KB",ec)||fs::is_directory(p/"kb",ec));
+}
+// Where the original data is looked for when --data is not given: OPENEM_DATA, then next to the program (the folder
+// itself, EM, data), then the development layout work/EM above the program, then the current folder (itself, EM).
+fs::path find_game_folder(const fs::path& exe_dir,const fs::path& dev_root){
+    std::vector<fs::path> candidates;
+    if(const char* env=std::getenv("OPENEM_DATA"))candidates.push_back(em::ui::path_from_text(env));
+    for(const fs::path& base:{exe_dir,fs::current_path()})
+        for(const char* sub:{"","EM","data"})candidates.push_back(*sub?base/sub:base);
+    candidates.insert(candidates.begin()+(std::getenv("OPENEM_DATA")?1:0),dev_root/"work"/"EM");  // a source checkout first
+    for(const auto& c:candidates)if(is_game_folder(c))return c;
+    return {};
+}
 }
 int main(int argc,char**argv){
     using namespace em::ui;
     bool headless=false;
     try{
-        char* base=SDL_GetBasePath();const fs::path root=project_root(base?path_from_text(base):fs::current_path());SDL_free(base);
-        fs::path data=root/"work"/"EM",saves=root/"work"/"saves",save,render,input_log;
+        char* base=SDL_GetBasePath();const fs::path exe_dir=base?path_from_text(base):fs::current_path();SDL_free(base);
+        const fs::path root=project_root(exe_dir);
+        fs::path data,saves,save,render,input_log;
         std::string render_screen="main";int cursor_x=-1,cursor_y=-1;bool new_game=false;
         for(int n=1;n<argc;n++){
             const std::string option=argv[n];
@@ -42,6 +62,15 @@ int main(int argc,char**argv){
             else if(option=="--cursor"){const auto comma=value.find(',');if(comma==std::string::npos)throw std::runtime_error("--cursor x,y");cursor_x=std::stoi(value.substr(0,comma));cursor_y=std::stoi(value.substr(comma+1));}
             else if(option=="--render"){render=path_from_text(value);headless=true;}else if(option=="--screen")render_screen=value;else throw std::runtime_error("Unknown option");
         }
+        if(data.empty())data=find_game_folder(exe_dir,root);
+        if(data.empty()||!is_game_folder(data))
+            throw std::runtime_error("OpenEM needs your copy of the original game (the folder with EM.EXE and KB). "
+                                     "Start with --data <folder>, set OPENEM_DATA, or put the folder next to openem as EM.");
+        // saves: the development layout keeps work/saves; otherwise the user's application data folder
+        std::error_code same_ec;
+        if(fs::equivalent(data,root/"work"/"EM",same_ec)||fs::exists(root/"work"/"saves"))saves=root/"work"/"saves";
+        else{char* pref=SDL_GetPrefPath("OpenEM","OpenEM");saves=pref?path_from_text(pref)/"saves":data/"saves";SDL_free(pref);}
+        fs::create_directories(saves);
         // --new-game opens the start menu of a new game (game/new_game.hpp) instead of the default START.HOK
         if(save.empty()&&!new_game&&fs::exists(data/"START.HOK"))save=data/"START.HOK";
         ClassicApplication app(data,saves,save);
