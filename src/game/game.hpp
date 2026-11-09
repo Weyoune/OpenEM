@@ -170,6 +170,7 @@ public:
     int image() const { return image_; }
     int game_level() const { return finance_.level; }  // 0 professional .. 5 beginner
     int human_team() const { return human_team_; }
+    int managers() const { return managers_; }
     // Presentation-only event marker; includes club/national matches and forfeits.
     // It is cleared before a day and never affects RNG, finances or checkpoint state.
     bool interactive_match_played() const { return interactive_played_; }
@@ -410,6 +411,7 @@ private:
     std::vector<Series> cup_series_;  // higher/lower are the first-leg home/away teams here
     int cup_round_ = 1, cup_game_ = 0;
     int human_team_ = -1;
+    int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4; only manager 0 is simulated so far (docs/MEHRSPIELER_PLAN.md)
     HumanSquad human_;
     // Native BSS is zero; only a visited club/national refresh fills its pair.
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.

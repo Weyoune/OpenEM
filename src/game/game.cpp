@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/game.hpp"
+#include "game/manager_layout.hpp"
 #include "game/market.hpp"
 #include "game/messages.hpp"
 #include "game/result_books.hpp"
@@ -18,8 +19,8 @@ namespace em {
 
 namespace {
 constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // DS:0393
-constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kTeamRecord = 0x3D;
-constexpr size_t kManagerBlock = 0x0DCD;  // manager 0, see finances.hpp
+constexpr size_t kSquad = squad_block(0), kSquadRecord = 0x34, kTeamRecord = 0x3D;
+constexpr size_t kManagerBlock = manager_block(0);  // manager 0, see finances.hpp and game/manager_layout.hpp
 constexpr size_t kSeries = 0x9988, kSeriesRecord = 0x9EC8, kSpecialTeams = 0x0F44;
 constexpr int kSeriesTeams = 64;  // DS:B57B .. DS:BAB7
 constexpr int kFirstNationalTeam = 52;  // DS:06AD
@@ -47,7 +48,6 @@ constexpr size_t kPlayoffTeams = 0x8E91, kPlayoffWins = 0x024B, kPlayoffScores =
                  kPlayoffGame = 0x0259, kPlayoffStage = 0x8F87, kPlayoffCursor = 0x03B6,
                  kPlayoffPending = 0x077D, kPlayoffLive = 0x8F40, kRelegationTeams = 0x039C;
 constexpr int kPlayoffBase[3] = {0, 8, 12};
-constexpr int kManagers = 1;                                 // DS:0386: only manager 0 plays
 // state offsets of the season review values: champion DS:D0E6, European cup winner DS:0388, and
 // the German European cup entrants of ovl05_51a5 (DS:A776 list, DS:A763 slots 3 x 6, 0x80 = free)
 constexpr size_t kStateCupRunnerUp = 0x0DCC;  // DS:038B, the losing cup finalist (REAL-CODE period 28)
@@ -139,6 +139,8 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     // The preview name is truncated to19 bytes and may duplicate another
     // team's name (notably national previews). Native load uses manager+14.
     human_team_ = save_.state.at(kManagerBlock + 0x14);
+    managers_ = std::clamp(int(save_.state.at(kManagerCount)), 1, kMaxManagers);
+    if (managers_ > 1) log_.push_back("warning: " + std::to_string(managers_) + " managers in the save; OpenEM simulates manager 0 only so far");
     if(human_team_<0||human_team_>=kHokTeams)throw FormatError("HOK: invalid manager club");
     // the header holds the calendar year of the save (1994 in MONAT4, February), DS:03BB the year
     // the season started; the day loop counts from the season start
@@ -3718,7 +3720,7 @@ void Game::advance_day() {
             // The original stops in the menu "Vor dem ersten Spieltag" (September 10) before the first matchday, with the
             // usual end of a play step: transfer-list roll and the daily factor (REAL-CODE period 30). Day 1 is the next step.
             prepare_human_lineup();
-            if (brng_.range(0, 3) == 0) refresh_transfer_list();
+            if (brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) (asm 170773)
             daily_luck_ = brng_.range(85, 115);
             if (national_coach_ < 0) save_.state.at(0x0788) = 0;
             write_table_copies(save_.state, table_rows());
@@ -3864,7 +3866,7 @@ g_draw_scope = "stadium-week";
         next_event == kEventWorldChampionship) {
         g_draw_scope = "play-step-end"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: play step end, next event %d (day %d)\n", int(next_event), day_ + 1);
         // before a WM day the club menu loop is not entered: no transfer-list roll, only the factor (REAL-CODE period 29)
-        if (next_event != kEventWorldChampionship && brng_.range(0, 3) == 0) refresh_transfer_list();
+        if (next_event != kEventWorldChampionship && brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) in the menu pass (asm 170773)
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
         if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
