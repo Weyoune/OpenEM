@@ -23,6 +23,9 @@ static void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+// 2115:019E units (a third of a BIOS tick) in ms, as classic_board_message_steps counts them.
+static int units(int n) { return n * 54925 / 3000; }
+
 // Compares with a raw 320 x 240 RGB golden; on a difference writes the render and a difference map next to OUTPUT.
 static size_t differences(const ClassicCanvas& canvas, const fs::path& golden, const fs::path& output, const std::string& name) {
     const auto expected = read_file(golden);
@@ -275,6 +278,85 @@ int main(int argc, char** argv) {
             require(classic_match_frame_ms(flash, 0) == 878, "delay(50): 16 BIOS ticks with the names");
             flash.flash->score = true;
             require(classic_match_frame_ms(flash, 70) == 1263, "delay(70): 23 BIOS ticks with the score");
+        }
+        {
+            // Board messages of ovl14_0690 (dosbox-automation capture 09.11.2026: START, speed 60 written to DS:0262, EHC
+            // Freiburg - Kölner EC on the own board). Compared from the message panel row downwards like the goal flash.
+            using Step = ClassicBoardMessage::Step;
+            struct Case { const char* name; int minute; ClassicBoardMessage m; };
+            const auto msg = [](int kind, const char* team, const char* player, const char* second, Step step, bool text, int lines) {
+                ClassicBoardMessage m;
+                m.kind = kind; m.team = team; m.player = player; m.second = second; m.step = step; m.text = text; m.lines = lines;
+                return m;
+            };
+            const std::vector<Case> cases{
+                {"board-msg-chance", 12, msg(1, "KÖLNER EC", "BRANDL", "SCHAEDLER", Step::Caption, true, 1)},
+                {"board-msg-team", 12, msg(1, "KÖLNER EC", "BRANDL", "SCHAEDLER", Step::Team, true, 1)},
+                {"board-msg-goal", 12, msg(1, "KÖLNER EC", "BRANDL", "SCHAEDLER", Step::Final, true, 2)},
+                {"board-msg-missed", 13, msg(0, "EHC FREIBURG", "", "", Step::Result, true, 1)},
+                {"board-msg-goal-cpu", 14, msg(1, "EHC FREIBURG", "", "", Step::Result, true, 1)},
+                {"board-msg-goal-scorer", 30, msg(1, "KÖLNER EC", "DOBRYZINSKI", "STEFAN", Step::Final, true, 1)},
+                {"board-msg-missed-names", 45, msg(0, "KÖLNER EC", "H.STEIGER", "HOHENADL", Step::Final, true, 2)},
+            };
+            for (const Case& k : cases) {
+                ClassicCanvas canvas(data);
+                ClassicMatchFrame f;
+                f.minute = k.minute;
+                f.boards.push_back(board("EHC FREIBURG", 86, "KÖLNER EC", 84));
+                f.message = k.m;
+                draw_classic_match_view(canvas, f);
+                dump(canvas, goldens, k.name);
+                if (!fs::exists(goldens / (std::string(k.name) + ".rgb"))) { std::fprintf(stderr, "missing golden %s\n", k.name); failures++; continue; }
+                if (differences_below(canvas, goldens / (std::string(k.name) + ".rgb"), 0xB4, k.name)) failures++;
+            }
+
+            // The steps and their times (capture: "Chance:" 312 ms, with the club 459 ms, final lines 646 ms; computer club
+            // "Vergeben" 607 ms).
+            ClassicMatchFrame base;
+            base.boards.push_back(board("A", 80, "B", 81));
+            const auto goal = msg(1, "KÖLNER EC", "BRANDL", "SCHAEDLER", Step::Caption, true, 1);
+            auto steps = classic_board_message_steps(base, goal, 60, false);
+            require(steps.size() == 2 + 1 + 1 + 2, "speed 60: two caption blinks, club, one result, two final lines");
+            require(!steps[0].message->text && steps[1].message->text, "the caption blinks in after a cleared step");
+            require(steps[1].hold_ms == units(2) + units(20), "caption: delay(2) and delay(80 - speed)");
+            require(steps[2].message->step == Step::Team && steps[2].hold_ms == units(25), "the club name stays delay(25)");
+            require(steps[3].message->step == Step::Result && steps[3].message->text && steps[3].hold_ms == units(1), "TOR! once (its first lip-sync entry is a vowel)");
+            require(steps[4].message->lines == 1 && steps[5].message->lines == 2 && steps[5].hold_ms == units(35), "final lines delay(35)");
+            auto cpu = goal; cpu.player.clear(); cpu.second.clear(); cpu.kind = 0;
+            steps = classic_board_message_steps(base, cpu, 60, false);
+            require(steps.size() == 4 && steps.back().message->step == Step::Result && steps.back().hold_ms == units(1) + units(35),
+                    "a computer club ends with the font 1 result");
+            steps = classic_board_message_steps(base, goal, 50, false);
+            require(steps.size() == 4 + 1 + 4 + 2 && !steps[8].message->text, "speed 50: four blinks each, the result ends cleared");
+            require(steps[0].hold_ms == units(5 + 2) && steps[3].hold_ms == units(5 + 2) + units(4) + units(30), "speed 50 waits 5 more");
+            steps = classic_board_message_steps(base, goal, 60, true);
+            require(steps.size() == 2 && steps[0].message->step == Step::Final, "with goal scenes only the final lines");
+            require(classic_board_message_steps(base, goal, 70, false).empty(), "no message at speed 70");
+            require(classic_match_frame_ms(steps[0], 60) == steps[0].hold_ms, "a message step keeps its time");
+
+            // classic_board_messages: chances from the counters, goals from the score, names from the squad counters.
+            auto minute = [](int m, int chances_home, int goals_home, int chances_away, int goals_away, int brandl_goals, int pen) {
+                ClassicMatchFrame f;
+                f.minute = std::max(1, m);
+                ClassicBoard b = board("HOME", 80, "AWAY", 81);
+                b.team[0].chances[0] = chances_home; b.goals[0] = goals_home;
+                b.team[1].chances[0] = chances_away; b.goals[1] = goals_away;
+                b.team[1].penalty_minutes = pen;
+                b.team[0].scorers = {{"BRANDL", brandl_goals, 0}, {"SCHAEDLER", 0, brandl_goals}};
+                f.boards.push_back(b);
+                return f;
+            };
+            std::vector<ClassicMatchFrame> frames{minute(0, 0, 0, 0, 0, 0, 0), minute(1, 1, 1, 1, 0, 1, 2), minute(2, 1, 1, 1, 0, 1, 2)};
+            const auto shown = classic_board_messages(frames, 60, false);
+            std::vector<ClassicBoardMessage> finals;
+            for (const auto& f : shown) if (f.message && f.message->step == Step::Caption && f.message->text) finals.push_back(*f.message);
+            require(finals.size() == 3, "goal, miss and penalty in minute 1");
+            require(finals[0].kind == 1 && finals[0].team == "HOME" && finals[0].player == "BRANDL" && finals[0].second == "SCHAEDLER",
+                    "the home goal names scorer and assist");
+            require(finals[1].kind == 2 && finals[1].team == "AWAY" && finals[2].kind == 0, "the away penalty, then the away chance");
+            require(shown[1].minute == 1 && shown[1].message && !shown[1].boards.empty(), "the steps show minute 1");
+            require(!shown.back().message && shown.back().minute == 2, "minute 2 without events");
+            require(classic_board_messages(frames, 70, false).size() == frames.size(), "no messages at speed 70");
         }
         {
             // classic_goal_flashes: two stages per goal before the minute of the goal, home goals first, drawn over the previous
