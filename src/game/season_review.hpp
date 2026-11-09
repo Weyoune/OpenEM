@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "game/calendar.hpp"
@@ -22,6 +24,13 @@ struct SeasonReview {
     long prizes = 0;   // raw DS:E289[manager]: cup prize (ovr038:3E55) plus the review prizes
     long balance = 0;  // raw balance in the header, before the review prizes
     GameDate date{};   // header date: the closing section-end day
+
+    // The overview page "Saisonende" before it (ovl12_1657 = ovr036:1657, Amiga FUN_00146dd0): world champion,
+    // cup winner, champion and European cup winner, and for each of the three leagues the clubs relegated into it
+    // (DS:D0E7, the champion in the first division) and promoted into it (DS:D0ED), at most two each (DS:07B9).
+    std::array<std::string, 4> winners;
+    std::array<bool, 4> human_winner{};  // the manager's face and name under that title
+    std::array<std::vector<std::string>, 3> relegated_into, promoted_into;
 };
 
 // DS:4B2E: symbol of each season flag bit (+0xF3): 0 promoted, 1 relegated, 2 licence withdrawn, 3 champion,

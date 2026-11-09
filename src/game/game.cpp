@@ -2862,6 +2862,17 @@ void Game::swap_teams(int a, int b) {
 void Game::new_season() {
     const int previous_division = human_team_ >= 0 ? human_team_ / kHokLeagueSize : 3;
     CareerSeason history;
+    // overview page "Saisonende" (ovl12_1657): titles by name before the clubs change places
+    SeasonReview review;
+    {
+        const std::array<int, 4> titles{wm_champion_, cup_winner_, champion_, euro_champion_};
+        for (size_t k = 0; k < 4; k++) {
+            const int t = titles[k];
+            if (t >= 0 && t < int(save_.teams.size())) review.winners[k] = save_.teams[size_t(t)].name;
+            review.human_winner[k] = t >= 0 && t == human_team_;
+        }
+    }
+    auto team_name = [&](int t) { return t >= 0 && t < int(save_.teams.size()) ? save_.teams[size_t(t)].name : std::string(); };
     history.league = std::clamp(budget_.league, 0, 2);
     history.place = human_team_ < 36
         ? leagues_[size_t(human_team_ / 12)].rows[size_t(human_team_ % 12)].position + 1
@@ -2988,6 +2999,8 @@ void Game::new_season() {
         }
         for (size_t k = 0; k < up.size() && k < down.size(); k++) {
             log_.push_back("promoted: " + save_.teams[size_t(up[k])].name + ", relegated: " + save_.teams[size_t(down[k])].name);
+            review.promoted_into[size_t(g)].push_back(team_name(up[k]));
+            review.relegated_into[size_t(g + 1)].push_back(team_name(down[k]));
             swap_clubs(up[k], down[k]);
         }
     }
@@ -3006,6 +3019,7 @@ void Game::new_season() {
             do up = brng_.range(kFirstRegionalTeam, kFirstRegionalTeam + 5);
             while (up == previous);
             previous = up;
+            review.promoted_into[2].push_back(team_name(up));
             if (human_team_ == down && (season_flags & 0x04) == 0) {
                 // ovl14:440d..4467: a human Oberliga loser receives a
                 // replacement balance and an extra full club swap. The
@@ -3122,7 +3136,6 @@ void Game::new_season() {
                                      fair_play_winner == human_team_);
     // The manager's page of the season review (ovl02_0000): history line, symbols and prizes; the header shows the
     // balance before the review prizes (ovl01_0f6a runs first).
-    SeasonReview review;
     review.date = date_of_season_day(int(calendar_.events.size()), save_.year);  // the closing day, 30.04.
     review.balance = budget_.balance;
     const size_t review_row = kManagerBlock + 0x18 + 4 * size_t(std::min<int>(le16(save_.state, kCareerYear), 49));

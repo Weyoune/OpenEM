@@ -16,5 +16,11 @@ void draw_classic_season_review_body(ClassicCanvas&, const SeasonReview&);     /
 std::string classic_season_review_prizes(const SeasonReview&);                  // "Erhaltene Prämien: ..."
 // Top-left corner of the n-th symbol frame (146e:07c6): five per row from (0x4C,0x65), 0x23 apart, rows 0x1E apart.
 std::pair<int, int> classic_season_review_slot(int n);
+// The overview "Saisonende" shown before the review (ovl12_1657). face/manager: the human manager, drawn under
+// the titles the manager's club won (human_winner).
+void draw_classic_season_overview(ClassicCanvas&, const SeasonReview&, int face, const std::string& manager);
+// A club name split at its first space into two lines, each cut until it is at most `width` pixels wide in the
+// small font (ovr036:18E6..19C3; 0x46, 0x3C for the European cup column).
+std::pair<std::string, std::string> classic_season_overview_lines(const ClassicCanvas&, const std::string& name, int width);
 
 }  // namespace em::ui

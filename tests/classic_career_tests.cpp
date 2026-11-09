@@ -276,6 +276,43 @@ int main(int argc, char** argv) {
             check(review.prizes == 0 && classic_season_review_prizes(review) == "Erhaltene Prämien: keine", "no prizes");
             check(review.date.day == 30 && review.date.month == 4 && review.date.year == 1994 && review.date.weekday == 1,
                   "header date Montag, 30. April 1994");
+            // first the overview "Saisonende" (ovl12_1657): Russland, Düsseldorf twice, Pori; Mannheim down
+            check(review.relegated_into[1] == std::vector<std::string>{"MANNHEIMER ERC"}, "Mannheim relegated into the second division");
+            app.draw();
+            if (std::getenv("EM_DUMP_CAREER"))
+                write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "overview.bmp", app.canvas().bmp_bytes());
+            {
+                // The WM winner and the club promoted from the regional league (rand(36,41)) come from the random
+                // stream, whose seed in the capture is unknown (EM seeds it from the clock). The page is therefore
+                // compared with those two names as in the capture; the rest of the data is checked as computed.
+                const Bytes overview = read_file(career / "raster_goldens" / "season-overview.rgb");
+                const HokFile& h = app.session().game().save();
+                auto club = [&](const char* part) {
+                    for (const auto& t : h.teams) if (t.name.find(part) != std::string::npos) return t.name;
+                    return std::string();
+                };
+                check(review.winners[1].find("DORFER EG") != std::string::npos,
+                      "cup winner Düsseldorf");
+                check(review.winners[2] == review.winners[1] && review.winners[3].find("PORI") != std::string::npos,
+                      "champion Düsseldorf, European cup Pori");
+                check(review.promoted_into[0].size() == 1 && review.promoted_into[1].size() == 1 &&
+                          review.relegated_into[2].size() == 1 && review.promoted_into[2].size() == 2,
+                      "one swap per relegation group (licence), two from the regional league");
+                SeasonReview as_captured = review;
+                as_captured.winners[0] = club("RUSSLAND");
+                as_captured.promoted_into[2] = {club("GERETSRIED"), club("BREMERHAVEN")};
+                require(!as_captured.winners[0].empty() && !as_captured.promoted_into[2][0].empty(), "capture clubs in the save");
+                ClassicCanvas canvas(data);
+                draw_classic_season_overview(canvas, as_captured, h.state.at(0x01EE) % 12, h.manager);
+                // the capture shows the mouse pointer at (160,120)
+                const size_t diff = region_differences(canvas, overview, {0, 0, 320, 240}, {{158, 118, 172, 136}});
+                if (diff) std::cerr << "season overview: " << diff << " pixels differ\n";
+                check(diff == 0, "season overview as in the original");
+                const size_t page = region_differences(app.canvas(), overview, {0, 0, 320, 240},
+                                                       {{158, 118, 172, 136}, {0, 0x40, 0x50, 0x52}, {0xC8, 0xA8, 0x140, 0xB8}});
+                check(page == 0, "the page from the game matches outside the two random names");
+            }
+            app.click(160, 120, false);  // sub_19B08: the manager's page follows
             app.draw();
             if (std::getenv("EM_DUMP_CAREER"))
                 write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "review.bmp", app.canvas().bmp_bytes());

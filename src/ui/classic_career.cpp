@@ -14,6 +14,7 @@ struct ClassicCareerState {
     // Season review of the last step: shown until a click or key (sub_19B08), then the text lines are covered
     // (ovr026:04EB) and the retirement messages of own players follow in the message field.
     std::optional<SeasonReview> review;
+    bool review_overview = true;  // ovl12_1657 first, then the manager's page
     bool review_cleared = false;
     std::vector<std::string> review_messages;
 };
@@ -44,6 +45,7 @@ void ClassicApplication::show_immediate_messages() {
     if (!career_) career_ = std::make_shared<ClassicCareerState>();
     if (game.season_review()) {
         career_->review = *game.season_review();
+        career_->review_overview = true;
         career_->review_cleared = false;
         career_->review_messages = game.immediate_messages();
     } else {
@@ -56,6 +58,10 @@ void ClassicApplication::show_immediate_messages() {
 void ClassicApplication::advance_review() {
     auto& s = *career_;
     if (!s.review || s.messages.active()) return;
+    if (s.review_overview) {  // sub_19B08 of the overview, then the manager's page
+        s.review_overview = false;
+        return;
+    }
     if (!s.review_cleared) {
         s.review_cleared = true;
         if (!s.review_messages.empty()) {
@@ -105,6 +111,11 @@ bool ClassicApplication::career_key(int) {
 void ClassicApplication::draw_career() {
     if (!career_ || !session_.loaded() || screen_ != ClassicScreen::Main) return;
     if (career_->review) {
+        if (career_->review_overview) {
+            const auto& h = snapshot();
+            draw_classic_season_overview(canvas_, *career_->review, h.state.at(0x01EE) % 12, h.manager);
+            return;
+        }
         // ovl01_0f6a: ice background, the main-menu header in its 0xFE form, title and panel; then ovr026
         canvas_.background(22);
         draw_main_header(&*career_->review);
