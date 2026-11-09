@@ -2919,6 +2919,17 @@ void Game::swap_teams(int a, int b) {
 void Game::new_season() {
     const int previous_division = human_team_ >= 0 ? human_team_ / kHokLeagueSize : 3;
     CareerSeason history;
+    // overview page "Saisonende" (ovl12_1657): titles by name before the clubs change places
+    SeasonReview review;
+    {
+        const std::array<int, 4> titles{wm_champion_, cup_winner_, champion_, euro_champion_};
+        for (size_t k = 0; k < 4; k++) {
+            const int t = titles[k];
+            if (t >= 0 && t < int(save_.teams.size())) review.winners[k] = save_.teams[size_t(t)].name;
+            review.human_winner[k] = t >= 0 && t == human_team_;
+        }
+    }
+    auto team_name = [&](int t) { return t >= 0 && t < int(save_.teams.size()) ? save_.teams[size_t(t)].name : std::string(); };
     history.league = std::clamp(budget_.league, 0, 2);
     history.place = human_team_ < 36
         ? leagues_[size_t(human_team_ / 12)].rows[size_t(human_team_ % 12)].position + 1
@@ -3045,6 +3056,8 @@ void Game::new_season() {
         }
         for (size_t k = 0; k < up.size() && k < down.size(); k++) {
             log_.push_back("promoted: " + save_.teams[size_t(up[k])].name + ", relegated: " + save_.teams[size_t(down[k])].name);
+            review.promoted_into[size_t(g)].push_back(team_name(up[k]));
+            review.relegated_into[size_t(g + 1)].push_back(team_name(down[k]));
             swap_clubs(up[k], down[k]);
         }
     }
@@ -3063,6 +3076,7 @@ void Game::new_season() {
             do up = brng_.range(kFirstRegionalTeam, kFirstRegionalTeam + 5);
             while (up == previous);
             previous = up;
+            review.promoted_into[2].push_back(team_name(up));
             if (human_team_ == down && (season_flags & 0x04) == 0) {
                 // ovl14:440d..4467: a human Oberliga loser receives a
                 // replacement balance and an extra full club swap. The
@@ -3177,6 +3191,20 @@ void Game::new_season() {
     const bool promoted = (season_flags & 3) == 1;
     const long prize = season_prizes(promoted, league, scorer_award, goalkeeper_award,
                                      fair_play_winner == human_team_);
+    // The manager's page of the season review (ovl02_0000): history line, symbols and prizes; the header shows the
+    // balance before the review prizes (ovl01_0f6a runs first).
+    review.date = date_of_season_day(int(calendar_.events.size()), save_.year);  // the closing day, 30.04.
+    review.balance = budget_.balance;
+    const size_t review_row = kManagerBlock + 0x18 + 4 * size_t(std::min<int>(le16(save_.state, kCareerYear), 49));
+    review.place = save_.state.at(review_row);
+    review.league = save_.state.at(review_row + 1);
+    for (int bit = 0; bit < 7; bit++)
+        if (season_flags & (1 << bit)) review.icons.push_back(kSeasonFlagIcons[bit]);
+    if (scorer_award) review.icons.push_back(kIconScorer);
+    if (goalkeeper_award) review.icons.push_back(kIconGoalkeeper);
+    if (fair_play_winner == human_team_) review.icons.push_back(kIconFairPlay);
+    if (std::find(german.begin(), german.end(), human_team_) != german.end()) review.icons.push_back(kIconEuroEntrant);
+    review.prizes = (cup_winner_ == human_team_ ? kCupPrize : 0) + prize;
     if (promoted)
         for (auto& advert : budget_.adverts) advert.flags |= 0x80;
     if (prize) {
@@ -3191,6 +3219,7 @@ void Game::new_season() {
         for(int attempt=0;attempt<attempts;++attempt){
             const auto intake=youth_intake(save_,contracts_,0,save_.state.at(0x06ba),draw);
             if(!intake)continue;
+            review.icons.push_back(kIconYouth);
             HokPlayer* player=player_by_exe_index(intake->player);
             if(!player)throw FormatError("Season: youth player ID missing");
             player->age=player->raw[0x14];player->skill_a=player->raw[0x15];
@@ -3205,6 +3234,7 @@ void Game::new_season() {
         }
         refresh_budget_roster();
     }
+    if (human_team_ >= 0) season_review_ = std::move(review);
     // 4184 first pass: byte birthdays and contract decrement precede the
     // second-pass retirement gates. Zero-year contracts wrap to255.
     for(int id=1;id<=kHokPlayers;++id){

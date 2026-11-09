@@ -17,6 +17,8 @@
 #include "game/scorers.hpp"
 #include "ui/classic_app.hpp"
 #include "ui/classic_misc_newmanager.hpp"
+#include "ui/classic_season_review.hpp"
+#include "ui/session.hpp"
 
 namespace fs = std::filesystem;
 using namespace em;
@@ -57,9 +59,10 @@ static std::string squad_name(const HokFile& h, int id) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 5) throw std::runtime_error("classic_career_tests DATA REFERENCE GOLDENS OUTPUT");
+        if (argc != 6) throw std::runtime_error("classic_career_tests DATA REFERENCE GOLDENS OUTPUT CAREER");
         const fs::path data = path_from_text(argv[1]), references = path_from_text(argv[2]), goldens = path_from_text(argv[3]);
         const fs::path output = path_from_text(argv[4]) / std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        const fs::path career = path_from_text(argv[5]);
         fs::create_directories(output);
         int failures = 0;
         auto check = [&](bool ok, const char* what) {
@@ -255,6 +258,78 @@ int main(int argc, char** argv) {
             app.click(250, 50, false);
             app.draw();
             check(canvas_differences(app.canvas(), closed, {16, 206, 303, 214}) > 0, "Keine Nachricht für Sie vorhanden.");
+        }
+
+        // --- season review (ovl02_0000) -------------------------------------------------------------------
+        // REV1.HOK is the original's state of 15.04.1994 before the WM (REAL-CODE chain, mid29). The original plays
+        // the WM and changes the season in one step; the review of MANNHEIMER ERC (10th, licence withdrawn, -1.97 Mio.)
+        // is work/exp/career_20261109/raster_goldens/season-review.rgb.
+        {
+            const Bytes golden = read_file(career / "raster_goldens" / "season-review.rgb");
+            ClassicApplication app(data, output / "review", career / "REV1.HOK");
+            app.click(293, 52, false);  // own crest: play on
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+            while (!app.session().game().season_review() && std::chrono::steady_clock::now() < until) app.tick();
+            require(app.session().game().season_review().has_value(), "the step reaches the season change");
+            const SeasonReview& review = *app.session().game().season_review();
+            check(review.icons == std::vector<uint8_t>{0}, "licence withdrawn: symbol 0 only");
+            check(review.prizes == 0 && classic_season_review_prizes(review) == "Erhaltene Prämien: keine", "no prizes");
+            check(review.date.day == 30 && review.date.month == 4 && review.date.year == 1994 && review.date.weekday == 1,
+                  "header date Montag, 30. April 1994");
+            // first the overview "Saisonende" (ovl12_1657): Russland, Düsseldorf twice, Pori; Mannheim down
+            check(review.relegated_into[1] == std::vector<std::string>{"MANNHEIMER ERC"}, "Mannheim relegated into the second division");
+            app.draw();
+            if (std::getenv("EM_DUMP_CAREER"))
+                write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "overview.bmp", app.canvas().bmp_bytes());
+            {
+                // The WM winner and the club promoted from the regional league (rand(36,41)) come from the random
+                // stream, whose seed in the capture is unknown (EM seeds it from the clock). The page is therefore
+                // compared with those two names as in the capture; the rest of the data is checked as computed.
+                const Bytes overview = read_file(career / "raster_goldens" / "season-overview.rgb");
+                const HokFile& h = app.session().game().save();
+                auto club = [&](const char* part) {
+                    for (const auto& t : h.teams) if (t.name.find(part) != std::string::npos) return t.name;
+                    return std::string();
+                };
+                check(review.winners[1].find("DORFER EG") != std::string::npos,
+                      "cup winner Düsseldorf");
+                check(review.winners[2] == review.winners[1] && review.winners[3].find("PORI") != std::string::npos,
+                      "champion Düsseldorf, European cup Pori");
+                check(review.promoted_into[0].size() == 1 && review.promoted_into[1].size() == 1 &&
+                          review.relegated_into[2].size() == 1 && review.promoted_into[2].size() == 2,
+                      "one swap per relegation group (licence), two from the regional league");
+                SeasonReview as_captured = review;
+                as_captured.winners[0] = club("RUSSLAND");
+                as_captured.promoted_into[2] = {club("GERETSRIED"), club("BREMERHAVEN")};
+                require(!as_captured.winners[0].empty() && !as_captured.promoted_into[2][0].empty(), "capture clubs in the save");
+                ClassicCanvas canvas(data);
+                draw_classic_season_overview(canvas, as_captured, h.state.at(0x01EE) % 12, h.manager);
+                // the capture shows the mouse pointer at (160,120)
+                const size_t diff = region_differences(canvas, overview, {0, 0, 320, 240}, {{158, 118, 172, 136}});
+                if (diff) std::cerr << "season overview: " << diff << " pixels differ\n";
+                check(diff == 0, "season overview as in the original");
+                const size_t page = region_differences(app.canvas(), overview, {0, 0, 320, 240},
+                                                       {{158, 118, 172, 136}, {0, 0x40, 0x50, 0x52}, {0xC8, 0xA8, 0x140, 0xB8}});
+                check(page == 0, "the page from the game matches outside the two random names");
+            }
+            app.click(160, 120, false);  // sub_19B08: the manager's page follows
+            app.draw();
+            if (std::getenv("EM_DUMP_CAREER"))
+                write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "review.bmp", app.canvas().bmp_bytes());
+            const size_t balance = region_differences(app.canvas(), golden, {138, 60, 231, 70}, {});
+            if (balance) std::cerr << "note: header balance differs from the original (" << money(review.balance) << ")\n";
+            // the capture shows the mouse pointer in the top-left corner
+            const size_t rest = region_differences(app.canvas(), golden, {0, 0, 320, 240}, {{138, 60, 231, 70}, {0, 0, 12, 14}});
+            if (rest) std::cerr << "season review: " << rest << " pixels differ\n";
+            check(rest == 0, "season review page as in the original (outside the balance)");
+            const auto page = app.canvas().argb();
+            app.key(SDLK_SPACE);  // sub_19B08: any key or click ends the page (no own retirements here)
+            app.draw();
+            check(canvas_differences(app.canvas(), page, {0, 0, 320, 240}) > 1000, "the page is gone after the key");
+            // the symbol slots of 146e:07c6: five per row
+            check(classic_season_review_slot(0) == std::pair<int, int>{0x4C, 0x65} &&
+                      classic_season_review_slot(4) == std::pair<int, int>{0xD8, 0x65} &&
+                      classic_season_review_slot(5) == std::pair<int, int>{0x4C, 0x83}, "symbol slots");
         }
         if (failures) return 1;
         std::cout << "classic career: ok\n";

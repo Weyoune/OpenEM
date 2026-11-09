@@ -49,6 +49,7 @@ private:
     void finish_timed_native_notice();
     std::string virtual_file_path(const std::filesystem::path& path) const;
     void draw_main();
+    void draw_main_header(const SeasonReview* review);  // ovl10_0cd1; review: the 0xFE variant of the season review
     void draw_files();
     void draw_table();
     void draw_totals();
@@ -105,6 +106,7 @@ private:
     void check_new_messages();
     void open_messages();
     void show_immediate_messages();
+    void advance_review();
     bool career_click(int x,int y,bool right);
     void career_release();
     bool career_key(int key);
