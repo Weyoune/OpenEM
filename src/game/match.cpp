@@ -519,6 +519,7 @@ struct PenaltySide {
     BorlandRandom& selection_rng;
     MatchStats* stats;
     int side;
+    bool same_club = false;  // both sides are one club (the replayed cup final, REAL-CODE period 29)
 };
 
 // ovl06_02d8: the paired call also ticks its side, as in the original.
@@ -536,7 +537,8 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
             return p.player >= 0 && p.role != 0 && p.line != 0;
         }) <= 7) return false;  // ovl12_0d27(manager, 1): protect a depleted human lineup
     const bool major = running == 0 && rng.range(0, 15) == 0;
-    const bool pair = may_pair && rng.range(0, 3) == 0 && running == 0;
+    // ovr030:04BA: the pair roll is skipped when both sides are the same club (arg_0 == arg_2)
+    const bool pair = may_pair && !side.same_club && rng.range(0, 3) == 0 && running == 0;
     // The original books opportunities before attempting to select the player.
     // with the goalkeeper pulled (six skaters) the penalty brings him back: 4 skaters remain (REAL-CODE period 9)
     const int token = side.stats ? side.stats->record(side.side, side.team.skaters == 6 ? 4 : side.team.skaters - 1,
@@ -707,7 +709,9 @@ struct MatchRun::Impl {
     int level;
     MatchStats* stats;
     MatchOptions opts;
-    HokTeam h, a;
+    bool same_club = false;  // one club on both sides: the original plays both on the same team record (REAL-CODE period 29)
+    HokTeam h, a_own;
+    HokTeam& a;
     std::vector<HokSquadPlayer> hsq, asq;
     HumanSquad hh2, ha2;
     const HumanSquad* hp = nullptr;
@@ -725,7 +729,7 @@ struct MatchRun::Impl {
 
     Impl(const HokTeam& home, const HokTeam& away, GameRandom& r, int lvl, const HumanSquad* hh, const HumanSquad* ha, MatchStats* st,
          const MatchOptions& o)
-        : rng(r), level(lvl), stats(st), opts(o), h(home), a(away) {
+        : rng(r), level(lvl), stats(st), opts(o), same_club(&home == &away), h(home), a_own(away), a(same_club ? h : a_own) {
         if (stats) {
             stats->forfeit_side = 0;
             stats->initial_load[0] = hh ? squad_match_load(home, *hh) : -1;
@@ -777,6 +781,7 @@ struct MatchRun::Impl {
                                                           hp && hp->selection_rng ? *hp->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 0});
         apen = std::make_unique<PenaltySide>(PenaltySide{a, abox, ap ? &asq : nullptr, ap,
                                                           ap && ap->selection_rng ? *ap->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 1});
+        hpen->same_club = apen->same_club = same_club;
     }
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70

@@ -176,7 +176,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             Series s;
             s.higher = cup_game_ % 2 == 0 ? p.home : p.away;
             s.lower = s.higher == p.home ? p.away : p.home;
-            const int played = cup_winner_ >= 0 ? 3 : cup_game_;
+            const int played = cup_winner_ >= 0 && p.home != p.away ? 3 : cup_game_;  // winner against winner: the replayed games only
             for (int game = 0; game < played; game++) {
                 const size_t o = kCupScores + size_t(game) * 32 + pair * 2;
                 const int a = save_.state.at(o), b = save_.state.at(o + 1);
@@ -601,7 +601,12 @@ bool Game::human_in_next_euro() const {
 
 void Game::play_cup_day() {
     cup_day_++;
-    if (cup_draw_.empty() || cup_winner_ >= 0) return;
+    // A final closed after two games leaves the winner twice in the cup grid; a remaining cup day of the calendar still
+    // runs sub_42756, which plays that pair (winner against winner) as game 1 of a new series and books it like any cup
+    // game: index 1, scores, one win, DS:D0E4 = 1 (REAL-CODE period 29)
+    const bool replay = cup_winner_ >= 0 && cup_round_ == 5 && cup_draw_.size() == 1 && cup_draw_[0].home == cup_winner_ &&
+                        cup_draw_[0].away == cup_winner_ && cup_game_ < 2;
+    if (cup_draw_.empty() || (cup_winner_ >= 0 && !replay)) return;
     if (cup_game_ == 0) {
         cup_series_.clear();
         for (const HokPairing& p : cup_draw_) {
@@ -609,7 +614,8 @@ void Game::play_cup_day() {
             s.higher = p.home; s.lower = p.away;
             cup_series_.push_back(s);
         }
-        std::fill(save_.state.begin() + long(kCupScores), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
+        // only a new draw clears the grid (sub_42B5D); the replayed final keeps the old columns
+        if (!replay) std::fill(save_.state.begin() + long(kCupScores), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
     }
     std::vector<HokPairing> draw;
     std::vector<size_t> active;
@@ -765,7 +771,9 @@ void Game::play_cup_day() {
                 std::swap(save_.state.at(kCupScores + size_t(game) * 32 + pair * 2),
                           save_.state.at(kCupScores + size_t(game) * 32 + pair * 2 + 1));
         }
-        const bool first = cup_draw_[pair].home == s.higher;
+        // the original swaps the wins with the pair after every game; with the same club on both places only the game
+        // parity tells the sides apart
+        const bool first = s.higher == s.lower ? cup_game_ % 2 == 0 : cup_draw_[pair].home == s.higher;
         save_.state.at(kCupWins + pair * 2) = uint8_t(first ? s.wins_higher : s.wins_lower);
         save_.state.at(kCupWins + pair * 2 + 1) = uint8_t(first ? s.wins_lower : s.wins_higher);
         save_.state.at(kCupLive + pair * 2) = save_.state.at(kCupLive + pair * 2 + 1) = uint8_t(finished && !live ? 100 : 0);
@@ -783,7 +791,7 @@ void Game::play_cup_day() {
         save_.state.at(kStateCupRunnerUp) = uint8_t(s.winner() == s.higher ? s.lower : s.higher);
         log_.push_back("DEB cup winner: " + save_.teams[size_t(cup_winner_)].name);
     }
-    if (cup_winner_ >= 0 && cup_series_.size() == 1 && cup_round_ == 5) {
+    if (cup_winner_ >= 0 && cup_series_.size() == 1 && cup_round_ == 5 && !replay) {
         // sub_42756 closes the decided final: game index and wins back to 0, no 100 for the unplayed game, the loser's
         // place in the cup grid gets the winner (REAL-CODE period 28: 01 01 at DS:5CFB)
         cup_game_ = 0;
@@ -3346,6 +3354,7 @@ Bytes Game::native_save_bytes() {
 void Game::advance_day() {
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
+    const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
     if (message_step_pending_) {  // ovr038:3019 / 3067 when the play step starts from the menu
         native_sort_messages(save_.state);
         native_message_step(save_.state);
@@ -3366,9 +3375,14 @@ void Game::advance_day() {
     refresh_human_team();  // 162c:146c, daily
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
-    save_.state.at(0x078B)=save_.state.at(0x078A);
+    // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
+    // at the start of a seven-day step; periods 13 and 23: a later match day of the same step does not copy again, or the
+    // saved mode would be lost). A loaded save keeps the 0 of DS:0375, so its first step saves 0.
+    if (step_start) {
+        save_.state.at(0x078B) = save_.state.at(0x078A);
+        save_.state.at(0x078A) = 0;
+    }
     hurt_in_match_.fill(false);  // only a match of this day can count its injured starters
-    save_.state.at(0x078A)=0;
     day_++;
     const uint8_t event = calendar_.event(day_);
     human_played_ = false;
@@ -3467,6 +3481,9 @@ g_draw_scope = "stadium-week";
         });
     }
     if (world_phase) heal_squad((day_ + 1) % 7 == 0);
+    // The evening restores the saved selection mode (DS:0376 -> DS:0375) and runs its automatic lineup. The original does
+    // this at the menu only and leaves DS:0375 at 0 within a step (docs/DEVIATIONS.md); the saved mode DS:0376 is the same
+    // in both, as the copy runs once per step (above), so the lineups agree (REAL-CODE periods 2-29).
     prepare_human_lineup();
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
     // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
@@ -3475,7 +3492,8 @@ g_draw_scope = "stadium-week";
     if (calendar_.league_day(day_ + 1) || next_event == kEventCup || next_event == kEventEuroCup || next_event == kEventPlayoff ||
         next_event == kEventWorldChampionship) {
         g_draw_scope = "play-step-end"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: play step end, next event %d (day %d)\n", int(next_event), day_ + 1);
-        if (brng_.range(0, 3) == 0) refresh_transfer_list();
+        // before a WM day the club menu loop is not entered: no transfer-list roll, only the factor (REAL-CODE period 29)
+        if (next_event != kEventWorldChampionship && brng_.range(0, 3) == 0) refresh_transfer_list();
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
         if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
@@ -3488,8 +3506,13 @@ g_draw_scope = "stadium-week";
             return;
         }
         daily_luck_ = brng_.range(85, 115);
-        write_table_copies(save_.state, table_rows());  // the menu refreshes the copies of the table (REAL-CODE period 28)
-        table_copies_frozen_ = league_since_refresh_ = false;
+        // DS:A70E is the manager loop index of the original; the menu loop leaves it at 0 (ovr037 376d3, REAL-CODE period 29)
+        if (national_coach_ < 0) save_.state.at(0x0788) = 0;
+        // the club menu refreshes the copies of the table (REAL-CODE period 28); before a WM day it is not entered (period 29)
+        if (next_event != kEventWorldChampionship) {
+            write_table_copies(save_.state, table_rows());
+            table_copies_frozen_ = league_since_refresh_ = false;
+        }
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
         // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
         // (REAL-CODE period 16: only when the next play step leaves the menu, so a message of this step keeps its count)
