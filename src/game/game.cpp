@@ -1499,6 +1499,10 @@ void Game::weekly_team_drift() {
 }
 
 void Game::refresh_human_team() {
+    // From the first WM day on, the WM branch of the day loop runs with manager index 5; without a human national coach
+    // 162c:146c is no longer called for the club, whose record keeps the value of the last club day into the season-end
+    // rerate (REAL-CODE period 30: 69/68/67/68 -> 65/65/63/63, the strength 256 of the summer bookings)
+    if (wm_round_ > 0 && national_coach_ < 0 && !std::getenv("EM_OLD_WMREFRESH")) return;
     HokTeam& team = save_.teams[size_t(human_team_)];
     for (int kind = 0; kind < 2; kind++) {
         int sum[3] = {};
@@ -3028,8 +3032,15 @@ void Game::new_season() {
     }
     // 162c:1c5b: new season values of the German clubs in their new class, before the clubs change places (REAL-CODE
     // period 30: the 52 rerates follow the regional swaps directly)
-    for (int t = 0; t < kFirstNationalTeam; t++)
+    for (int t = 0; t < kFirstNationalTeam; t++) {
+        const HokTeam before = save_.teams[size_t(t)];
         rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_);
+        if (std::getenv("EM_DEBUG_RERATE")) {
+            const HokTeam& x = save_.teams[size_t(t)];
+            std::fprintf(stderr, "rerate %d%s class %d: %d %d %d %d -> %d %d %d %d\n", t, t == human_team_ ? " (human)" : "", team_class(finance_, t),
+                         before.skill1[0], before.skill1[1], before.skill2[0], before.skill2[1], x.skill1[0], x.skill1[1], x.skill2[0], x.skill2[1]);
+        }
+    }
     for (int t = kFirstNationalTeam; t < 64; t++) {  // the national teams only re-roll their form (as in the weekly drift)
         save_.teams[size_t(t)].form[0] = int(rng_.range(45, 55));
         save_.teams[size_t(t)].form[1] = int(rng_.range(45, 55));
@@ -3558,7 +3569,7 @@ void Game::advance_day() {
             return;
         }
     }
-    refresh_human_team();  // 162c:146c, daily
+    refresh_human_team();  // 162c:146c, daily (not in the WM branch without a national coach, see there)
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
     // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
