@@ -838,13 +838,14 @@ void Game::play_cup_day() {
             cup_draw_ = draw_cup_round(winners, brng_);
             cup_series_.clear();
             cup_round_++;
+            save_.state.at(0x8F84) = uint8_t(cup_round_);
             cup_game_ = 0;
             std::fill(save_.state.begin() + long(kCupScores), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
         }
     }
     save_.state.at(kCupGame) = uint8_t(cup_game_);
     save_.state.at(kCupPending) = uint8_t(open || cup_game_ == 0);
-    save_.state.at(0x8F84) = uint8_t(cup_round_);  // DS:07AD, native round mirror
+    // DS:07AD (native round mirror) is written only with a new draw: after the season change it stays 0 through round 1 (REAL-CODE period 33)
     store_cup_participants(save_, cup_draw_, cup_round_);
 }
 
@@ -2293,7 +2294,18 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
             const int games = le16(save_.state, at + 0x20) + 1;
             save_.state.at(at + 0x20) = uint8_t(games);
             save_.state.at(at + 0x21) = uint8_t(games >> 8);
-        } else (cup ? sp.cup_games : sp.league_games)++;
+        } else {
+            int& season = cup ? sp.cup_games : sp.league_games;
+            season++;
+            // the season byte and the career total (+0x1C league / +0x1E cup) go up at once: the contract wish of the next
+            // squad day reads the total (REAL-CODE period 36)
+            const size_t at = kSquad + slot * kSquadRecord;
+            save_.state.at(at + (cup ? 7 : 6)) = uint8_t(season);
+            const size_t total_at = at + (cup ? 0x1E : 0x1C);
+            const int games = le16(save_.state, total_at) + 1;
+            save_.state.at(total_at) = uint8_t(games);
+            save_.state.at(total_at + 1) = uint8_t(games >> 8);
+        }
         sp.status = SquadStatus::Team;
         if (!league_statistics) continue;
         player.league_games = uint8_t(player.league_games + 1);
