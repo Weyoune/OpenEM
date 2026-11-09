@@ -1,16 +1,39 @@
 # OpenEM
 
-OpenEM rekonstruiert den Eishockey Manager von 1993. Die Oberfläche folgt dem DOS-Original: 320×240 Pixel, ursprüngliche Grafiken, Schriften, Farben, Fenster und Bedienwege. Weitere Originalseiten und Teile der Spielsteuerung fehlen noch.
+OpenEM rekonstruiert den Eishockey Manager von 1993. Die Oberfläche folgt dem DOS-Original: 320×240 Pixel, ursprüngliche Grafiken, Schriften, Farben, Fenster und Bedienwege. Die Spielregeln werden zugexakt gegen das Original geprüft (siehe unten). Weitere Originalseiten und Teile der Spielsteuerung fehlen noch.
+
+## Was man braucht
+
+OpenEM enthält keine Daten des Originals. Man braucht eine eigene Kopie des DOS-Spiels: den Ordner mit `EM.EXE` und den Unterordnern `KB` (Bilder) und `TORE` (Torszenen).
+
+## Bauen
+
+Voraussetzungen: CMake ab 3.24 und ein C++20-Compiler (Visual Studio 2022 oder neuer, GCC, Clang). SDL2 lädt CMake beim Konfigurieren selbst herunter; mit `-DEM_USE_SYSTEM_SDL2=ON` wird stattdessen ein installiertes SDL2 benutzt.
+
+```bash
+cmake -S . -B build -DEM_DATA="<Pfad zum EM-Ordner>"
+cmake --build build --config Release
+ctest --test-dir build -C Release
+```
+
+`EM_DATA` braucht nur, wer die Tests laufen lässt. `-DEM_REALCODE=ON` baut zusätzlich die REAL-CODE-Vergleichstests (Unicorn-Emulator, siehe [docs/REALCODE.md](docs/REALCODE.md)).
 
 ## Starten
 
-Aus diesem Arbeitsverzeichnis:
-
-```powershell
-& ./build/menu-current/Release/openem.exe
+```bash
+openem --data "<Pfad zum EM-Ordner>"
 ```
 
-Die lokalen Originaldaten unter `work/EM` werden benötigt. Der Start lädt `START.HOK`. Eigene Sicherungen liegen unter `work/saves`; sie sind im ursprünglichen Dateidialog über `D:` erreichbar.
+Ohne `--data` sucht OpenEM die Originaldaten in dieser Reihenfolge:
+
+1. die Umgebungsvariable `OPENEM_DATA`;
+2. in einem Quellcode-Checkout `work/EM` oberhalb des Programms;
+3. der Programmordner selbst, dann seine Unterordner `EM` und `data`;
+4. der aktuelle Ordner, dann `EM` und `data` darin.
+
+Findet OpenEM nichts, erscheint eine Meldung mit diesen Möglichkeiten. Liegt im Datenordner ein `START.HOK`, wird er geladen; sonst beginnt OpenEM mit dem Startmenü. `--new-game` öffnet immer das Startmenü eines neuen Spiels.
+
+Spielstände: im Quellcode-Checkout unter `work/saves`, sonst im Benutzer-Datenordner (`%APPDATA%\OpenEM\OpenEM\saves` unter Windows, `~/.local/share/OpenEM/OpenEM/saves` unter Linux). Im ursprünglichen Dateidialog sind sie über `D:` erreichbar.
 
 - `.oem` erhält den OpenEM-Fortsetzungszustand einschließlich beider Zufallsfolgen.
 - `.hok` exportiert für das DOS-Original; dessen Format enthält diese Zufallsfolgen nicht.
@@ -19,10 +42,10 @@ Bestehende Speicherdateien werden nicht überschrieben.
 
 ## Stand und Belege
 
-[Bedienung und Grenzen](docs/CLASSIC_UI.md), [Projektstand](docs/STATUS.md), [Prüfungen](docs/TESTING.md) und [Checkpointformat](docs/formats/OPENEM_CHECKPOINT.md) beschreiben den aktuellen Umfang.
+[Bedienung und Grenzen](docs/CLASSIC_UI.md), [Projektstand](docs/STATUS.md), [Prüfungen](docs/TESTING.md), [Tagesvergleiche mit dem Original](docs/DAYDIFF.md), [Abweichungen](docs/DEVIATIONS.md) und [Checkpointformat](docs/formats/OPENEM_CHECKPOINT.md) beschreiben den aktuellen Umfang.
 
-59 konkrete Ansichten stimmen vollständig mit DOSBox-Aufnahmen überein. Manager → Stadion und Jugend sowie die beiden Verkaufsdialoge verwenden die ursprünglichen Grafiken und Bedienwege. Angebote werden erst beim Öffnen bewertet; Behalten und Verkaufen folgen den beobachteten Zustands- und Zufallsänderungen. Release und AddressSanitizer bestehen jeweils 39/39 Tests.
+**Maßstab:** Spielregeln sind zugexakt: gleiche Zufallszüge, gleiche Ergebnisse, gleiche für den Spieler sichtbare Zahlen. Fehler und interne Puffer des DOS-Originals werden nur nachgebaut, wenn das mit vertretbarem Aufwand geht; sonst stehen sie mit Beleg in [docs/DEVIATIONS.md](docs/DEVIATIONS.md).
 
-OEM-Version 5 erhält zusätzlich die jährlichen Verteilungscursor, die native 50er-Kennungshistory und die bisherigen flüchtigen Fortsetzungsdaten. Versionen 1–4 bleiben lesbar.
+**Prüfung:** Das Original läuft im Emulator ab einem Spielstand bis zum nächsten Menü; OpenEM rechnet dieselben Tage und muss alle 47 761 Zustandsbytes und beide Zufallsfolgen gleich treffen. Inzwischen sind fast zwei vollständige Spielzeiten in Folge abgedeckt (Liga, Pokal, EuroCup, Playoffs, Abstiegsrunde, WM, Saisonwechsel, Sommer; 57 Zeiträume, alle als Regressionstest).
 
-Eine vollständige Originalkarriere mit identischer Zufallsfolge ist weiterhin offen. Dazu fehlen unter anderem Teile der Menü-/Stimmungsphase, weitere Managerseiten, mehrere Dialoge und Live-Steuerung. Aktuelle Verkaufsbelege liegen unter `work/exp/menu_20261104`; ältere eingefrorene Prüfstände bleiben erhalten.
+Eine vollständige Karriere mit bis zu vier Managern, die Live-Steuerung während des Spiels und einige Seiten fehlen noch (siehe [docs/STATUS.md](docs/STATUS.md)).
