@@ -78,6 +78,7 @@ add_library(em_game STATIC
     src/game/talent.cpp
     src/game/messages.cpp
     src/game/new_game.cpp
+    src/game/world_generator.cpp
     src/game/reporting.cpp
     src/game/settings.cpp
     src/game/highscore.cpp
@@ -198,6 +199,8 @@ target_link_libraries(em_classic_opponent_tests PRIVATE em_classic)
 add_test(NAME classic_opponent COMMAND em_classic_opponent_tests)
 add_executable(em_native_roster_tests tests/native_roster_tests.cpp)
 target_link_libraries(em_native_roster_tests PRIVATE em_game)
+add_executable(em_world_generator_tests tests/world_generator_tests.cpp)
+target_link_libraries(em_world_generator_tests PRIVATE em_game)
 add_test(NAME native_roster COMMAND em_native_roster_tests)
 add_executable(em_purchase_tests tests/purchase_tests.cpp)
 target_link_libraries(em_purchase_tests PRIVATE em_game)
@@ -266,6 +269,7 @@ target_link_libraries(em_classic_tests PRIVATE em_classic)
 set(EM_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/EM" CACHE PATH "Directory with reference savegames (START/TAG1/MONAT1.HOK)")
 if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME formats_original_kb COMMAND em_format_tests "${EM_DATA}" "${EM_REFERENCE}")
+    add_test(NAME world_generator COMMAND em_world_generator_tests "${EM_DATA}")
     add_test(NAME ui_session COMMAND em_ui_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/ui-test-work")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/nativepurchase-cancel.hok")
         add_test(NAME purchase_dialog COMMAND em_purchase_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103")
