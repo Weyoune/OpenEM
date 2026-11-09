@@ -140,7 +140,7 @@ target_link_libraries(em_classic PUBLIC em_game)
 # Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM)
 target_sources(em_classic PRIVATE src/ui/classic_stats_players.cpp src/ui/classic_stats_history.cpp src/ui/classic_stats_club.cpp src/ui/classic_stats_wm.cpp src/ui/classic_stats_fairplay.cpp)
 # Match display (ovl14 scoreboards, minute panel)
-target_sources(em_classic PRIVATE src/ui/classic_match_view.cpp)
+target_sources(em_classic PRIVATE src/ui/classic_match_view.cpp src/ui/classic_goal_scene.cpp)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
 if(EM_BUILD_GUI)

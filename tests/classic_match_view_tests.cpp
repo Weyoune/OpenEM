@@ -8,6 +8,7 @@
 #include "ui/classic_cup.hpp"
 #include "game/calendar.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -155,11 +156,48 @@ static void set_team(ClassicBoardTeam& t, std::array<int, 3> chances, int penalt
     t.skaters = skaters; t.penalty_code = penalty_code;
 }
 
+// Development aid: EM_SCENE_SEARCH="capture.rgb[;arena]" finds the TORE\ script and frame of a goal scene capture (rows
+// 0..199, START colours of EHC Freiburg / Kölner EC) and prints the best candidates.
+static void scene_search(const fs::path& data) {
+    const char* env = std::getenv("EM_SCENE_SEARCH");
+    if (!env) return;
+    std::string arg = env;
+    int arena = 2;
+    std::string only;
+    if (auto bar = arg.find('|'); bar != std::string::npos) { only = arg.substr(bar + 1); arg = arg.substr(0, bar); }
+    if (auto semi = arg.find(';'); semi != std::string::npos) { arena = std::stoi(arg.substr(semi + 1)); arg = arg.substr(0, semi); }
+    const auto expected = read_file(arg);
+    ClassicCanvas canvas(data);
+    struct Hit { size_t diff; std::string script; int frame; };
+    std::vector<Hit> hits;
+    for (const auto& e : fs::directory_iterator(data / "TORE")) {
+        const std::string name = e.path().filename().string();
+        if (name == "anzahl" || (!only.empty() && name != only)) continue;
+        const int n = classic_goal_scene_length(data, name);
+        for (int k = 0; k <= n; k++) {
+            ClassicGoalScene s;
+            s.script = name; s.arena = arena; s.colour = {0x0EFF, 0x0F00}; s.frame = k;
+            draw_classic_goal_scene(canvas, s);
+            const auto argb = canvas.argb();
+            size_t diff = 0;
+            for (size_t p = 0; p < 320 * 200; p++) {
+                const uint32_t rgb = uint32_t(expected[p * 3]) << 16 | uint32_t(expected[p * 3 + 1]) << 8 | expected[p * 3 + 2];
+                if ((argb[p] & 0xFFFFFF) != rgb) diff++;
+            }
+            hits.push_back({diff, name, k});
+        }
+    }
+    std::sort(hits.begin(), hits.end(), [](const Hit& a, const Hit& b) { return a.diff < b.diff; });
+    for (size_t i = 0; i < 6 && i < hits.size(); i++) std::printf("%zu %s %d\n", hits[i].diff, hits[i].script.c_str(), hits[i].frame);
+    std::exit(0);
+}
+
 int main(int argc, char** argv) {
     try {
         if (argc != 5) throw std::runtime_error("classic_match_view_tests DATA REFERENCE GOLDENS OUTPUT");
         const fs::path data = path_from_text(argv[1]), references = path_from_text(argv[2]), goldens = path_from_text(argv[3]),
                        output = path_from_text(argv[4]);
+        scene_search(data);
         int failures = 0;
         auto check = [&](ClassicCanvas& canvas, const std::string& name) {
             if (!fs::exists(goldens / (name + ".rgb"))) { std::fprintf(stderr, "missing golden %s\n", name.c_str()); failures++; return; }
@@ -280,6 +318,29 @@ int main(int argc, char** argv) {
             require(classic_match_frame_ms(flash, 70) == 1263, "delay(70): 23 BIOS ticks with the score");
         }
         {
+            // Goal scenes of ovl14_4938 (dosbox-automation capture 09.11.2026: START with Torszenen on, EHC Freiburg - Kölner
+            // EC, arena 2 = KB243). Script and frame of each capture were found by search (EM_SCENE_SEARCH); the whole screen
+            // is compared: rink window, objects, palette KB247 with the shirt colours, panel KB246 with the texts.
+            struct Case { const char* name; const char* script; int frame, minute, home, away; };
+            const std::vector<Case> cases{
+                {"scene-5at-08", "5.at", 8, 16, 3, 2},   {"scene-5at-38", "5.at", 38, 16, 3, 2},
+                {"scene-5at-80", "5.at", 80, 16, 3, 2},  {"scene-5at-final", "5.at", 80, 16, 3, 3},
+                {"scene-4ht-55", "4.ht", 55, 13, 2, 2},  {"scene-6ht-60", "6.ht", 60, 19, 3, 3},
+                {"scene-2hv-104", "2.hv", 104, 22, 4, 3},
+            };
+            for (const Case& k : cases) {
+                ClassicCanvas canvas(data);
+                ClassicMatchFrame f;
+                f.scene = ClassicGoalScene{};
+                ClassicGoalScene& s = *f.scene;
+                s.script = k.script; s.arena = 2; s.colour = {0x0EFF, 0x0F00};
+                s.names = {"EHC FREIBURG", "KÖLNER EC"}; s.goals = {k.home, k.away}; s.info = "AUSWÄRTS";
+                s.minute = k.minute; s.frame = k.frame;
+                draw_classic_match_view(canvas, f);
+                check(canvas, k.name);
+            }
+        }
+        {
             // Board messages of ovl14_0690 (dosbox-automation capture 09.11.2026: START, speed 60 written to DS:0262, EHC
             // Freiburg - Kölner EC on the own board). Compared from the message panel row downwards like the goal flash.
             using Step = ClassicBoardMessage::Step;
@@ -357,6 +418,31 @@ int main(int argc, char** argv) {
             require(shown[1].minute == 1 && shown[1].message && !shown[1].boards.empty(), "the steps show minute 1");
             require(!shown.back().message && shown.back().minute == 2, "minute 2 without events");
             require(classic_board_messages(frames, 70, false).size() == frames.size(), "no messages at speed 70");
+            {
+                // Goal scenes with the same minute frames: every chance of the human board plays its scene before the
+                // message, the score of the scene runs on within the minute, a goal adds one in the final frame.
+                std::vector<ClassicMatchFrame> human = frames;
+                for (auto& f : human) { f.boards[0].team[0].human = true; f.boards[0].team[0].colour = 0x0EFF; f.boards[0].team[1].colour = 0x0EFE; }
+                const auto played = classic_board_messages(human, 70, true, data);
+                std::vector<const ClassicGoalScene*> finals_of_scenes;
+                for (size_t i = 0; i < played.size(); i++)
+                    if (played[i].scene && played[i].hold_ms == units(6))
+                        finals_of_scenes.push_back(&*played[i].scene);
+                require(finals_of_scenes.size() == 2, "a scene for the home goal and the away chance");
+                const ClassicGoalScene& g = *finals_of_scenes[0];
+                require(g.script.find(".ht") != std::string::npos && g.goals[0] == 1 && g.goals[1] == 0, "home goal: .ht, 1:0 at its end");
+                require(g.colour[1] == (0x0EFF ^ 0xFFF), "similar shirts: the away colour is inverted");
+                require(g.info == "0 ZUSCHAUER", "the manager's home game shows the attendance");
+                const ClassicGoalScene& a = *finals_of_scenes[1];
+                require(a.script.find(".av") != std::string::npos && a.goals[0] == 1 && a.goals[1] == 0, "away miss: .av, still 1:0");
+                const int n = classic_goal_scene_length(data, g.script);
+                size_t first = 0;
+                while (!played[first].scene) first++;
+                require(played[first].scene->frame == 1 && played[first].hold_ms == 54 && played[first + size_t(n)].hold_ms == units(6),
+                        "one tick per script frame, delay(6) at the end");
+                require(played[first].scene->goals[0] == 0, "the scene starts with the score before the goal");
+                require(classic_board_messages(human, 70, false, data).size() == human.size(), "no scenes when switched off");
+            }
         }
         {
             // classic_goal_flashes: two stages per goal before the minute of the goal, home goals first, drawn over the previous

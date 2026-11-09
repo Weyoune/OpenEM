@@ -119,4 +119,29 @@ std::vector<Image> decode_tor_sprites(const Bytes& data) {
     return out;
 }
 
+
+Image decode_tor_panel(const Bytes& d) {
+    Image img(kTorPanelWidth, kTorPanelHeight);
+    size_t out = 0, i = 0;
+    const size_t total = img.pixels.size();
+    while (i < d.size()) {
+        uint8_t c = d[i++];
+        if (c == 0x80) break;
+        if (c < 0x80) {
+            for (int k = 0; k <= c && i < d.size(); k++, i++)
+                if (out < total) img.pixels[out++] = d[i];
+        } else if (i < d.size()) {
+            uint8_t v = d[i++];
+            for (int k = 0; k <= (c & 0x7F); k++)
+                if (out < total) img.pixels[out++] = v;
+        }
+    }
+    img.complete = out == total;
+    return img;
+}
+
+const std::array<uint8_t, 25> kTorDot = {0x00, 0xC7, 0xC7, 0xC7, 0x00, 0xC7, 0xC6, 0xC6, 0xC6, 0xC7, 0xC6, 0xC6, 0xC6,
+                                         0xC6, 0xC6, 0xC7, 0xC6, 0xC6, 0xC6, 0xC7, 0x00, 0xC7, 0xC7, 0xC7, 0x00};
+const std::array<uint8_t, 25> kTorPuck = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFB, 0xFB, 0xFB, 0x00, 0xFB, 0xFB, 0xFB,
+                                          0xFB, 0xFB, 0xFB, 0xFB, 0xFB, 0xFB, 0xFB, 0x00, 0xFB, 0xFB, 0xFB, 0x00};
 }  // namespace em

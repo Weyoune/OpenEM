@@ -36,6 +36,8 @@ struct ClassicBoardTeam {
     int chances[3] = {};   // per period, shown up to 9
     int penalty_minutes = 0;
     int shootout_goals = 0;  // goals of a shoot-out (part of the score, no chance message)
+    int colour = 0;          // +0x3B: shirt colour of the goal scenes (0xRGB nibbles)
+    bool human = false;      // +0x34 bit 7: the manager's club (its match plays the goal scenes)
     // The manager's club only: goal and assist counters of the squad players (squad goals of all competitions,
     // player record +0x1F). The board message of a goal names the players whose counters rose in that minute.
     struct Scorer { std::string name; int goals = 0, assists = 0; };
@@ -48,6 +50,7 @@ struct ClassicBoard {
     int period_goals[3][2] = {};
     long attendance = 0;        // home game of a manager, 0 = "(ausw.)"
     bool sold_out = false;      // attendance equals the capacity: colour 0x10
+    int arena = 2;              // goal scene rink: 4 * attendance / capacity at the manager's home (ovl14_2630), else 2
 };
 
 // Live result of one pair of a cup round for the table after minute 60 / 65 / 70 (ovl07_0eba).
@@ -97,12 +100,32 @@ struct ClassicBoardMessage {
     int lines = 1;       // Final: 1 = player, 2 = player and second line
 };
 
+
+// A goal scene of ovl14_4938 (Torszenen on, DS:0226): with the scenes switched on, ovl14_1dc7 plays one for every chance
+// of the match of the manager's club before the board message. The scene replaces the whole screen: the rink of the
+// TORE\ script (KB231/232 tiles, map KB236 or KB242..245) as a 320 x 200 window at the camera with the puck and the 12
+// skaters of the script (KB233..235), palette KB247 with the team colours in 0xFE / 0xFD, and below it the panel KB246
+// (VGA split screen, ovl14_504d) with the club names, the score, "<n> ZUSCHAUER" / "AUSWÄRTS" and "<m>.MINUTE".
+// The script runs one frame per BIOS tick (FUN_1bbf_2c08(1) / FUN_1bbf_2c4e); after its end mark the score of a goal goes
+// up by one (ovl14_504d mode 2) and stays for delay(6).
+struct ClassicGoalScene {
+    std::string script;               // file in TORE\, e.g. "3.at": n + ".h"/".a" (attacking side) + "t"/"v" (goal / miss)
+    int arena = 2;                    // DS:5D99 fill level 4 * attendance / capacity (2 away): 1..4 -> KB242..245, else KB236
+    std::array<int, 2> colour{};      // team +0x3B after the clash rule (ovl14 1D69: sum of nibble differences < 6 -> away
+                                      // = home ^ 0xFFF); DAC (c >> 6, c >> 2, c << 2) & 63
+    std::array<std::string, 2> names; // UTF-8
+    std::array<int, 2> goals{};       // the score shown (before the goal; +1 in the final frame)
+    std::string info;                 // DS:54BE: "<attendance> ZUSCHAUER" at the manager's home, else "AUSWÄRTS"
+    int minute = 1;
+    int frame = 0;                    // script frames applied (0 = the start positions)
+};
 struct ClassicMatchFrame {
     int minute = 1;                   // shown minute (1..70); before minute 1 the original shows 1
     std::vector<ClassicBoard> boards; // empty: "Spiele laufen"
     std::vector<ClassicReportedMatch> reported;  // reported matches without a board (goal flashes)
     std::optional<ClassicGoalFlash> flash;       // a goal flash drawn over this frame
     std::optional<ClassicBoardMessage> message;  // a board message drawn over this frame
+    std::optional<ClassicGoalScene> scene;       // a goal scene drawn instead of the match view
     int hold_ms = -1;                 // how long a message step stays (-1: classic_match_frame_ms decides)
     bool settings_lamp = false;       // DS:878A, the switch bottom left (opens the Einstellungen)
     bool blink = false;               // ovl14_045c: reporter eyes closed (KB38 0x80) instead of open (KB38 0x50)
@@ -111,6 +134,15 @@ struct ClassicMatchFrame {
 };
 
 void draw_classic_match_view(ClassicCanvas& canvas, const ClassicMatchFrame& frame);
+
+// Draws a goal scene frame (ClassicMatchFrame::scene): palette, rink window, objects and panel.
+void draw_classic_goal_scene(ClassicCanvas& canvas, const ClassicGoalScene& scene);
+// Number of frames of a TORE\ script (frames before its 0xAAAA end mark).
+int classic_goal_scene_length(const std::filesystem::path& data, const std::string& script);
+// The frames of one goal scene: script frames 1..n, one BIOS tick each, then the final frame with the new score of a goal
+// for delay(6) (two ticks). `scene` holds the score before the chance; `goal` adds one for `side`.
+std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::path& data, const ClassicMatchFrame& base,
+                                                         ClassicGoalScene scene, int side, bool goal);
 
 // ovl07_0eba with the DEB-Pokal (after ovl06_2522 minutes 41-60, 61-65, 66-70): the page of Tabellen -> DEB-Pokal
 // (draw_classic_cup, 4996:38F3) with the caption "<round>   <minute>.Minute" and the running game as the newest score column.
@@ -146,7 +178,11 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
 // or 5) and the chances of the home side, then the away side (chances of the regular time from the chance counters,
 // goals from the score; the goals of the manager's club name scorer and assist from the squad counters). The steps are
 // drawn over the previous minute's screen with the new minute display, like the goal flashes. Nothing at speed >= 70.
-std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes);
+// With goal scenes and a data path, every chance of the board of the manager's club first plays its goal scene
+// (classic_goal_scene_frames); the TORE\ script is n.h/n.a + t/v with n = 2..11 (the original rolls n with rand(2,
+// MAXSZENE) and rarely the e variant; OpenEM derives n from the minute and the chance).
+std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes,
+                                                      const std::filesystem::path& data = {});
 
 // Builds the frame of one observed minute (season.cpp / competitions.cpp observer) from the day's matches. Boards follow
 // ovl14_2630: every match in pair order where a club has reporting mode 2, at most four; the attendance of the human home
