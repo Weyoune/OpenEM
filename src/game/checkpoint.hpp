@@ -47,6 +47,8 @@ struct GameCheckpoint {
     bool message_step_pending = true;
     bool table_copies_frozen = false;  // v8: Game::table_copies_frozen_
     bool league_since_refresh = false;  // v8
+    // v9: the penalty timers DS:D096 of the club manager and the national coach (role and slot outlive the match, not in HOK)
+    PenaltyTimers club_timers, national_timers;
 };
 
 bool is_game_checkpoint(const Bytes& data);

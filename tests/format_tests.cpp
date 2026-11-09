@@ -802,7 +802,7 @@ static void attendance_history(const fs::path& em_dir, const fs::path& ref_dir) 
 static void full_season(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 9);
-    for (int i = 0; i < 232; i++) {  // day 232 (29.04.) is the last one
+    for (int i = 0; i < 231; i++) {  // day 231 (28.04.) is the last one played; the next call changes the season (REAL-CODE period 30)
         g.advance_day();
         g.clear_log();
     }
@@ -844,7 +844,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 4);
     g.set_database(decode_db(read_file(em_dir / "KB" / "23.vga")));
-    for (int i = 0; i < 232; i++) {
+    for (int i = 0; i < 231; i++) {  // the WM final on day 231; the next call changes the season
         g.advance_day();
         g.clear_log();
     }
@@ -875,6 +875,8 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         if (g.league(2).rows[size_t(s)].position >= 10) oberliga_down.push_back(g.save().teams[size_t(24 + s)].name);
     const int euro = g.euro_champion();  // a German European cup winner enters again (ovl05_51a5)
     const std::string euro_winner = euro >= 0 && euro < 64 ? g.save().teams[size_t(euro)].name : champion;
+    g.advance_day();  // the season change stops in the menu before the first matchday (REAL-CODE period 30)
+    CHECK(g.seasons_completed() == 1 && g.season_day() == 0);
     g.advance_day();  // new season, day 1
     CHECK(g.seasons_completed() == 1 && g.save().year == 1994 && g.season_day() == 1);
     const HokFile next_titles = decode_hok(g.save_bytes());
@@ -1000,7 +1002,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(idx >= 0 && idx < 24);
     }
     CHECK(g.save().teams[size_t(g.human_team())].name == human);
-    for (int i = 1; i < 232; i++) {
+    for (int i = 1; i < 231; i++) {
         g.advance_day();
         g.clear_log();
     }
@@ -1063,9 +1065,10 @@ static void financial_license_save(const fs::path& em_dir, const fs::path& ref_d
         const bool cup_rescue = name == std::string("LICCUP02");
         if (cup_rescue) {
             Game april(exe, read_file(path), 6);
-            for (int day = 0; day < 16; day++) april.advance_day();
-            // Native CUP02_after_capture_timeout: only the two empty WM dates
-            // run club training. Five blanket weekly calls were incorrect.
+            for (int day = 0; day < 13; day++) april.advance_day();
+            // Without a national coach the squad day (sub_15369, with the training) runs on the WM match dates of
+            // the weekly rhythm only: 217 and 221 up to day 229, then 231 (REAL-CODE period 30, whose trend nibbles
+            // fall by 3 up to the season change). Five blanket weekly calls were incorrect.
             const HokFile before_review = decode_hok(april.save_bytes());
             for (int slot : {1, 2, 3, 4, 5, 6}) {
                 const size_t at = 0x696D + size_t(slot) * 0x34 + 0x14;
@@ -1707,7 +1710,9 @@ static void player_insurance(const fs::path& em_dir, const fs::path& ref_dir) {
         covered_disability.set_contract_decider([&](const ContractPlayer& p, long) { CHECK(p.age != 0); callbacks++; return 2; });
         for (int day = 0; day < 17; day++) { covered_disability.advance_day(); uncovered_disability.advance_day(); }
         CHECK(callbacks == 0);  // the disabled player's two-year contract is removed before expiry talks
-        CHECK(covered_disability.budget().balance - uncovered_disability.budget().balance == 177000);
+        // the payout only: the season change follows the WM final directly, without the April month-end that charged
+        // one more premium (REAL-CODE period 30)
+        CHECK(covered_disability.budget().balance - uncovered_disability.budget().balance == 180000);
         CHECK(covered_disability.save().squad.size() == 24 && uncovered_disability.save().squad.size() == 24);
         for (const auto& player : covered_disability.save().squad)
             CHECK(covered_disability.save().players[size_t(player.player)].raw !=
@@ -2984,12 +2989,19 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const Bytes bytes = game.save_bytes();
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
-            if (resumed.save_bytes() != bytes) {
-                const HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
-                for (size_t i = 0; i < x.state.size(); i++)
+            // Loading recomputes the club record from the squad (162c:146c, as the original after loading). After a cup day
+            // without a game that was also a training day the saved record still holds the weekly drift (REAL-CODE period 49),
+            // so only skill1/skill2/form of the own club may change; everything else must survive the round trip.
+            {
+                HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
+                const int own = x.state.at(0x0DCD + 0x14);
+                if (own >= 0 && own < kHokTeams)
+                    for (size_t f = 0x18; f < 0x1E; f++) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
+                bool same = x.state == y.state;
+                for (size_t i = 0; i < x.state.size() && !same; i++)
                     if (x.state[i] != y.state[i]) { std::fprintf(stderr, "cup resume diff at state %zx: %02x vs %02x (checkpoint %d)\n", i, x.state[i], y.state[i], checkpoint); break; }
+                CHECK(same);
             }
-            CHECK(resumed.save_bytes() == bytes);
             if (checkpoint < 15) {
                 while (resumed.season_day() < calendar.nth_day(kEventCup, checkpoint + 1)) resumed.advance_day();
                 check(resumed, checkpoint + 1);
@@ -3622,8 +3634,7 @@ static void national_squads(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(ended.state[0x164C] == 0xFD && le32(ended.state, 0x17C7) == 1500000);
         CHECK(ended.state[0x0788] == 0 && ended.state[0x0789] == 0);
         CHECK(!restored.auto_select_national_squad());
-        while (restored.season_day() < int(calendar.events.size()) - 1) restored.advance_day();
-        restored.advance_day();
+        restored.advance_day();  // after the WM final (day 231) the next call changes the season (REAL-CODE period 30)
         CHECK(restored.seasons_completed() == 1 && restored.national_coach() == -1);
         CHECK(restored.national_squad().empty());
         CHECK((decode_hok(restored.save_bytes()).state[0x0DCD + 0xF3] & 0x40) != 0);
@@ -3674,7 +3685,9 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
                 if (rounds >= stage + 6)
                     for (int pair = 0; pair < 4; pair++) {
                         const size_t o = 0x8F60 + size_t(stage * 8 + pair * 2);
-                        CHECK(h.state[o] % 30 > h.state[o + 1] % 30);
+                        // the quick shoot-out of the original can leave a level score (the away team wins, REAL-CODE
+                        // periods 28 and 30)
+                        CHECK(h.state[o] % 30 >= h.state[o + 1] % 30);
                     }
             }
         }
@@ -4261,6 +4274,7 @@ static void checkpoint_format() {
     source.last_scorer_slot=17;
     source.message_step_pending=false;
     source.table_copies_frozen=true;source.league_since_refresh=true;
+    source.club_timers.role[0]=3;source.club_timers.slot[1]=17;source.national_timers.role[1]=5;
     const Bytes bytes = encode_game_checkpoint(source);
     const auto decoded = decode_game_checkpoint(bytes);
     CHECK(decoded.hok == source.hok && decoded.exe_fingerprint == source.exe_fingerprint);
@@ -4276,10 +4290,11 @@ static void checkpoint_format() {
     CHECK(decoded.last_scorer_slot==source.last_scorer_slot);
     CHECK(decoded.message_step_pending==source.message_step_pending);
     CHECK(decoded.table_copies_frozen&&decoded.league_since_refresh);
+    CHECK(decoded.club_timers.role[0]==3&&decoded.club_timers.slot[1]==17&&decoded.club_timers.slot[0]==-1&&decoded.national_timers.role[1]==5);
     CHECK(encode_game_checkpoint(decoded) == bytes);
     // A genuine version1 layout ends directly after its offers. It remains
     // readable and gets the explicitly historical2/3 default without RNG.
-    Bytes legacy(bytes.begin(),bytes.end()-264); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1 + v8 table-copy flags2
+    Bytes legacy(bytes.begin(),bytes.end()-272); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1 + v8 table-copy flags2 + v9 penalty timers8
     const auto patch32=[&](size_t at,uint32_t value){for(int b=0;b<4;b++)legacy[at+size_t(b)]=uint8_t(value>>(8*b));};
     patch32(8,1);patch32(12,uint32_t(legacy.size()-20));
     uint32_t crc=0xFFFFFFFFu;
@@ -4290,43 +4305,49 @@ static void checkpoint_format() {
     CHECK(v1.borland_random==source.borland_random&&v1.game_random==source.game_random);
     CHECK(v1.stadium_refusals==(std::array<std::array<uint8_t,11>,4>{}));
     // Version2 includes row counters, but predates process-local stadium gates.
-    legacy.assign(bytes.begin(),bytes.end()-252);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-260);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v2=decode_game_checkpoint(legacy);
     CHECK(v2.line_counts==source.line_counts&&v2.stadium_refusals==v1.stadium_refusals);
     CHECK(v1.save_history==NativeSaveHistory{}&&v2.save_history==NativeSaveHistory{});
     // Version3 contains the construction gates, but has no identity history.
-    legacy.assign(bytes.begin(),bytes.end()-208);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-216);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v3=decode_game_checkpoint(legacy);
     CHECK(v3.line_counts==source.line_counts&&v3.stadium_refusals==source.stadium_refusals&&v3.save_history==NativeSaveHistory{});
     CHECK(v1.annual_distribution_cursors==(std::array<uint8_t,3>{})&&v2.annual_distribution_cursors==v1.annual_distribution_cursors&&v3.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version4 retains history but predates the three session cursors.
-    legacy.assign(bytes.begin(),bytes.end()-7);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-15);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v4=decode_game_checkpoint(legacy);
     CHECK(v4.save_history==source.save_history&&v4.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version5 has the cursors but not the scorer slot of the last pick.
-    legacy.assign(bytes.begin(),bytes.end()-4);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-12);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v5=decode_game_checkpoint(legacy);
     CHECK(v5.annual_distribution_cursors==source.annual_distribution_cursors&&v5.last_scorer_slot==0);
     // Version6 has the scorer slot but no message step flag (loads as due).
-    legacy.assign(bytes.begin(),bytes.end()-3);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-11);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v6=decode_game_checkpoint(legacy);
     CHECK(v6.last_scorer_slot==source.last_scorer_slot&&v6.message_step_pending);
     // Version7 has the message step flag but no table-copy flags (the copies follow the table).
-    legacy.assign(bytes.begin(),bytes.end()-2);patch32(8,7);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-10);patch32(8,7);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v7=decode_game_checkpoint(legacy);
     CHECK(v7.message_step_pending==source.message_step_pending&&!v7.table_copies_frozen&&!v7.league_since_refresh);
+    // Version8 has the table-copy flags but no penalty timers (they load cleared, as after a native load).
+    legacy.assign(bytes.begin(),bytes.end()-8);patch32(8,8);patch32(12,uint32_t(legacy.size()-20));
+    crc=0xFFFFFFFFu;
+    for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
+    patch32(16,~crc);const auto v8=decode_game_checkpoint(legacy);
+    CHECK(v8.table_copies_frozen&&v8.club_timers.role[0]==0&&v8.club_timers.slot[1]==-1);
     const auto rejects = [](const Bytes& bad) {
         try { (void)decode_game_checkpoint(bad); return false; } catch (const FormatError&) { return true; }
     };
@@ -5146,6 +5167,7 @@ static void reference_hok(const fs::path& dir) {
 }
 
 int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // progress lines in order with the CHECK messages on stderr
     try {
         unit_tests();
         cup_draws();

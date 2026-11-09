@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/classic_app.hpp"
 #include "ui/classic_keyboard.hpp"
+#include "ui/classic_sound.hpp"
 #include <SDL.h>
 #ifdef _WIN32
 #include <SDL_syswm.h>
@@ -52,6 +53,7 @@ int main(int argc,char**argv){
         SDL_Window* window=SDL_CreateWindow("OpenEM – Eishockey Manager",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,640,480,SDL_WINDOW_RESIZABLE);
         if(!window)throw std::runtime_error(SDL_GetError());
         SDL_SetWindowMinimumSize(window,640,480);
+        ClassicSound sound(data);sound.play_title_music();  // title music until the first key or click (classic_sound.hpp)
         // The native canvas is tiny and already rasterized on the CPU. A
         // software presenter also remains capturable in remote/occluded windows.
         SDL_Renderer* renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
@@ -79,6 +81,7 @@ int main(int argc,char**argv){
                     else if(event.type==SDL_MOUSEBUTTONDOWN)trace<<"mouse="<<int(event.button.button)<<" x="<<event.button.x<<" y="<<event.button.y<<'\n';
                     trace.flush();
                 }
+                if(event.type==SDL_KEYDOWN||event.type==SDL_MOUSEBUTTONDOWN)sound.stop_title_music();
                 if(event.type==SDL_QUIT)app.request_exit();
                 else if(event.type==SDL_MOUSEBUTTONDOWN)app.click(event.button.x,event.button.y,event.button.button==SDL_BUTTON_RIGHT);
                 else if(event.type==SDL_MOUSEBUTTONUP)app.release();

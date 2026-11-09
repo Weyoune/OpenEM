@@ -7,7 +7,7 @@
 namespace em {
 namespace {
 constexpr uint8_t kMagic[8] = {'O', 'P', 'E', 'N', 'E', 'M', 0x1A, 0};
-constexpr uint32_t kVersion = 8;
+constexpr uint32_t kVersion = 9;
 constexpr size_t kHeader = 20, kMaxSize = 1024 * 1024;
 
 uint32_t crc32(const Bytes& bytes, size_t first) {
@@ -125,6 +125,11 @@ GameCheckpoint decode_game_checkpoint(const Bytes& data) {
     if(version>=6){c.last_scorer_slot=read.byte();if(c.last_scorer_slot>=30)throw FormatError("OpenEM checkpoint: invalid scorer slot");}
     if(version>=7){const int p=read.byte();if(p>1)throw FormatError("OpenEM checkpoint: invalid message step flag");c.message_step_pending=p!=0;}
     if(version>=8){const int f=read.byte(),l=read.byte();if(f>1||l>1)throw FormatError("OpenEM checkpoint: invalid table-copy flags");c.table_copies_frozen=f!=0;c.league_since_refresh=l!=0;}
+    if(version>=9)for(PenaltyTimers* t:{&c.club_timers,&c.national_timers})for(int i=0;i<2;i++){
+        t->role[i]=read.byte();
+        const int slot=read.byte();if(slot>30)throw FormatError("OpenEM checkpoint: invalid penalty timer slot");
+        t->slot[i]=slot-1;
+    }
     read.end();
     return c;
 }
@@ -159,6 +164,10 @@ Bytes encode_game_checkpoint(const GameCheckpoint& c) {
     bytes.push_back(c.message_step_pending ? 1 : 0);
     bytes.push_back(c.table_copies_frozen ? 1 : 0);
     bytes.push_back(c.league_since_refresh ? 1 : 0);
+    for(const PenaltyTimers* t:{&c.club_timers,&c.national_timers})for(int i=0;i<2;i++){
+        bytes.push_back(uint8_t(t->role[i]));
+        bytes.push_back(uint8_t(t->slot[i]+1));
+    }
     const uint32_t size = uint32_t(bytes.size() - kHeader), crc = crc32(bytes, kHeader);
     for (int b = 0; b < 4; b++) {
         bytes[12 + size_t(b)] = uint8_t(size >> (8 * b));

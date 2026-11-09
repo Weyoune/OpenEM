@@ -93,6 +93,7 @@ struct HumanSquad {
     std::array<std::array<int, 4>, 2> line_quotas{};  // DS:CC73, normalized user minutes
     LineRotation* rotation = nullptr;
     BorlandRandom* selection_rng = nullptr;  // separate native stream for individual player selection
+    PenaltyTimers* timers = nullptr;  // the manager's penalty timers DS:D096 (they outlive the match; nullptr: per match)
     int minimum_players = 0;  // career policy: 9; 0 permits isolated small-squad physics simulations
     std::function<void(bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working)> on_chance;  // scorer and assist pick of one chance of this manager team (ovl14_2349)
     std::function<void(bool goal, const HokTeam& scorer)> on_opponent_chance;  // the opponent's chance in the same match (ovl14_2349 looks up a manager of the scoring club)
@@ -156,7 +157,7 @@ MatchResult knockout_quick(const HokTeam& home, const HokTeam& away, bool home_g
 // Same ovl06_161d fast event path; group matches permit draws and omit the
 // shoot-out. Its postprocessing can add away goals even after a zero-strength 0:0.
 MatchResult quick_competition_match(const HokTeam& home, const HokTeam& away, bool home_german, bool away_german,
-                                    GameRandom& rng, int level, bool knockout, bool playoff = false);
+                                    GameRandom& rng, int level, bool knockout, bool playoff = false, bool wm = false);
 
 // A league match as the matchday loop ovl06_2522 plays it: for every minute 1..60 the goal points
 // of FUN_162c_1e9c (with the fatigue of that minute, capped at 10) give chances (1 in 20 per
@@ -202,6 +203,11 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human);
 // FUN_162c_0417: exact preparation/interval energy, including its unconditional decrement.
 void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval = false);
 
+// ovr030:34F6 (sub_46386): the players of a manager's team on the ice (current lines, running penalties) -> the skaters of
+// the record (+0x32), the pulled-goalie bit and the per-line counts DS:CC35 + 2 * manager
+void recount_skaters(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int penalties,
+                     int per_line[2]);
+
 // What the original's match display shows of one running match (ovl14_1dc7 / ovl14_0d46): pure bookkeeping of the minute,
 // no random numbers. Chances and goals per period count only in the regular time (ovl14_1dc7 checks minute < 61; the
 // overtime keeps the third period slot DS:4E28 = 2 but books nothing there); penalty_code is the live team byte +0x33.
@@ -229,7 +235,8 @@ public:
     HokTeam& away_mut();
     PenaltyBox& home_box();  // the running penalties travel with the team record in the original (+0x32/+0x33)
     PenaltyBox& away_box();
-    int take_phantom_release();  // a manager penalty without bound player ended in the last minute: its saved role, else -1 (DEVIATIONS.md)
+    int take_phantom_release();
+    void mark_same_club();  // the pair-table error made both sides one club: the penalty pair roll stops (ovr030:04BA compares the team ids)  // a manager penalty without bound player ended in the last minute: its saved role, else -1 (DEVIATIONS.md)
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)

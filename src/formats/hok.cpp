@@ -380,12 +380,17 @@ void store_hok(HokFile& h) {
         r[0x00] = uint8_t(sp.major_penalties);
         r[0x01] = uint8_t(sp.minor_penalties);
         r[0x02] = uint8_t(sp.home_line);
-        if (r[0x06] != sp.league_games || r[0x07] != sp.cup_games) {  // the screens read the u16 copies
-            r[0x1C] = uint8_t(sp.league_games);
-            r[0x1D] = uint8_t(sp.league_games >> 8);
-            r[0x1E] = uint8_t(sp.cup_games);
-            r[0x1F] = uint8_t(sp.cup_games >> 8);
-        }
+        // +0x1C / +0x1E are the career totals of league and cup games (u16, the screens read them): every game adds to the
+        // season byte and the total, and the season change clears only the bytes (REAL-CODE period 31: 44 + 3 = 47)
+        auto add_total = [&](size_t at, int now, int before) {
+            if (now <= before) return;
+            const int total = r[at] | (r[at + 1] << 8);
+            const int next = total + now - before;
+            r[at] = uint8_t(next);
+            r[at + 1] = uint8_t(next >> 8);
+        };
+        add_total(0x1C, sp.league_games, r[0x06]);
+        add_total(0x1E, sp.cup_games, r[0x07]);
         r[0x06] = uint8_t(sp.league_games);
         r[0x07] = uint8_t(sp.cup_games);
         if (sp.status == SquadStatus::Team) r[0x1A] |= 0x80;

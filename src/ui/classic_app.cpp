@@ -9,6 +9,7 @@
 #include "ui/classic_league_fixtures.hpp"
 #include "ui/classic_playoff.hpp"
 #include "ui/classic_cup.hpp"
+#include "ui/classic_sound.hpp"
 #include "game/checkpoint.hpp"
 #include <SDL.h>
 #include <algorithm>
@@ -102,6 +103,7 @@ bool ClassicApplication::tick_match_view(){
     if(now<match_frame_until_)return true;
     if(match_frame_+1>=match_frames_.size()){match_frames_.clear();return false;}
     match_frame_++;
+    classic_sound_match_frame(match_frames_[match_frame_-1],match_frames_[match_frame_],session_.game().settings().flags[9]!=0);  // goal-scene sound (classic_sound.hpp)
     // the last minute stays a moment (the original waits for the period end, FUN_199f_0118)
     match_frame_until_=now+uint64_t(classic_match_frame_ms(match_frames_[match_frame_],session_.game().settings().speed))+(match_frame_+1==match_frames_.size()?1000u:0u);
     return true;

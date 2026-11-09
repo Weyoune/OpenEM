@@ -150,6 +150,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     rng_.borland = &brng_;
     human_.minimum_players = 9;
     human_.rotation = &human_rotation_;
+    human_.timers = &human_timers_;
     budget_ = budget_from_save(save_, 0);
     offers_ = sponsor_offers_from_save(save_.state, 0);
     for (int d = 0; d < kTrainingDays; d++)
@@ -249,7 +250,9 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         bool final_played = true;
         for (size_t pair = 0; pair < 4; pair++) {
             const size_t o = kWorldResults + 16 + pair * 2;
-            final_played &= save_.state.at(o) % 30 > save_.state.at(o + 1) % 30;
+            // a played game leaves its bytes (a level score after the quick shoot-out is possible, a 0:0 carries the
+            // shoot-out marker; REAL-CODE period 30)
+            final_played &= (save_.state.at(o) != 0 || save_.state.at(o + 1) != 0) && save_.state.at(o) % 30 >= save_.state.at(o + 1) % 30;
         }
         if (final_played) wm_round_ = 8;
     }
@@ -293,6 +296,8 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
         human_rotation_ = checkpoint.club_rotation;
         national_rotation_ = checkpoint.national_rotation;
+        human_timers_ = checkpoint.club_timers;
+        national_timers_ = checkpoint.national_timers;
         injured_role_ = checkpoint.injured_roles;
         for (size_t slot = 0; slot < save_.squad.size(); slot++)
             save_.squad[slot].status = SquadStatus(checkpoint.squad_status.at(slot));
@@ -315,7 +320,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             human_.penalty_effort_adjustment=penalty_effort_adjustment(save_,human_team_);
             configure_human_tactics(human_,save_,0);
         }else {
-            prepare_human_lineup();
+            prepare_human_lineup();  // the original recomputes the club after loading (DOSBox FINEV_loaded: 321 -> 320)
             // The cold club model already uses its active pair. Persist that
             // same pair; otherwise a checkpoint would replace it with BSS0/0.
             line_counts_[0]={uint8_t(human_.per_line[0]),uint8_t(human_.per_line[1])};
@@ -339,6 +344,8 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.table_copies_frozen=table_copies_frozen_;checkpoint.league_since_refresh=league_since_refresh_;
     checkpoint.club_rotation = human_rotation_;
     checkpoint.national_rotation = national_rotation_;
+    checkpoint.club_timers = human_timers_;
+    checkpoint.national_timers = national_timers_;
     checkpoint.injured_roles = injured_role_;
     for (size_t slot = 0; slot < save_.squad.size(); slot++)
         checkpoint.squad_status.at(slot) = uint8_t(save_.squad[slot].status);
@@ -355,8 +362,11 @@ Bytes Game::checkpoint_bytes() const {
 int Game::team_rank(int team) const {
     for (int l = 0; l < 3; l++) {
         const League& lg = leagues_[size_t(l)];
+        // the position byte of the table row (+0x31); within the season it equals the place in the table order, after the
+        // season change it still holds the last season's place (REAL-CODE period 31: the gate of matchday 1)
         if (team >= lg.first_team && team < lg.first_team + kHokLeagueSize)
-            return int(std::find(lg.ranking.begin(), lg.ranking.end(), team - lg.first_team) - lg.ranking.begin());
+            return std::getenv("EM_OLD_RANK") ? int(std::find(lg.ranking.begin(), lg.ranking.end(), team - lg.first_team) - lg.ranking.begin())
+                                              : lg.rows[size_t(team - lg.first_team)].position;
     }
     return 5;
 }
@@ -374,6 +384,10 @@ void Game::home_game(int guest, int kind, int home_class, int guest_class, int h
     m.kind = kind;
     m.league_statistics = league_statistics;
     const uint8_t previous_home_games = uint8_t(budget_.home_games);
+    if (std::getenv("EM_DEBUG_GATE"))
+        std::fprintf(stderr, "gate vs %d: class %d/%d strength %d/%d rank %d/%d kind %d places %d/%d price %d games %d image %d\n", guest, m.home_class, m.away_class,
+                     m.home_strength, m.away_strength, m.home_rank, m.away_rank, kind, int(budget_.places[0]), int(budget_.places[1]),
+                     int(budget_.ticket_price), int(budget_.home_games), image_);
     const long spectators = home_attendance(finance_, budget_, m, brng_);
     match_attendance_ = spectators;
     match_sold_out_ = spectators == long(budget_.places[0]) + budget_.places[1];
@@ -427,6 +441,7 @@ void Game::manager_day(bool home_game_today) {
     x = std::clamp(x, 0, 30);
     if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
     g_draw_scope = "randomize";
+    if (std::getenv("EM_DEBUG_MDAY")) std::fprintf(stderr, "manager_day day %d slots %d home %d B%zu\n", day_, slots, int(home_game_today), g_borland_log ? g_borland_log->size() : size_t(0));
     const int spin = brng_.range(100, 300);
     for (int i = 0; i < spin; i++) rng_.range(0, 1);
 }
@@ -647,7 +662,10 @@ void Game::play_cup_day() {
             }
             break;
         }
-    if (live && std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
+    // a cup day on which every series is already decided plays no game: no live round, no spin (REAL-CODE period 49)
+    empty_cup_day_ = draw.empty();
+    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) &&
+        std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == human_team_ || p.away == human_team_; })) {
         // without the human club the live round still starts with the match load of the human squad (manager +0xF0,
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
         if (human_team_ >= 0 && human_team_ < kHokTeams)
@@ -706,7 +724,7 @@ void Game::play_cup_day() {
             home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                       team_rank(t.away));
     }
-    if (live) {  // after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
+    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP"))) {  // (no game on the day: nothing of this, REAL-CODE period 49) after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
         bool human_in = false;
         for (const Tie& t : ties)
             if (t.home == human_team_ || t.away == human_team_) human_in = true;
@@ -824,13 +842,14 @@ void Game::play_cup_day() {
             cup_draw_ = draw_cup_round(winners, brng_);
             cup_series_.clear();
             cup_round_++;
+            save_.state.at(0x8F84) = uint8_t(cup_round_);
             cup_game_ = 0;
             std::fill(save_.state.begin() + long(kCupScores), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
         }
     }
     save_.state.at(kCupGame) = uint8_t(cup_game_);
     save_.state.at(kCupPending) = uint8_t(open || cup_game_ == 0);
-    save_.state.at(0x8F84) = uint8_t(cup_round_);  // DS:07AD, native round mirror
+    // DS:07AD (native round mirror) is written only with a new draw: after the season change it stays 0 through round 1 (REAL-CODE period 33)
     store_cup_participants(save_, cup_draw_, cup_round_);
 }
 
@@ -1465,7 +1484,7 @@ void Game::train_squad() {
         sp.exhaustion = p.exhaustion * 2 / 3;
         sp.raw_exhaustion = p.exhaustion;
     }
-    refresh_human_team();
+    if (std::getenv("EM_OLD_TRAINREFRESH")) refresh_human_team();  // the training does not refresh the club record (REAL-CODE period 49: the drift of the day reaches the month end)
 }
 
 // ovl14_2e0f restores the saved automatic-lineup mode before entering the next
@@ -1473,7 +1492,8 @@ void Game::train_squad() {
 void Game::prepare_human_lineup(bool restore_saved_mode) {
     if(restore_saved_mode)save_.state.at(0x078A) = save_.state.at(0x078B);
     auto_lineup(save_, 0);
-    refresh_human_team();
+    if (!skip_refresh_once_) refresh_human_team();
+    skip_refresh_once_ = false;
     human_.penalty_effort_adjustment = penalty_effort_adjustment(save_, human_team_);
     configure_human_tactics(human_, save_, 0);
 }
@@ -1497,7 +1517,23 @@ void Game::weekly_team_drift() {
 }
 
 void Game::refresh_human_team() {
+    // From the first WM day on, the WM branch of the day loop runs with manager index 5; without a human national coach
+    // 162c:146c is no longer called for the club, whose record keeps the value of the last club day into the season-end
+    // rerate (REAL-CODE period 30: 69/68/67/68 -> 65/65/63/63, the strength 256 of the summer bookings)
+    if (wm_round_ > 0 && national_coach_ < 0 && !std::getenv("EM_OLD_WMREFRESH")) return;
     HokTeam& team = save_.teams[size_t(human_team_)];
+    // 162c:146c starts with the recount of the players on the ice (sub_46386 via 24A5E; running penalties counted by
+    // sub_42E90(team, 0)): after a game the record gets the count of the lines then on the ice (REAL-CODE period 45: 4 in
+    // the last minute with an injured player assigned, 5 after the evening lineup)
+    if (!std::getenv("EM_OLD_DAYRECOUNT")) {
+        const int running = ((team.penalty_code & 7) != 0) + (((team.penalty_code >> 4) & 7) != 0);
+        int per_line[2] = {line_counts_[0][0], line_counts_[0][1]};
+        recount_skaters(team, save_.squad, save_.players, running, per_line);
+        if (std::getenv("EM_DAYRECOUNT_LINES")) {  // the per-line counts DS:CC37 (written by the original as well; unverified here)
+            line_counts_[0][0] = uint8_t(per_line[0]); line_counts_[0][1] = uint8_t(per_line[1]);
+            human_.per_line[0] = per_line[0]; human_.per_line[1] = per_line[1];
+        }
+    }
     for (int kind = 0; kind < 2; kind++) {
         int sum[3] = {};
         for (int line = 0; line < 3; line++) {
@@ -1511,6 +1547,7 @@ void Game::refresh_human_team() {
         team.form[kind] = sum[2] / 3;
     }
     budget_.team_strength = team.skill1[0] + team.skill1[1] + team.skill2[0] + team.skill2[1];
+    if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "strength day %d [%s]: %d (skaters %d) s1 %d/%d s2 %d/%d at %zu\n", day_, g_draw_scope, budget_.team_strength, team.skaters, team.skill1[0], team.skill1[1], team.skill2[0], team.skill2[1], (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
 }
 
 bool Game::enter_advertising() {
@@ -2275,7 +2312,18 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
             const int games = le16(save_.state, at + 0x20) + 1;
             save_.state.at(at + 0x20) = uint8_t(games);
             save_.state.at(at + 0x21) = uint8_t(games >> 8);
-        } else (cup ? sp.cup_games : sp.league_games)++;
+        } else {
+            int& season = cup ? sp.cup_games : sp.league_games;
+            season++;
+            // the season byte and the career total (+0x1C league / +0x1E cup) go up at once: the contract wish of the next
+            // squad day reads the total (REAL-CODE period 36)
+            const size_t at = kSquad + slot * kSquadRecord;
+            save_.state.at(at + (cup ? 7 : 6)) = uint8_t(season);
+            const size_t total_at = at + (cup ? 0x1E : 0x1C);
+            const int games = le16(save_.state, total_at) + 1;
+            save_.state.at(total_at) = uint8_t(games);
+            save_.state.at(total_at + 1) = uint8_t(games >> 8);
+        }
         sp.status = SquadStatus::Team;
         if (!league_statistics) continue;
         player.league_games = uint8_t(player.league_games + 1);
@@ -2386,6 +2434,23 @@ void Game::play_wm_day() {
     if (save_.state.at(0x025A) == 2) return;  // native league-only mode has no WM
     if (wm_round_ >= 8) return;
     if (wm_round_ == 0) begin_world_championship();
+    if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: WM round %d, national coach %d\n", wm_round_, national_coach_);
+    // ovr038:3649: without a human national coach (manager 5 club 0xFD) the first WM day rolls the strengths of the own
+    // nation (DS:06AC): per kind skill1 rand(84,94), skill2 rand(79,89), form rand(45,55); the manager index DS:A70E/A70D
+    // becomes 5 (REAL-CODE period 30)
+    const bool quick = national_coach_ < 0;
+    if (wm_round_ == 0 && quick) {
+        const int own = save_.state.at(0x068C);
+        if (own >= kFirstNationalTeam && own < kFirstNationalTeam + 12) {
+            HokTeam& t = save_.teams[size_t(own)];
+            for (int kind = 0; kind < 2; kind++) {
+                t.skill1[kind] = brng_.range(84, 94);
+                t.skill2[kind] = brng_.range(79, 89);
+                t.form[kind] = brng_.range(45, 55);
+            }
+        }
+        save_.state.at(0x0788) = 5;  // DS:A70E (DS:A70D is not saved)
+    }
     refresh_national_team();
     const auto national = national_squad();
     HumanSquad squad{&national, &save_.players};
@@ -2394,6 +2459,7 @@ void Game::play_wm_day() {
     squad.level = finance_.level;
     squad.selection_rng = &brng_;
     squad.rotation = &national_rotation_;
+    squad.timers = &national_timers_;
     configure_human_tactics(squad, save_, 5);
     if (national_coach_ >= 0) squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, national_team());
     const int nation = national_team();
@@ -2406,13 +2472,35 @@ void Game::play_wm_day() {
             if (save_.state.at(player + 0x19) != 255) save_.state.at(player + 0x19)++;
         }
     const int r = wm_round_++;
+    struct QuickResult { int home, away, diff; };
+    std::vector<QuickResult> quick_results;
+    // the table booking of the quick games: morale +0x17 by rand(0, 2|diff|), clamped 47..53, home then away (as in the league)
+    auto book_morale = [&] {
+        for (const QuickResult& q : quick_results)
+            for (auto [team, dd] : {std::pair<int, int>{q.home, q.diff}, {q.away, -q.diff}}) {
+                const int step = int(brng_.range(0, 2 * std::abs(dd)));
+                save_.teams[size_t(team)].bonus = std::clamp(save_.teams[size_t(team)].bonus + (dd > 0 ? step : -step), 47, 53);
+            }
+    };
     if (r < 5) {
         for (size_t g = 0; g < 2; g++)
             for (size_t pair = 0; pair < 3; pair++) {
                 const HokPairing& p = save_.wm_rounds[g][size_t(r)][pair];
                 MatchStats stats;
-                const MatchResult res = league_match(save_.teams[size_t(p.home)], save_.teams[size_t(p.away)], rng_, 0,
-                                                     p.home == nation ? &squad : nullptr, p.away == nation ? &squad : nullptr, &stats);
+                MatchResult res;
+                if (quick) {  // no human nation: ovl06_161d quick path for every pair (REAL-CODE period 30)
+                    HokTeam h, a;
+                    quick_setup(p.home, p.away, h, a);
+                    res = quick_competition_match(h, a, false, false, rng_, 1, false, false, true);  // level 1: the away roll (1,2) is drawn (REAL-CODE)
+                    quick_results.push_back({p.home, p.away, res.home - res.away});
+                    update_series(p.home, 0, res.home, res.away);  // series and records of the national teams (REAL-CODE period 30)
+                    update_series(p.away, 1, res.away, res.home);
+                    update_records(p.home, p.away, res.home, res.away);
+                    // the head-to-head table of manager 0 is booked from the own nation's view (DS:06AC, REAL-CODE period 30)
+                    book_head_to_head(save_.state, p.home, p.away, res.home, res.away, save_.state.at(0x068C));
+                } else
+                    res = league_match(save_.teams[size_t(p.home)], save_.teams[size_t(p.away)], rng_, 0,
+                                       p.home == nation ? &squad : nullptr, p.away == nation ? &squad : nullptr, &stats);
                 if (p.home == nation || p.away == nation)
                     book_national_match(p.home == nation ? res.home : res.away, stats, p.home == nation ? 0 : 1);
                 wm_groups_[g].book(p.home, p.away, res);
@@ -2420,6 +2508,7 @@ void Game::play_wm_day() {
                 save_.state.at(o) = uint8_t(res.home);
                 save_.state.at(o + 1) = uint8_t(res.away);
             }
+        book_morale();
         for (auto& group : wm_groups_) group.finish_round();
         if (r == 4) {
             const auto a = wm_groups_[0].order(), b = wm_groups_[1].order();
@@ -2443,7 +2532,38 @@ void Game::play_wm_day() {
     std::vector<HokPairing> draw;
     for (size_t i = base; i < base + 8; i += 2) draw.push_back({wm_slots_[i], wm_slots_[i + 1]});
     MatchStats stats;
-    const std::vector<Tie> ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats});
+    std::vector<Tie> ties;
+    if (quick) {  // no human nation: the quick path for the knock-out games as well (REAL-CODE period 30)
+        // as in the play-offs (sub_40683): after each game every pair of the day is scanned for a level score in the result
+        // grid; the pairs not played yet are 0:0 and get the mark 30, and any level pair gives the current game a Borland
+        // shoot-out rand(0,2) pairs (+30 on its home byte); no morale booking
+        std::vector<std::array<int, 2>> grid(draw.size(), {0, 0});
+        for (size_t index = 0; index < draw.size(); index++) {
+            const HokPairing& p = draw[index];
+            HokTeam h, a;
+            quick_setup(p.home, p.away, h, a);
+            MatchResult res = quick_competition_match(h, a, false, false, rng_, 1, false, false, true);
+            grid[index] = {res.home, res.away};
+            bool tie = false;
+            for (auto& g : grid)
+                if (g[0] == g[1]) { tie = true; g[0] += 30; }
+            if (tie) {
+                int c = 0, e = 0;
+                do {
+                    c = brng_.range(0, 2);
+                    e = brng_.range(0, 2);
+                } while (grid[index][0] + c == grid[index][1] + e);
+                grid[index][0] += c + 30;
+                grid[index][1] += e;
+            }
+            res.decision_marker = (grid[index][0] / 30) * 30;
+            res.home = grid[index][0] - res.decision_marker;
+            res.away = grid[index][1];
+            res.shootout = tie;
+            ties.push_back({p.home, p.away, res});
+        }
+    } else
+        ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats});
     bool nation_played = false;
     for (size_t k = 0; k < ties.size(); k++) {
         const Tie& t = ties[k];
@@ -2531,6 +2651,8 @@ void Game::redistribute_players(int mode) {
         if (pl.team >= 0 && pl.team == human_team_) continue;  // a manager's club keeps its players
         for (;;) {
             const int team = brng_.range(r.team_lo, r.team_hi);
+            // ovr040:0585: the own nation (DS:06AC) gets no new players while no manager holds it (+0x16 = 0): redraw
+            if (team == save_.state.at(0x068C) && save_.teams[size_t(team)].raw && save_.teams[size_t(team)].raw[0x16] == 0) continue;
             int slot = brng_.range(kSlotFrom[c], kSlotTo[c]);
             if (brng_.range(0, 15) == 0) slot = brng_.range(0, 1);
             const DbClub* club = db_club(team);
@@ -2706,6 +2828,12 @@ void Game::swap_teams(int a, int b) {
         std::swap_ranges(s + kRecords + size_t(a) * 16, s + kRecords + size_t(a) * 16 + 16, s + kRecords + size_t(b) * 16);
         std::swap_ranges(s + kRecordOpponents + size_t(a) * 8, s + kRecordOpponents + size_t(a) * 8 + 8,
                          s + kRecordOpponents + size_t(b) * 8);
+        // the opponents of all records are slot numbers and follow the swap as well (REAL-CODE period 30)
+        for (size_t i = 0; i < size_t(kSeriesTeams) * 8; i++) {
+            uint8_t& v = s[kRecordOpponents + i];
+            if (v == a) v = uint8_t(b);
+            else if (v == b) v = uint8_t(a);
+        }
     }
     if (a < kSeriesTeams && b < kSeriesTeams)  // the head-to-head rows travel with the club too
         for (size_t m = 0; m < 4; m++) {  // the four human managers; the series follow at 0x9988
@@ -2726,16 +2854,17 @@ void Game::swap_teams(int a, int b) {
         // before the next export, just as ovl06_0c29 updates it immediately.
         save_.state.at(size_t(p.raw - save_.state.data()) + 0x1D) = uint8_t(p.team);
     }
-    if (a < kHokLeagueTeams && b < kHokLeagueTeams) {  // the eternal table and the titles travel with the club
-        uint8_t* s = save_.state.data();
-        std::swap_ranges(s + kEternal + size_t(a) * 0x50, s + kEternal + size_t(a) * 0x50 + 4, s + kEternal + size_t(b) * 0x50);
-        std::swap_ranges(s + kTitles + size_t(a) * 0x50, s + kTitles + size_t(a) * 0x50 + 3, s + kTitles + size_t(b) * 0x50);
+    if (a >= kFirstNationalTeam && a < kFirstNationalTeam + 12 && b >= kFirstNationalTeam && b < kFirstNationalTeam + 12) {
+        // sub_4382D also swaps the u32 per nation at DS:026C (state 0x658, REAL-CODE period 30)
+        uint8_t* n = save_.state.data() + 0x658;
+        std::swap_ranges(n + size_t(a - kFirstNationalTeam) * 4, n + size_t(a - kFirstNationalTeam) * 4 + 4, n + size_t(b - kFirstNationalTeam) * 4);
     }
-    if (a >= kFirstNationalTeam && a < kFirstNationalTeam + 12 &&
-        b >= kFirstNationalTeam && b < kFirstNationalTeam + 12) {
-        auto history_a = save_.state.begin() + long(kWorldHistory + size_t(a) * 0x50);
-        auto history_b = save_.state.begin() + long(kWorldHistory + size_t(b) * 0x50);
-        std::swap_ranges(history_a, history_a + 16, history_b);
+    if (a < 64 && b < 64) {
+        // the whole 0x50-byte record DS:8257 travels with the club: titles, table row with its copies, last position,
+        // curve / WM history and the eternal table (REAL-CODE period 30: the curves, the copies of the relegated clubs
+        // in the regional rows and +0x4C of the national teams all follow the swaps)
+        uint8_t* s = save_.state.data();
+        std::swap_ranges(s + kTitles + size_t(a) * 0x50, s + kTitles + size_t(a) * 0x50 + 0x50, s + kTitles + size_t(b) * 0x50);
     }
     if (save_.state.at(0x068C) == a) save_.state.at(0x068C) = uint8_t(b);
     else if (save_.state.at(0x068C) == b) save_.state.at(0x068C) = uint8_t(a);
@@ -2843,6 +2972,10 @@ void Game::new_season() {
                                                        : save_.table[size_t(t)].position;
     std::array<int, kHokLeagueTeams> origin{};  // which old index each index holds after the swaps below
     for (int t = 0; t < kHokLeagueTeams; t++) origin[size_t(t)] = t;
+    // the table rows of the last season (DS:8257 records): they travel with their club through every swap below
+    std::array<HokTableRow, kHokLeagueTeams> old_rows{};
+    for (int t = 0; t < kHokLeagueTeams; t++)
+        old_rows[size_t(t)] = t < 3 * kHokLeagueSize ? leagues_[size_t(t / kHokLeagueSize)].rows[size_t(t % kHokLeagueSize)] : save_.table[size_t(t)];
     auto swap_clubs = [&](int a, int b) {
         swap_teams(a, b);
         std::swap(origin[size_t(a)], origin[size_t(b)]);
@@ -2940,19 +3073,42 @@ void Game::new_season() {
         const uint32_t x = uint32_t(e[0] | e[1] << 8 | e[2] << 16 | uint32_t(e[3]) << 24) + uint32_t(v);
         for (int k = 0; k < 4; k++) e[k] = uint8_t(x >> (8 * k));
     }
+    // 162c:1c5b: new season values of the German clubs in their new class, before the clubs change places (REAL-CODE
+    // period 30: the 52 rerates follow the regional swaps directly)
+    for (int t = 0; t < kFirstNationalTeam; t++) {
+        const HokTeam before = save_.teams[size_t(t)];
+        rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_);
+        if (std::getenv("EM_DEBUG_RERATE")) {
+            const HokTeam& x = save_.teams[size_t(t)];
+            std::fprintf(stderr, "rerate %d%s class %d: %d %d %d %d -> %d %d %d %d\n", t, t == human_team_ ? " (human)" : "", team_class(finance_, t),
+                         before.skill1[0], before.skill1[1], before.skill2[0], before.skill2[1], x.skill1[0], x.skill1[1], x.skill2[0], x.skill2[1]);
+        }
+    }
+    for (int t = kFirstNationalTeam; t < 64; t++) {  // the national teams only re-roll their form (as in the weekly drift)
+        save_.teams[size_t(t)].form[0] = int(rng_.range(45, 55));
+        save_.teams[size_t(t)].form[1] = int(rng_.range(45, 55));
+        save_.teams[size_t(t)].energy[0][0] = int(rng_.range(45, 55));
+    }
     // ovl06_099d: the clubs of each division change places at random (55 swaps per division,
     // which reshuffles the schedule), the national teams 20 times
-    for (int l = 0; l < 3; l++)
-        for (int i = 0; i < 55; i++) {
-            const int a = int(rng_.range(l * kHokLeagueSize, l * kHokLeagueSize + kHokLeagueSize - 1));
-            const int b = int(rng_.range(l * kHokLeagueSize, l * kHokLeagueSize + kHokLeagueSize - 1));
-            if (a != b) swap_clubs(a, b);
-        }
+    // (REAL-CODE period 30: the national teams first)
     for (int i = 0; i < 20; i++) {
         const int a = int(rng_.range(kFirstNationalTeam, kFirstNationalTeam + 11));
         const int b = int(rng_.range(kFirstNationalTeam, kFirstNationalTeam + 11));
         if (a != b) swap_teams(a, b);
     }
+    for (int l = 0; l < 3; l++)
+        for (int i = 0; i < 55; i++) {
+            const int a = int(rng_.range(l * kHokLeagueSize, l * kHokLeagueSize + kHokLeagueSize - 1));
+            const int b = int(rng_.range(l * kHokLeagueSize, l * kHokLeagueSize + kHokLeagueSize - 1));
+            if (a != b) {
+                swap_clubs(a, b);
+                // the table order DS:5CCB holds slot numbers; only these swaps rewrite them (REAL-CODE period 30)
+                for (int& slot : leagues_[size_t(l)].ranking)
+                    if (slot == a - l * kHokLeagueSize) slot = b - l * kHokLeagueSize;
+                    else if (slot == b - l * kHokLeagueSize) slot = a - l * kHokLeagueSize;
+            }
+        }
     // European cup entrants and groups (ovl05_51a5, ovl05_4c7b(1), ovl05_0ef7(2)): the champion
     // and a German European cup winner join six or seven drawn European clubs; the group
     // pairings follow the letter table for four teams like the saved ones
@@ -2967,32 +3123,6 @@ void Game::new_season() {
     std::fill(st + kStateEntrants, st + kStateEntrants + 10, uint8_t(0));
     std::fill(st + kStateEntrantSlots, st + kStateEntrantSlots + 18, uint8_t(0x80));
     for (size_t i = 0; i < german.size(); i++) st[kStateEntrants + i] = st[kStateEntrantSlots + i] = uint8_t(german[i]);
-    save_.euro_groups = draw_euro_groups(save_.teams, german, brng_);
-    // ovl05_4c7b(1,0) resets all six manager phase bytes before drawing.
-    for (size_t manager = 0; manager < 6; manager++)
-        save_.state.at(kManagerBlock + manager * 0x1AF + 0xE7) = 30;
-    euro_final_ = GroupTable{};
-    std::fill(save_.state.begin() + long(kGroupResults + 2 * 0x48),
-              save_.state.begin() + long(kGroupResults + 3 * 0x48), uint8_t(0));
-    for (size_t g = 0; g < 2; g++) {
-        euro_groups_[g] = GroupTable{save_.euro_groups[g]};
-        for (int r = 0; r < 6; r++) {
-            const std::vector<Pairing> pairs = round_robin_pairings(schedule_.teams4, r);
-            for (size_t p = 0; p < 2 && p < pairs.size(); p++)
-                save_.euro_rounds[g][size_t(r)][p] = {save_.euro_groups[g][size_t(pairs[p].home)],
-                                                      save_.euro_groups[g][size_t(pairs[p].away)]};
-        }
-        store_group_schedule(save_.state, euro_groups_[g], 2, int(g), schedule_);
-    }
-    std::string draw = "European cup groups:";
-    for (const auto& grp : save_.euro_groups) {
-        for (int t : grp) draw += " " + save_.teams[size_t(t)].name + ";";
-        draw += " /";
-    }
-    log_.push_back(draw);
-    // 162c:1c5b: new season values of the German clubs in their new class
-    for (int t = 0; t < kFirstNationalTeam; t++)
-        rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_);
     // prizes of the season review (ovl02_0000)
     const int league = team_class(finance_, human_team_);
     // ovl04_0000(0) checks the fewest total league penalty minutes after club
@@ -3116,7 +3246,10 @@ void Game::new_season() {
         HokSquadPlayer& sp = save_.squad[i];
         uint8_t* r = save_.state.data() + kSquad + i * kSquadRecord;
         r[0x09] &= 0x3F;  // offer flags
-        sp.league_games = sp.cup_games = sp.league_goals = sp.cup_goals = sp.other_goals = 0;
+        // the season bytes start again; the u16 totals of games (+0x1C/+0x1E) and goals (+0x22/+0x24/+0x26) stay
+        // (REAL-CODE period 30)
+        sp.league_games = sp.cup_games = 0;
+        r[0x06] = r[0x07] = 0;  // so that the export leaves the u16 copies alone
         sp.goals_against = sp.league_goals_byte = sp.cup_goals_byte = sp.other_goals_byte = 0;
         sp.major_penalties = sp.minor_penalties = 0;
         r[0x00] = r[0x01] = 0;
@@ -3131,9 +3264,10 @@ void Game::new_season() {
     budget_.league = team_class(finance_, human_team_);
     budget_.team = human_team_;
     refresh_budget_roster();
+    // ovr032:16B7 reads skill1 + skill2 of the club record at each booking. Open (REAL-CODE period 30): on 31.08. the
+    // original's record gives 256, the rerated record here 253 (6 bytes of finances, docs/DAYDIFF.md Stand 51).
     const auto& summer_team = save_.teams.at(size_t(human_team_));
-    budget_.team_strength = summer_team.skill1[0] + summer_team.skill1[1] +
-                            summer_team.skill2[0] + summer_team.skill2[1];
+    budget_.team_strength = summer_team.skill1[0] + summer_team.skill1[1] + summer_team.skill2[0] + summer_team.skill2[1];
     // ovl14:462c..470b: May 1 (234) through September 9 (365).
     // There are no matches, transfer offers or normal training in this loop.
     for (int summer_day = 234; summer_day <= 365; summer_day++) {
@@ -3143,12 +3277,34 @@ void Game::new_season() {
         });
         const int month_days = kMonthDays[size_t(summer_date.month - 1)];
         stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
+        // the share market runs on every summer day as well, directly after the refusal reset (REAL-CODE period 30)
+        market_day(save_.state, brng_);
+        for (int c = 0; c < kHokShares; c++) {
+            save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+            for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+        }
         if (summer_date.day == month_days / 2 || summer_date.day == month_days) {
             // ovl08_1d61 calls 2ba7 with the stored image. Unlike the
             // playable daily preparation, summer does not recompute it.
             update_sponsors();
+            // the talent scout price coin of ovr032:1F0B follows in the summer too (REAL-CODE period 30)
+            if (brng_.range(0, 1) != 0) {
+                const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
+                for (int n = 0; n < 4; n++) save_.state.at(0x18 + size_t(n)) = uint8_t(price >> (8 * n));
+            }
         }
         if (summer_date.day == month_days) clear_insurance_locks();
+        if (std::getenv("EM_DEBUG_SUMMER") && summer_date.day == month_days) {
+            long ads = 0;
+            for (const AdvertContract& a : budget_.adverts) ads += a.amount;
+            std::fprintf(stderr, "summer %02d.%02d.: strength %d players %d adverts %ld balance %ld accrued %ld human %d\n", summer_date.day, summer_date.month,
+                         int(budget_.team_strength), int(budget_.players), ads, budget_.balance, budget_.accrued, human_team_);
+            for (int t = 0; t < 36; t++) {
+                const HokTeam& x = save_.teams[size_t(t)];
+                const int sum = x.skill1[0] + x.skill1[1] + x.skill2[0] + x.skill2[1];
+                if (sum >= 250 && sum <= 262) std::fprintf(stderr, "  team %d (%s) sum %d\n", t, x.name.c_str(), sum);
+            }
+        }
         finance_day(finance_, budget_, summer_date.day, kMonthDays[size_t(summer_date.month - 1)]);
         heal_squad(summer_day % 7 == 0);
     }
@@ -3157,14 +3313,38 @@ void Game::new_season() {
         League& lg = leagues_[size_t(l)];
         lg.first_team = l * kHokLeagueSize;
         for (int s = 0; s < kHokLeagueSize; s++) {
+            // REAL-CODE period 30: the last position (+0x31) and the curve of the last season stay with the club, and the
+            // table order keeps the old (shuffled) order
+            const HokTableRow& old = old_rows[size_t(origin[size_t(lg.first_team + s)])];
             lg.rows[size_t(s)] = HokTableRow{};
             lg.rows[size_t(s)].form = "--------";
-            lg.rows[size_t(s)].position = s;
-            lg.ranking[size_t(s)] = s;
+            lg.rows[size_t(s)].position = old.position;
+            std::copy(std::begin(old.position_history), std::end(old.position_history), std::begin(lg.rows[size_t(s)].position_history));
         }
         matchday_[size_t(l)] = 1;
     }
-    cup_draw_ = draw_initial_cup({human_team_}, brng_);
+    // The regional rows are reset the same way. The current fields of all 48 rows are reset in the records too, so the
+    // export leaves the copies (+0x05/06, +0x1B..+0x20, +0x2B, +0x2F) that travelled with the club; the form copy of the
+    // records 36..63 becomes "--------" (REAL-CODE period 30).
+    for (int t = 3 * kHokLeagueSize; t < kHokLeagueTeams; t++) {
+        const HokTableRow& old = old_rows[size_t(origin[size_t(t)])];
+        HokTableRow& row = save_.table[size_t(t)];
+        row = HokTableRow{};
+        row.form = "--------";
+        row.position = old.position;
+        std::copy(std::begin(old.position_history), std::end(old.position_history), std::begin(row.position_history));
+    }
+    for (int t = 0; t < 64; t++) {
+        uint8_t* r = save_.state.data() + kTitles + size_t(t) * 0x50 + 7;  // the table row (hok.cpp kTable)
+        if (t < kHokLeagueTeams) {
+            r[-4] = r[-3] = 0;
+            std::fill(r, r + 8, uint8_t('-'));
+            for (int side = 0; side < 2; side++) r[0x12 + side] = r[0x16 + side] = r[0x1A + side] = r[0x22 + side] = r[0x26 + side] = 0;
+            r[0x43] = r[0x44] = 0;
+        }
+        if (t >= 3 * kHokLeagueSize) std::fill(r + 9, r + 17, uint8_t('-'));
+    }
+    // (the initial cup draw follows the EuroCup draw at the end of the season change, see below)
     // Native manager +0xE6: 1 = first-round participant, 30 = not in the draw.
     for (size_t manager = 0; manager < 6; manager++)
         save_.state.at(kManagerBlock + manager * 0x1AF + 0xE6) = manager == 0 ? 1 : 30;
@@ -3175,7 +3355,7 @@ void Game::new_season() {
     cup_series_.clear();
     std::fill(save_.state.begin() + long(kCupGame), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
     save_.state.at(kCupPending) = 1;
-    save_.state.at(0x8F84) = 1;
+    save_.state.at(0x8F84) = 0;  // DS:07AD: 0 after the season change (REAL-CODE period 30)
     cup_winner_ = -1;
     euro_round_ = 0;
     save_.state.at(kEuroRound) = 0;
@@ -3190,12 +3370,12 @@ void Game::new_season() {
     series_.clear();
     relegation_ = {};
     relegation_upper_ = {};
-    std::fill(save_.state.begin() + long(kGroupResults + 0x48), save_.state.begin() + long(kGroupResults + 0x90), uint8_t(0));
-    std::fill(save_.state.begin() + long(kPlayoffScores), save_.state.begin() + long(kPlayoffGame + 1), uint8_t(0));
-    std::fill(save_.state.begin() + long(kPlayoffTeams), save_.state.begin() + long(kPlayoffTeams + 32), uint8_t(0xFF));
+    // REAL-CODE period 30: the season change clears the play-off scores and the game index only; the wins, the play-off
+    // teams, the pending flag DS:D0E5 and the relegation results stay from the last season
+    std::fill(save_.state.begin() + long(kPlayoffScores), save_.state.begin() + long(kPlayoffWins), uint8_t(0));
+    save_.state.at(kPlayoffGame) = 0;
     save_.state.at(kPlayoffStage) = 0;
     save_.state.at(kPlayoffCursor) = 0xFF;
-    save_.state.at(kPlayoffPending) = 0;
     std::fill(save_.state.begin() + long(kLeagueResults), save_.state.begin() + long(kLeagueResults + 0x630), uint8_t(0));
     budget_.league = team_class(finance_, human_team_);
     budget_.team = human_team_;
@@ -3204,6 +3384,33 @@ void Game::new_season() {
     save_.state.at(kCareerYear) = uint8_t(career_year);
     save_.state.at(kCareerYear + 1) = uint8_t(career_year >> 8);
     save_.season_year = save_.year;  // DS:03BB follows at the season change (NEUSAIS)
+    // REAL-CODE period 30: the EuroCup groups and then the first DEB cup round are drawn after the summer, before the
+    // annual skill and distribution draws (the original asks whether the cup draw is shown live in between)
+    save_.euro_groups = draw_euro_groups(save_.teams, german, brng_);
+    // ovl05_4c7b(1,0) resets all six manager phase bytes before drawing.
+    for (size_t manager = 0; manager < 6; manager++)
+        save_.state.at(kManagerBlock + manager * 0x1AF + 0xE7) = 30;
+    euro_final_ = GroupTable{};
+    std::fill(save_.state.begin() + long(kGroupResults + 2 * 0x48),
+              save_.state.begin() + long(kGroupResults + 3 * 0x48), uint8_t(0));
+    for (size_t g = 0; g < 2; g++) {
+        euro_groups_[g] = GroupTable{save_.euro_groups[g]};
+        for (int r = 0; r < 6; r++) {
+            const std::vector<Pairing> pairs = round_robin_pairings(schedule_.teams4, r);
+            for (size_t p = 0; p < 2 && p < pairs.size(); p++)
+                save_.euro_rounds[g][size_t(r)][p] = {save_.euro_groups[g][size_t(pairs[p].home)],
+                                                      save_.euro_groups[g][size_t(pairs[p].away)]};
+        }
+        store_group_schedule(save_.state, euro_groups_[g], 2, int(g), schedule_);
+    }
+    std::string draw = "European cup groups:";
+    for (const auto& grp : save_.euro_groups) {
+        for (int t : grp) draw += " " + save_.teams[size_t(t)].name + ";";
+        draw += " /";
+    }
+    log_.push_back(draw);
+    cup_draw_ = draw_initial_cup({human_team_}, brng_);
+    store_cup_participants(save_, cup_draw_, cup_round_);
     // 6AF8:47A1 ->146E:179E ->1238:13A1: all398 global skill draws
     // happen after review, redistribution, summer and competition resets.
     annual_global_skills(save_.state,annual_draw);
@@ -3220,9 +3427,20 @@ void Game::new_season() {
     }
     seasons_++;
     day_ = 0;
+    // REAL-CODE period 30: after the distribution the original computes the club image and renews the sponsor offers,
+    // then books September 10 like a playable evening (refusal reset, share market, finances, image).
+    image_ = current_club_image();
+    update_sponsors();
     // The first playable menu already includes September 10's booking.
     stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
+    market_day(save_.state, brng_);
+    for (int c = 0; c < kHokShares; c++) {
+        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    }
+    refresh_budget_roster();  // the roster with the new skills before the booking
     finance_day(finance_, budget_, 10, 30);
+    image_ = current_club_image();
     log_.push_back("new season " + std::to_string(save_.year) + "/" + std::to_string(save_.year + 1));
 }
 
@@ -3355,14 +3573,29 @@ void Game::advance_day() {
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
-    if (message_step_pending_) {  // ovr038:3019 / 3067 when the play step starts from the menu
-        native_sort_messages(save_.state);
+    // The day loop sub_6153F (ovr038:2E5E..3067) passes the manager block and the count-down before every day with a calendar
+    // event (byte not 0, 9 or 0xFF), also a cup / EuroCup / playoff day without a manager inside a play step; the WM branch
+    // (byte_32089) bypasses it (REAL-CODE period 44: two EuroCup days without the club count a general message down).
+    const uint8_t day_event = calendar_.event(day_ + 1);
+    const bool event_day = day_event != 0 && day_event != 9 && day_event != 0xFF && day_event != kEventWorldChampionship && !std::getenv("EM_OLD_MSGSTEP");
+    if (message_step_pending_ || event_day) {  // ovr038:3019 / 3067
+        // ovr038:3006..3019: the sort only runs when the day has league games (calendar byte & 7) or a manager plays on
+        // it (sub_24C41, var_1A); the count-down always (REAL-CODE period 30: no sort before the first WM day)
+        const uint8_t ev = calendar_.event(day_ + 1);
+        const bool sort = calendar_.league_day(day_ + 1) || (ev == kEventCup && human_in_next_cup()) ||
+                          (ev == kEventEuroCup && human_in_next_euro()) || (ev == kEventPlayoff && human_in_next_playoff()) ||
+                          (ev == kEventWorldChampionship && national_coach_ >= 0) || std::getenv("EM_OLD_MSGSORT");
+        if (sort) native_sort_messages(save_.state);
         native_message_step(save_.state);
         message_step_pending_ = false;
     }
     interactive_played_ = false;
     expire_advert_options();
-    if (day_ + 1 >= int(calendar_.events.size())) {
+    // The closing section end of the calendar (29.04.) is not played as a day: after the evening finances of the WM final
+    // the original goes straight into the season change, then 132 summer days (REAL-CODE period 30: 15 finance days after
+    // the first WM day, then the season change).
+    if (day_ + 1 >= int(calendar_.events.size()) ||
+        (day_ + 2 == int(calendar_.events.size()) && calendar_.event(day_ + 1) == kEventSectionEnd && !std::getenv("EM_OLD_SEASONEND"))) {
         // Native club-menu saves can already show April 30 while WM rounds are still
         // pending. Complete one such event per call before rolling the season over;
         // do not charge that displayed day's finances again.
@@ -3371,8 +3604,21 @@ void Game::advance_day() {
             return;
         }
         new_season();
+        if (!std::getenv("EM_OLD_SEASONEND")) {
+            // The original stops in the menu "Vor dem ersten Spieltag" (September 10) before the first matchday, with the
+            // usual end of a play step: transfer-list roll and the daily factor (REAL-CODE period 30). Day 1 is the next step.
+            prepare_human_lineup();
+            if (brng_.range(0, 3) == 0) refresh_transfer_list();
+            daily_luck_ = brng_.range(85, 115);
+            if (national_coach_ < 0) save_.state.at(0x0788) = 0;
+            write_table_copies(save_.state, table_rows());
+            table_copies_frozen_ = league_since_refresh_ = false;
+            message_step_pending_ = true;
+            return;
+        }
     }
-    refresh_human_team();  // 162c:146c, daily
+    // 162c:146c runs in the event block of the day loop (ovr038:2F1A): days without a calendar event skip it (REAL-CODE period 49)
+    if (std::getenv("EM_OLD_DAYREFRESH") || (calendar_.event(day_ + 1) != 0 && calendar_.event(day_ + 1) != 0xFF)) refresh_human_team();  // 162c:146c (not in the WM branch without a national coach, see there)
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
     // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
@@ -3416,9 +3662,12 @@ g_draw_scope = "match-injuries";
     // The WM branch selects manager 5 on a match date; 146e:0c89's
     // human-manager guard then excludes the club. Empty dates retain club
     // processing before the next date's finances (ovl14:3727..388f).
-    if (world_phase && event == 0 && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
-        weekly_team_drift();
-        squad_injuries(false, true);  // today's healing was already prepared
+    // Without a human national coach manager 5 has no club (0xFD), so the guard excludes nothing: the WM branch
+    // (ovr038:37CC) runs sub_15369 on match dates too, without the team drift, and the calendar byte of the day is the
+    // no-match flag (REAL-CODE period 30).
+    if (world_phase && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
+        if (national_coach_ >= 0) weekly_team_drift();
+        squad_injuries(false, event == 0);  // today's healing was already prepared
         make_offers();
         train_squad();
     }
@@ -3452,6 +3701,13 @@ g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stder
         }
     }
 g_draw_scope = "finance";
+    // ovr032:16B7 reads skill1 + skill2 of the club record itself: a weekly drift of the record on this day counts before the
+    // next 146c refresh (REAL-CODE period 49: drift to 230 on the training day, booked at the month end, then refreshed to 228)
+    if (finance_date.day == finance_month_days && human_team_ >= 0 && !std::getenv("EM_OLD_INCOMESTRENGTH")) {
+        const HokTeam& own = save_.teams[size_t(human_team_)];
+        budget_.team_strength = own.skill1[0] + own.skill1[1] + own.skill2[0] + own.skill2[1];
+        if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "month end day %d (%d.%d.): strength %d at %zu\n", day_, finance_date.day, finance_date.month, budget_.team_strength, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
+    }
     finance_day(finance_, budget_, finance_date.day, finance_month_days);
     if (finance_date.day == finance_month_days) {
         char line[128];
@@ -3484,7 +3740,10 @@ g_draw_scope = "stadium-week";
     // The evening restores the saved selection mode (DS:0376 -> DS:0375) and runs its automatic lineup. The original does
     // this at the menu only and leaves DS:0375 at 0 within a step (docs/DEVIATIONS.md); the saved mode DS:0376 is the same
     // in both, as the copy runs once per step (above), so the lineups agree (REAL-CODE periods 2-29).
+    // after a cup day without a game the evening lineup runs, but the club record is not refreshed (REAL-CODE period 49)
+    skip_refresh_once_ = empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP");
     prepare_human_lineup();
+    empty_cup_day_ = false;
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
     // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
     // (DS:E1A4, ovr034:1CD2). REAL-CODE: both draws end every period of the original.
@@ -3497,7 +3756,8 @@ g_draw_scope = "stadium-week";
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
         if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
-                                              (next_event == kEventPlayoff && !human_in_next_playoff()))) {  // REAL-CODE periods 7, 13 and 28
+                                              (next_event == kEventPlayoff && !human_in_next_playoff()) ||
+                                              (next_event == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0))) {  // REAL-CODE periods 7, 13, 28 and 30
             if (league_since_refresh_) table_copies_frozen_ = true;  // no menu after a league day: the copies of the table stay (REAL-CODE period 28)
             if (next_event == kEventCup && cup_game_ == 0 && cup_winner_ < 0)
                 for (int t = 36; t < 64; t++)
