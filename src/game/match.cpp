@@ -852,10 +852,13 @@ struct MatchRun::Impl {
                 if (const auto* outer = outer_squad[side])
                     for (size_t s = 0; s < working.size() && s < outer->size(); s++)
                         if ((*outer)[s].role == 0 && working[s].role != 0) { working[s].role = 0; removed = true; }
-                // leaving the lineup screen sets the effort of the situation again, the offence stays (162c:12da; REAL-CODE period 28)
+                // leaving the lineup screen sets the effort again as in a drawn game (situation 2), the offence stays (REAL-CODE: period
+                // 28 at 0:0 and period 41 at 3:2 -> 60 + 20 = 80; the minute loop calls of 162c:12da are not the ones used here)
                 if (removed) {
                     HokTeam& team = side == 0 ? h : a;
-                    apply_effort(team, side == 0 ? score.home : score.away, side == 0 ? score.away : score.home, &working, m->effort_control, 2);
+                    const int before = team.effort_current;
+                    apply_effort(team, 0, 0, &working, m->effort_control, 2);
+                    if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury removal minute %d score %d:%d effort %d -> %d (control %d) lines %d/%d energy %d/%d base %d eff %d %d %d %d %d\n", minute, score.home, score.away, before, team.effort_current, m->effort_control, team.current_line[0], team.current_line[1], team.energy[0][team.current_line[0]], team.energy[1][team.current_line[1]], team.effort_base, team.effort[0], team.effort[1], team.effort[2], team.effort[3], team.effort[4]);
                 }
             }
         }
@@ -884,6 +887,9 @@ struct MatchRun::Impl {
         if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a, asq);
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
         if ((events & 2) && minute <= 60) { shown.period_chances[(minute - 1) / 20][1]++; if (away_goal) shown.period_goals[(minute - 1) / 20][1]++; }
+        // both sides score in the same overtime minute: the away goal decides, the home goal of the minute is withdrawn (REAL-CODE
+        // period 39: cup game 2 ends 6:7 with the marker 30, series 1:1; neither 7:7 and a later winner nor a home win)
+        if (away_goal && opts.knockout && minute > 60 && home_goal) score.home--;
         if (away_goal) {
             score.away++;
             if (stats && h.skaters + a.skaters != 11 && a.skaters > h.skaters) stats->power_play_goals[1]++;
@@ -929,6 +935,7 @@ struct MatchRun::Impl {
             }
         }
         scope("penalty");
+        if (minute > 59 && std::getenv("EM_DEBUG_OT")) std::fprintf(stderr, "ot %s-%s minute %d score %d:%d knockout %d last %d events %d\n", h.name.c_str(), a.name.c_str(), minute, score.home, score.away, int(opts.knockout), last, events);
         if (minute != 60 && minute != 70 && !(opts.knockout && minute > 60 && score.home != score.away)) {  // no penalties in the minute of the golden goal (REAL-CODE)
             penalty_minute(swap_sides ? *apen : *hpen, swap_sides ? *hpen : *apen, true, rng);
             penalty_minute(swap_sides ? *hpen : *apen, swap_sides ? *apen : *hpen, true, rng);
