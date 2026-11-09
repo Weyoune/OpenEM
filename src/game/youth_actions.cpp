@@ -14,7 +14,7 @@ bool Game::adjust_youth_funding(int kind,int x){
     // This cache supplies monthly_expenses; the individual grants remain native HOK fields.
     uint32_t total=0;
     for(int row=0;row<3;++row)total+=uint32_t(youth_funding_amount(save_,row));
-    budget_.open_a07e=std::bit_cast<int32_t>(total);
+    mgr_[0].budget.open_a07e=std::bit_cast<int32_t>(total);
     return true;
 }
 } // namespace em

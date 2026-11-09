@@ -187,13 +187,13 @@ HighscoreTable read_highscore_table(const Bytes& bytes) {
 
 // Native page entry for manager m: the image (ovl08_2893) and the market values draw random numbers in this order.
 HighscoreRecord Game::highscore_record(int manager, const HighscoreTables& tables) {
-    image_ = current_club_image();
+    mgr_[0].image = current_club_image();
     const HokFile h = decode_hok(save_bytes());
     std::vector<long> values;
     const int n = count_players(h.state, manager);
     for (int slot = 0; slot < n; slot++)
         values.push_back(player_worth(contracts_, contract_player(h, manager, slot), Worth::Value, brng_));
-    return em::highscore_record(tables, h, manager, image_, values, 1);
+    return em::highscore_record(tables, h, manager, mgr_[0].image, values, 1);
 }
 
 }  // namespace em

@@ -38,11 +38,11 @@ long Game::talent_search_price() const { return long(int32_t(le32(save_.state, k
 int Game::talent_search_days() const { return save_.state.at(kCounter); }
 
 TalentResult Game::start_talent_search() {
-    if (national_coach_ >= 0 || human_team_ < 0 || human_team_ >= 52) return TalentResult::Unavailable;
+    if (national_coach_ >= 0 || mgr_[0].team < 0 || mgr_[0].team >= 52) return TalentResult::Unavailable;
     if (save_.state.at(kCounter) != 0) return TalentResult::Running;
     const long price = talent_search_price();
-    if (!(budget_.balance > price)) return TalentResult::InsufficientFunds;
-    budget_.balance -= price;
+    if (!(mgr_[0].budget.balance > price)) return TalentResult::InsufficientFunds;
+    mgr_[0].budget.balance -= price;
     int days = brng_.range(3, 10);
     if (brng_.range(0, 3) == 0) days += 6;
     save_.state.at(kCounter) = uint8_t(days);
@@ -81,7 +81,7 @@ bool Game::talent_player(int skill, long percent) {
     player->skill_a = s.at(global + 0x15);
     player->skill_b = s.at(global + 0x16);
     player->form = s.at(global + 0x17);
-    player->team = human_team_;
+    player->team = mgr_[0].team;
     if (inserted.shifted)
         std::move_backward(injured_role_.begin() + inserted.slot, injured_role_.end() - 1, injured_role_.end());
     injured_role_[size_t(inserted.slot)] = 0;
@@ -92,7 +92,7 @@ bool Game::talent_player(int skill, long percent) {
 }
 
 void Game::talent_search_week() {
-    if (national_coach_ >= 0 || human_team_ < 0 || human_team_ >= 52) return;
+    if (national_coach_ >= 0 || mgr_[0].team < 0 || mgr_[0].team >= 52) return;
     uint8_t& counter = save_.state.at(kCounter);
     if (counter == 0) return;
     if (--counter != 0) return;  // DS:4860 (immediate evaluation) is never set in a normal game

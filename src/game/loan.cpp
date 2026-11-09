@@ -31,7 +31,7 @@ void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at
 
 PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_subsidy, bool prepare_lineup) {
     if (slot >= 11 || fee <= 0) return PurchaseResult::Invalid;
-    if (national_coach_ >= 0 || human_team_ >= 52) return PurchaseResult::Unavailable;
+    if (national_coach_ >= 0 || mgr_[0].team >= 52) return PurchaseResult::Unavailable;
     const size_t source = kPoolBase + slot * kRecord;
     const int id = save_.state.at(source + 15);
     HokPlayer* player = id ? player_by_exe_index(id) : nullptr;
@@ -44,7 +44,7 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
         save_.state.at(source + 0x1A) |= 0x81;
         return PurchaseResult::SellerRefused;
     }
-    if (budget_.balance < fee) return PurchaseResult::InsufficientFunds;
+    if (mgr_[0].budget.balance < fee) return PurchaseResult::InsufficientFunds;
 
     HokFile prepared = decode_hok(save_bytes());
     BorlandRandom next = brng_;
@@ -60,19 +60,19 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     store32(prepared.state, row + 0x28, uint32_t(salary));
     prepared.state.at(row + 0x04) = prepared.state.at(row + 0x05) = prepared.state.at(row + 0x1A) = 0;
     std::copy_n(prepared.state.begin() + kSquadBase, 30 * kRecord, save_.state.begin() + kSquadBase);
-    save_.state.at(kPlayerBase + size_t(id - 1) * 33 + 0x1D) = uint8_t(human_team_);
-    player->team = human_team_;
+    save_.state.at(kPlayerBase + size_t(id - 1) * 33 + 0x1D) = uint8_t(mgr_[0].team);
+    player->team = mgr_[0].team;
     if (inserted.shifted)
         std::move_backward(injured_role_.begin() + inserted.slot, injured_role_.end() - 1, injured_role_.end());
     injured_role_[size_t(inserted.slot)] = 0;
     native_remove_storage_row(save_, 4, int(slot), 10);
     save_.squad = hok_squad(save_, 0);
     brng_ = next;
-    budget_.balance -= fee;
+    mgr_[0].budget.balance -= fee;
     log_.push_back(player->name + " loaned for " + std::to_string(fee / 3) + " DM, salary " + std::to_string(salary / 3) + " DM");
     const long subsidy = purchase_subsidy(fee, brng_);
     if (subsidy > 0) {
-        if (accept_subsidy) budget_.balance = long(int32_t(uint32_t(budget_.balance) + uint32_t(subsidy)));
+        if (accept_subsidy) mgr_[0].budget.balance = long(int32_t(uint32_t(mgr_[0].budget.balance) + uint32_t(subsidy)));
         log_.push_back("purchase sponsor subsidy " + std::to_string(subsidy / 3) + (accept_subsidy ? " DM accepted" : " DM declined"));
     }
     if (prepare_lineup) prepare_human_lineup(false);

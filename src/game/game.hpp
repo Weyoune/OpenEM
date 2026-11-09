@@ -166,10 +166,10 @@ public:
     GameDate date() const { return date_of_season_day(day_, save_.year); }
     const League& league(int l) const { return leagues_[size_t(l)]; }
     int next_matchday(int l) const { return matchday_[size_t(l)]; }
-    const ManagerBudget& budget() const { return budget_; }
-    int image() const { return image_; }
+    const ManagerBudget& budget() const { return mgr_[0].budget; }
+    int image() const { return mgr_[0].image; }
     int game_level() const { return finance_.level; }  // 0 professional .. 5 beginner
-    int human_team() const { return human_team_; }
+    int human_team() const { return mgr_[0].team; }
     int managers() const { return managers_; }
     // Presentation-only event marker; includes club/national matches and forfeits.
     // It is cleared before a day and never affects RNG, finances or checkpoint state.
@@ -260,7 +260,7 @@ public:
     // Commit a full club plan (kinds 0..8), including its native recovery fee.
     // Invalid plans/phases leave the game unchanged; no random draws or cash posting.
     bool set_training_plan(const TrainingPlan& plan);
-    const SponsorOffers& sponsor_offers() const { return offers_; }
+    const SponsorOffers& sponsor_offers() const { return mgr_[0].offers; }
     //Original advertising-page entry recomputes/stores full monthly income.
     //It reads existing offers; there is no offer generation or random draw.
     bool enter_advertising();
@@ -281,7 +281,7 @@ public:
         brng_=previous.brng_;rng_=previous.rng_;
         line_counts_=previous.line_counts_;
         annual_distribution_cursors_=previous.annual_distribution_cursors_;
-        for(int kind=0;kind<2;++kind)human_.per_line[kind]=line_counts_[0][size_t(kind)];
+        for(int kind=0;kind<2;++kind)mgr_[0].squad.per_line[kind]=line_counts_[0][size_t(kind)];
     }
     bool set_ticket_price(int price);
     // 5396:087B: immediately edit one native monthly youth grant; no RNG.
@@ -387,7 +387,6 @@ private:
     std::array<bool, 30> hurt_in_match_{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     int daily_luck_ = 100;                // DS:E1A4: valuation factor 85..115 of the current play step
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
-    bool human_played_ = false;          // the human club played today
     bool interactive_played_ = false;
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
@@ -410,17 +409,24 @@ private:
     std::vector<HokPairing> cup_draw_;
     std::vector<Series> cup_series_;  // higher/lower are the first-leg home/away teams here
     int cup_round_ = 1, cup_game_ = 0;
-    int human_team_ = -1;
+    // The human managers (docs/MEHRSPIELER_PLAN.md); only index 0 is simulated so far.
+    struct ManagerState {
+        int team = -1;                // manager block +0x14
+        HumanSquad squad;             // the squad and its controls in matches
+        LineRotation rotation;
+        PenaltyTimers timers;         // DS:D096 + 6 * manager (not saved; zero after loading)
+        ManagerBudget budget;
+        SponsorOffers offers{};
+        int image = 0;
+        bool played = false;          // the club played today
+    };
+    std::array<ManagerState, 4> mgr_{};
     int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4; only manager 0 is simulated so far (docs/MEHRSPIELER_PLAN.md)
-    HumanSquad human_;
     // Native BSS is zero; only a visited club/national refresh fills its pair.
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.
     std::array<std::array<uint8_t,2>,6> line_counts_{};
-    LineRotation human_rotation_, national_rotation_;
-    PenaltyTimers human_timers_, national_timers_;  // DS:D096 rows of manager 0 and the national coach (not saved; zero after loading)
-    ManagerBudget budget_;
-    SponsorOffers offers_{};
-    int image_ = 0;
+    LineRotation national_rotation_;
+    PenaltyTimers national_timers_;  // DS:D096 row of the national coach (not saved; zero after loading)
     std::array<GroupTable, 2> euro_groups_{};
     GroupTable euro_final_{};
     int euro_round_ = 0, euro_champion_ = -1;

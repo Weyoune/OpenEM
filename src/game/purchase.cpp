@@ -25,7 +25,7 @@ void clear_notification(HokFile& h,int id){
 PurchaseResult Game::begin_transfer_purchase(size_t slot,long fee,PurchaseDraft& draft){
     draft={};
     if(slot>=11||fee<=0)return PurchaseResult::Invalid;
-    if(national_coach_>=0||human_team_>=52)return PurchaseResult::Unavailable;
+    if(national_coach_>=0||mgr_[0].team>=52)return PurchaseResult::Unavailable;
     const size_t source=pool+slot*record;const int id=save_.state.at(source+15);
     HokPlayer* player=id?player_by_exe_index(id):nullptr;
     if(!player||player->raw[0x1A]!=4)return PurchaseResult::Unavailable;
@@ -33,7 +33,7 @@ PurchaseResult Game::begin_transfer_purchase(size_t slot,long fee,PurchaseDraft&
     if(!seller_accepts(int32_t(le32(save_.state,source+0x2C)),fee,brng_)){
         save_.state.at(source+0x1A)|=0x81;return PurchaseResult::SellerRefused;
     }
-    if(budget_.balance<fee)return PurchaseResult::InsufficientFunds;
+    if(mgr_[0].budget.balance<fee)return PurchaseResult::InsufficientFunds;
     HokFile prepared=decode_hok(save_bytes());
     BorlandRandom next=brng_;
     const int old_team=player->raw[0x1D];
@@ -43,8 +43,8 @@ PurchaseResult Game::begin_transfer_purchase(size_t slot,long fee,PurchaseDraft&
     const bool shifted=save_.state.at(destination+15)!=0;
     put32(prepared.state,destination+0x2C,(le32(prepared.state,destination+0x2C)&0x80000000u)|uint32_t(fee));
     std::copy_n(prepared.state.begin()+squad,30*record,save_.state.begin()+squad);
-    save_.state.at(players+size_t(id-1)*33+0x1D)=uint8_t(human_team_);
-    player->team=human_team_;
+    save_.state.at(players+size_t(id-1)*33+0x1D)=uint8_t(mgr_[0].team);
+    player->team=mgr_[0].team;
     if(shifted)std::move_backward(injured_role_.begin()+inserted,injured_role_.end()-1,injured_role_.end());
     injured_role_[size_t(inserted)]=0;
     save_.squad=hok_squad(save_,0);brng_=next;
@@ -52,7 +52,7 @@ PurchaseResult Game::begin_transfer_purchase(size_t slot,long fee,PurchaseDraft&
     return PurchaseResult::Negotiating;
 }
 bool Game::cancel_transfer_purchase(const PurchaseDraft& draft){
-    if(!valid(save_,draft,human_team_))return false;
+    if(!valid(save_,draft,mgr_[0].team))return false;
     native_remove_purchase_row(save_,draft.club_slot);
     const size_t player=players+size_t(draft.player_id-1)*33;
     save_.state.at(player+0x1D)=uint8_t(draft.old_team);
@@ -63,22 +63,22 @@ bool Game::cancel_transfer_purchase(const PurchaseDraft& draft){
     return true;
 }
 PurchaseResult Game::finish_transfer_purchase(const PurchaseDraft& draft,int years,long salary,bool accept_subsidy,bool prepare_lineup){
-    if(!valid(save_,draft,human_team_)||years<1||salary<=0)return PurchaseResult::Invalid;
+    if(!valid(save_,draft,mgr_[0].team)||years<1||salary<=0)return PurchaseResult::Invalid;
     if(years>4){(void)brng_.range(10,18);cancel_transfer_purchase(draft);return PurchaseResult::PlayerRefused;}
     const size_t destination=squad+size_t(draft.club_slot)*record;
     const auto contract=contract_player(save_,0,draft.club_slot);
     const bool raise=years==1&&salary>=draft.initial_salary;
-    if(!raise&&!player_accepts(contracts_,contract,years,salary,matchday_[size_t(std::clamp(budget_.league,0,2))],44,day_+1,brng_)){
+    if(!raise&&!player_accepts(contracts_,contract,years,salary,matchday_[size_t(std::clamp(mgr_[0].budget.league,0,2))],44,day_+1,brng_)){
         (void)brng_.range(10,18);cancel_transfer_purchase(draft);return PurchaseResult::PlayerRefused;
     }
     save_.state.at(destination+0x0B)=uint8_t(years);put32(save_.state,destination+0x28,uint32_t(salary));
     HokPlayer* player=player_by_exe_index(draft.player_id);
     clear_notification(save_,draft.player_id);remove_squad_record(4,draft.pool_slot,10);
     save_.state.at(players+size_t(draft.player_id-1)*33+0x1A)=0;
-    save_.squad=hok_squad(save_,0);budget_.balance-=draft.fee;
+    save_.squad=hok_squad(save_,0);mgr_[0].budget.balance-=draft.fee;
     log_.push_back(player->name+" bought for "+std::to_string(draft.fee/3)+" DM, "+std::to_string(years)+" years at "+std::to_string(salary/3)+" DM");
     const long subsidy=purchase_subsidy(draft.fee,brng_);
-    if(subsidy>0){if(accept_subsidy)budget_.balance=long(int32_t(uint32_t(budget_.balance)+uint32_t(subsidy)));log_.push_back("purchase sponsor subsidy "+std::to_string(subsidy/3)+(accept_subsidy?" DM accepted":" DM declined"));}
+    if(subsidy>0){if(accept_subsidy)mgr_[0].budget.balance=long(int32_t(uint32_t(mgr_[0].budget.balance)+uint32_t(subsidy)));log_.push_back("purchase sponsor subsidy "+std::to_string(subsidy/3)+(accept_subsidy?" DM accepted":" DM declined"));}
     if(prepare_lineup)prepare_human_lineup(false);
     refresh_budget_roster();return PurchaseResult::Purchased;
 }

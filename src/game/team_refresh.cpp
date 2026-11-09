@@ -91,9 +91,9 @@ void Game::refresh_menu_manager(int manager){
     const size_t at=0x17E7+size_t(id)*61;
     for(size_t field:{size_t(0x18),size_t(0x19),size_t(0x1A),size_t(0x1B),size_t(0x1C),size_t(0x1D),size_t(0x2C),size_t(0x2E),size_t(0x32)})
         save_.state.at(at+field)=next.state.at(at+field);
-    const auto& team=save_.teams.at(size_t(human_team_));
-    for(int kind=0;kind<2;kind++)human_.per_line[kind]=line_counts_[0][size_t(kind)];
-    budget_.team_strength=team.skill1[0]+team.skill1[1]+team.skill2[0]+team.skill2[1];
+    const auto& team=save_.teams.at(size_t(mgr_[0].team));
+    for(int kind=0;kind<2;kind++)mgr_[0].squad.per_line[kind]=line_counts_[0][size_t(kind)];
+    mgr_[0].budget.team_strength=team.skill1[0]+team.skill1[1]+team.skill2[0]+team.skill2[1];
 }
 void Game::enter_strengths(){
     const int managers=save_.state.at(0x0DC6);
