@@ -137,7 +137,7 @@ void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
         c.set_dac(0xFE - side, (col >> 6) & 63, (col >> 2) & 63, uint8_t(col << 2) & 63);
     }
     Image& screen = c.pixels();
-    const View v = play(script(data, s.script), s.frame);
+    const View v = s.script.empty() ? View{} : play(script(data, s.script), s.frame);
     const Image& r = rink(data, s.arena);
     for (int y = 0; y < 200; y++)
         for (int x = 0; x < 320; x++) screen.at(x, y) = r.pixels[size_t(v.cam_y + y) * size_t(r.width) + size_t(v.cam_x + x)];
@@ -164,30 +164,70 @@ void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
     }
 }
 
+std::string classic_goal_scene_script(int n, int side, bool goal, bool penalty_shot, bool six) {
+    if (penalty_shot || six) n = 2;  // rand(2, e / j count) with two scenes each (TORE\anzahl)
+    std::string name = std::to_string(n) + (side ? ".a" : ".h") + (goal ? "t" : "v");
+    if (penalty_shot) name += "e";
+    else if (six) name += "j";
+    return name;
+}
+
 std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::path& data, const ClassicMatchFrame& base,
-                                                         ClassicGoalScene scene, int side, bool goal) {
+                                                         ClassicGoalScene scene, int side, bool goal, bool rink_stays) {
     std::vector<ClassicMatchFrame> out;
     const int n = classic_goal_scene_length(data, scene.script);
-    constexpr int kTickMs = 54925 / 1000;  // one BIOS tick
-    for (int k = 1; k <= n; k++) {
+    scene.side = side;
+    scene.goal = goal;
+    const auto frame = [&](const ClassicGoalScene& s, int ms) {
         ClassicMatchFrame f = base;
         f.message.reset();
         f.flash.reset();
+        f.after_scene.reset();
+        f.scene = s;
+        f.hold_ms = ms;
+        return f;
+    };
+    for (int k = 1; k <= n; k++) {
         scene.frame = k;
-        f.scene = scene;
-        f.hold_ms = kTickMs;
-        out.push_back(std::move(f));
+        out.push_back(frame(scene, 54925 / 1000));  // one BIOS tick
     }
     // ovl14_4938 4F49..: the goal is added (ovl14_504d mode 2), then delay(6) = two ticks
-    if (goal) scene.goals[size_t(side)]++;
-    ClassicMatchFrame f = base;
-    f.message.reset();
-    f.flash.reset();
-    scene.frame = n;
-    f.scene = scene;
-    f.hold_ms = 6 * 54925 / 3000;
-    out.push_back(std::move(f));
+    ClassicGoalScene end = scene;
+    if (goal) end.goals[size_t(side)]++;
+    end.final = true;
+    out.push_back(frame(end, 6 * 54925 / 3000));
+    // ovl14_1dc7 (seg ovr038:21A3..21CA): delay(20), then a typed 'r' / 'w' plays the chance again
+    ClassicMatchFrame after = rink_stays ? frame(end, 20 * 54925 / 3000) : base;
+    if (!rink_stays) {
+        after.message.reset();
+        after.flash.reset();
+        after.scene.reset();
+        after.hold_ms = 20 * 54925 / 3000;
+    }
+    ClassicGoalScene replay = scene;  // the chance with the score before it
+    replay.frame = 0;
+    replay.final = false;
+    after.after_scene = replay;
+    out.push_back(std::move(after));
     return out;
+}
+
+std::vector<ClassicMatchFrame> classic_goal_scene_replay(const std::filesystem::path& data, const ClassicMatchFrame& after) {
+    if (!after.after_scene || after.after_scene->play >= 3) return {};
+    ClassicGoalScene s = *after.after_scene;
+    s.play++;
+    // the next scene number of the same kind (normal scenes 2..11; e / j stay on their two scenes)
+    const size_t dot = s.script.find('.');
+    const int n = std::stoi(s.script.substr(0, dot));
+    const std::string rest = s.script.substr(dot);
+    const bool special = rest.size() > 3;
+    const int next = special ? 2 + (n - 1) % 2 : 2 + (n - 1) % 10;
+    s.script = std::to_string(next) + rest;
+    ClassicMatchFrame base = after;
+    base.after_scene.reset();
+    const bool rink_stays = after.scene.has_value();
+    if (rink_stays) base.scene.reset();
+    return classic_goal_scene_frames(data, base, s, s.side, s.goal, rink_stays);
 }
 
 }  // namespace em::ui

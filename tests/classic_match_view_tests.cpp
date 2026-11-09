@@ -339,6 +339,19 @@ int main(int argc, char** argv) {
                 draw_classic_match_view(canvas, f);
                 check(canvas, k.name);
             }
+            // Stufe 2 "Eisfeld bleibt an" (same capture session, Torszenen level 2): the rink opened at camera (0, 0) with an
+            // empty attendance line in minute 11, and the view of 7.ht kept after the scene in minute 14 at 1:0.
+            for (int k = 0; k < 2; k++) {
+                ClassicCanvas canvas(data);
+                ClassicMatchFrame f;
+                f.scene = ClassicGoalScene{};
+                ClassicGoalScene& s = *f.scene;
+                s.arena = 2; s.colour = {0x0EFF, 0x0F00}; s.names = {"EHC FREIBURG", "KÖLNER EC"};
+                if (k == 0) { s.minute = 11; }
+                else { s.script = "7.ht"; s.frame = 120; s.goals = {1, 0}; s.info = "AUSWÄRTS"; s.minute = 14; }
+                draw_classic_match_view(canvas, f);
+                check(canvas, k == 0 ? "scene-level2-start" : "scene-level2-rest");
+            }
         }
         {
             // Board messages of ovl14_0690 (dosbox-automation capture 09.11.2026: START, speed 60 written to DS:0262, EHC
@@ -441,6 +454,32 @@ int main(int argc, char** argv) {
                 require(played[first].scene->frame == 1 && played[first].hold_ms == 54 && played[first + size_t(n)].hold_ms == units(6),
                         "one tick per script frame, delay(6) at the end");
                 require(played[first].scene->goals[0] == 0, "the scene starts with the score before the goal");
+                // the chance is followed by delay(20) on the board; r / w replays it with the score before it, three
+                // plays at most (ovl14_1dc7)
+                size_t after = 0;
+                while (!played[after].after_scene) after++;
+                require(!played[after].scene && played[after].hold_ms == units(20) && !played[after].boards.empty(),
+                        "delay(20) on the board after the scene");
+                ClassicMatchFrame replay_point = played[after];
+                for (int play = 2; play <= 3; play++) {
+                    const auto replay = classic_goal_scene_replay(data, replay_point);
+                    require(!replay.empty() && replay.front().scene->play == play && replay.front().scene->goals[0] == 0 &&
+                                replay.front().scene->script != replay_point.after_scene->script,
+                            "a replay starts again with the score before the goal and another scene");
+                    replay_point = replay.back();
+                }
+                require(classic_goal_scene_replay(data, replay_point).empty(), "no fourth play");
+                // Stufe 2: the rink stays; minute frames show the last scene view with the new minute, no boards
+                const auto level2 = classic_board_messages(human, 60, 2, data);
+                require(std::all_of(level2.begin(), level2.end(), [](const ClassicMatchFrame& f) { return f.scene && f.boards.empty() && !f.message; }),
+                        "Stufe 2 shows only the rink");
+                require(level2.front().scene->script.empty() && level2.back().minute == 2 && level2.back().scene->minute == 2 &&
+                            level2.back().scene->goals[0] == 1 && level2.back().scene->final == false && !level2.back().scene->script.empty(),
+                        "the rink starts at (0, 0) and keeps the last scene with the running minute and score");
+                // j / e variants of ovl15_0143
+                require(classic_goal_scene_script(7, 0, true, false, true) == "2.htj" && classic_goal_scene_script(7, 1, false, true, true) == "2.ave" &&
+                            classic_goal_scene_script(7, 1, false, false, false) == "7.av",
+                        "scene file names");
                 require(classic_board_messages(human, 70, false, data).size() == human.size(), "no scenes when switched off");
             }
         }

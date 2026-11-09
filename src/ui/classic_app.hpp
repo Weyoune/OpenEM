@@ -202,6 +202,7 @@ private:
     std::vector<ClassicMatchFrame> match_frames_, pending_match_frames_;
     size_t match_frame_=0;
     uint64_t match_frame_until_=0;
+    bool replay_key_=false;  // 'r' / 'w' typed during a goal scene
     bool pending_human_match_=false, pending_league_day_=false;
     std::unique_ptr<HokFile> match_before_; // state before the day: draw and series for the cup table (ovl07_0eba)
     void prepare_match_view(bool human_match);

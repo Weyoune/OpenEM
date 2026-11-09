@@ -117,7 +117,13 @@ struct ClassicGoalScene {
     std::array<int, 2> goals{};       // the score shown (before the goal; +1 in the final frame)
     std::string info;                 // DS:54BE: "<attendance> ZUSCHAUER" at the manager's home, else "AUSWÄRTS"
     int minute = 1;
-    int frame = 0;                    // script frames applied (0 = the start positions)
+    int frame = 0;                    // script frames applied (0 = the start positions; empty script: camera (0, 0), no
+                                      // objects, the rink of Stufe 2 before its first scene)
+    // The chance behind the scene (for a replay with r / w, ovl14_1dc7): attacking side, goal, plays so far (1..3)
+    int side = 0;
+    bool goal = false;
+    int play = 1;
+    bool final = false;               // the last frame (score after the goal, delay(6))
 };
 struct ClassicMatchFrame {
     int minute = 1;                   // shown minute (1..70); before minute 1 the original shows 1
@@ -126,6 +132,7 @@ struct ClassicMatchFrame {
     std::optional<ClassicGoalFlash> flash;       // a goal flash drawn over this frame
     std::optional<ClassicBoardMessage> message;  // a board message drawn over this frame
     std::optional<ClassicGoalScene> scene;       // a goal scene drawn instead of the match view
+    std::optional<ClassicGoalScene> after_scene; // the delay(20) after a scene: r / w replays this chance
     int hold_ms = -1;                 // how long a message step stays (-1: classic_match_frame_ms decides)
     bool settings_lamp = false;       // DS:878A, the switch bottom left (opens the Einstellungen)
     bool blink = false;               // ovl14_045c: reporter eyes closed (KB38 0x80) instead of open (KB38 0x50)
@@ -139,10 +146,20 @@ void draw_classic_match_view(ClassicCanvas& canvas, const ClassicMatchFrame& fra
 void draw_classic_goal_scene(ClassicCanvas& canvas, const ClassicGoalScene& scene);
 // Number of frames of a TORE\ script (frames before its 0xAAAA end mark).
 int classic_goal_scene_length(const std::filesystem::path& data, const std::string& script);
-// The frames of one goal scene: script frames 1..n, one BIOS tick each, then the final frame with the new score of a goal
-// for delay(6) (two ticks). `scene` holds the score before the chance; `goal` adds one for `side`.
+// The TORE\ file of a chance (ovl15_0143): n + ".h" / ".a" (attacking side) + "t" / "v" (goal / missed); a penalty shot
+// (ovl14_1dc7 argument, kind 5 / 6 of the message; also when the original's rand(0, 0xD2 resp. 0xFF) gives 0) takes
+// "2.?(t|v)e", otherwise a side with skaters + running penalties = 6 "2.?(t|v)j" (TORE\anzahl: two e and two j scenes,
+// rand(2, 2) = 2).
+std::string classic_goal_scene_script(int n, int side, bool goal, bool penalty_shot, bool six);
+// The frames of one goal scene: script frames 1..n, one BIOS tick each, the final frame with the new score of a goal for
+// delay(6) (two ticks), then delay(20) of ovl14_1dc7 on `base` (the board) or, with rink_stays (level 2), on the final
+// view; that frame carries after_scene, where r / w replays the chance (ClassicApplication). `scene` holds the score
+// before the chance; `goal` adds one for `side`.
 std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::path& data, const ClassicMatchFrame& base,
-                                                         ClassicGoalScene scene, int side, bool goal);
+                                                         ClassicGoalScene scene, int side, bool goal, bool rink_stays = false);
+// The replay of a chance (ovl14_1dc7: a typed 'r' or 'w' after the scene, at most three plays): the original calls
+// ovl15_0143 again and so rolls a new scene; OpenEM takes the next script number. Empty after the third play.
+std::vector<ClassicMatchFrame> classic_goal_scene_replay(const std::filesystem::path& data, const ClassicMatchFrame& after);
 
 // ovl07_0eba with the DEB-Pokal (after ovl06_2522 minutes 41-60, 61-65, 66-70): the page of Tabellen -> DEB-Pokal
 // (draw_classic_cup, 4996:38F3) with the caption "<round>   <minute>.Minute" and the running game as the newest score column.
@@ -178,10 +195,12 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
 // or 5) and the chances of the home side, then the away side (chances of the regular time from the chance counters,
 // goals from the score; the goals of the manager's club name scorer and assist from the squad counters). The steps are
 // drawn over the previous minute's screen with the new minute display, like the goal flashes. Nothing at speed >= 70.
-// With goal scenes and a data path, every chance of the board of the manager's club first plays its goal scene
-// (classic_goal_scene_frames); the TORE\ script is n.h/n.a + t/v with n = 2..11 (the original rolls n with rand(2,
-// MAXSZENE) and rarely the e variant; OpenEM derives n from the minute and the chance).
-std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, bool goal_scenes,
+// With goal scenes (the Torszenen level 1 or 2) and a data path, every chance of the board of the manager's club first
+// plays its goal scene (classic_goal_scene_frames), followed by delay(20) (ovl14_1dc7) on the board, or at level 2
+// ("Eisfeld bleibt an") on the rink, which then also stays between the scenes with the minute renewed (no boards,
+// messages or goal flashes). The script number n = 2..11 is rolled by the original with the Borland rand of the game
+// (ovl15_0143, the same stream as the match simulation); OpenEM derives it from the minute and the chance.
+std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, int goal_scenes,
                                                       const std::filesystem::path& data = {});
 
 // Builds the frame of one observed minute (season.cpp / competitions.cpp observer) from the day's matches. Boards follow
