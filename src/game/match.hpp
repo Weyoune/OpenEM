@@ -203,6 +203,11 @@ int squad_match_load(const HokTeam& team, const HumanSquad& human);
 // FUN_162c_0417: exact preparation/interval energy, including its unconditional decrement.
 void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, bool interval = false);
 
+// ovr030:34F6 (sub_46386): the players of a manager's team on the ice (current lines, running penalties) -> the skaters of
+// the record (+0x32), the pulled-goalie bit and the per-line counts DS:CC35 + 2 * manager
+void recount_skaters(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int penalties,
+                     int per_line[2]);
+
 // What the original's match display shows of one running match (ovl14_1dc7 / ovl14_0d46): pure bookkeeping of the minute,
 // no random numbers. Chances and goals per period count only in the regular time (ovl14_1dc7 checks minute < 61; the
 // overtime keeps the third period slot DS:4E28 = 2 but books nothing there); penalty_code is the live team byte +0x33.

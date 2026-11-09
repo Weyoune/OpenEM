@@ -528,11 +528,17 @@ struct PenaltySide {
     MatchStats* stats;
     int side;
     bool same_club = false;  // both sides are one club (the replayed cup final, REAL-CODE period 29)
+    std::function<void()> recount;  // a manager's side: sub_42FE1 ends with the recount of the players on the ice (sub_46386)
 };
 
 // ovl06_02d8: the paired call also ticks its side, as in the original.
 bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRandom& rng, bool tick = true) {
+    const int before_tick = side.box.running();
     const int running = tick ? side.box.tick(side.team, side.squad) : side.box.running();
+    // a timer ran out: the release (sub_42FE1) recounts the players on the ice, so an empty place in the line on the ice (an
+    // injured player still assigned) is not filled by the returning player (REAL-CODE period 45)
+    if (tick && running < before_tick && side.recount && !std::getenv("EM_OLD_TICKRECOUNT")) side.recount();
+    if (side.squad && std::getenv("EM_DEBUG_BOX")) std::fprintf(stderr, "pmin %s tick %d may_pair %d running %d at %zu\n", g_draw_scope, int(tick), int(may_pair), running, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     if (running > 1) return false;
     const int effort = side.human ? std::clamp(side.team.effort_current + side.human->penalty_effort_adjustment,
                                                0, 100) : side.team.effort_current;
@@ -565,6 +571,11 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     return true;
 }
 }  // namespace
+
+void recount_skaters(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int penalties,
+                     int per_line[2]) {
+    recount_on_ice(t, squad, players, penalties, per_line);
+}
 
 void apply_effort(HokTeam& t, int own, int opp) { apply_effort(t, own, opp, nullptr); }
 
@@ -802,6 +813,8 @@ struct MatchRun::Impl {
         apen = std::make_unique<PenaltySide>(PenaltySide{a, abox, ap ? &asq : nullptr, ap,
                                                           ap && ap->selection_rng ? *ap->selection_rng : (rng.borland ? *rng.borland : fallback_selection), st, 1});
         hpen->same_club = apen->same_club = same_club;
+        if (hp) hpen->recount = [this] { recount_on_ice(h, hsq, *hh2.players, hbox.running(), hh2.per_line); };
+        if (ap) apen->recount = [this] { recount_on_ice(a, asq, *ha2.players, abox.running(), ha2.per_line); };
         if (same_club) share_box();
     }
 
@@ -812,6 +825,7 @@ struct MatchRun::Impl {
     void share_box() {
         box_shared = true;
         apen = std::make_unique<PenaltySide>(PenaltySide{h, hbox, hp ? &hsq : nullptr, hp, hpen->selection_rng, stats, 1});
+        apen->recount = hpen->recount;
         hpen->same_club = apen->same_club = true;
     }
     void sync_away() { if (synced_away) a_own = h; }

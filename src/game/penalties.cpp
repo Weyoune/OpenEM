@@ -22,6 +22,7 @@ int penalty_effort_adjustment(const HokFile& h, int team) {
 
 int PenaltyOpportunities::record(int side, int skaters, int other_skaters, bool human, bool other_human) {
     if (side < 0 || side > 1) throw FormatError("Invalid penalty side");
+    if (std::getenv("EM_DEBUG_PK")) std::fprintf(stderr, "pk try side %d skaters %d/%d human %d/%d at %zu\n", side, skaters, other_skaters, int(human), int(other_human), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     if (std::abs(skaters - other_skaters) != 1) return -1;
     int token = -1;
     if (other_human) { power_plays[1 - side]++; token = 1 - side; }
@@ -103,6 +104,7 @@ bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSqu
 void PenaltyBox::release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* squad) {
     Entry& e = entries_[entry];
     if (!e.minutes) return;
+    if (squad && std::getenv("EM_DEBUG_BOX")) std::fprintf(stderr, "box release %s timer %d minutes %d major %d at %zu\n", team.name.c_str(), entry, e.minutes, int(e.major), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     e = Entry{};
     team.skaters++;
     if (squad) release_slot(entry, *squad);
@@ -160,6 +162,11 @@ void PenaltyBox::finish(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
         if (entries_[i].minutes) { entries_[i] = Entry{}; team.skaters++; }
     if (!squad) return;
     PenaltyTimers& t = *timers_;
+    if (std::getenv("EM_DEBUG_BOX")) {
+        std::fprintf(stderr, "box finish %s skaters %d timers slot %d/%d role %d/%d; role-0 lineup players:", team.name.c_str(), team.skaters, t.slot[0], t.slot[1], t.role[0], t.role[1]);
+        for (size_t s = 0; s < squad->size() && s < 29; s++) if ((*squad)[s].player >= 0 && (*squad)[s].role == 0 && (*squad)[s].line != 0) std::fprintf(stderr, " %zu", s);
+        std::fprintf(stderr, "\n");
+    }
     for (int i = 0; i < 2; i++) {
         if (t.slot[i] >= 0 && size_t(t.slot[i]) < squad->size()) (*squad)[size_t(t.slot[i])].role = t.role[i];
         t.slot[i] = -1;

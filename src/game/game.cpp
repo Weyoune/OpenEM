@@ -1517,6 +1517,18 @@ void Game::refresh_human_team() {
     // rerate (REAL-CODE period 30: 69/68/67/68 -> 65/65/63/63, the strength 256 of the summer bookings)
     if (wm_round_ > 0 && national_coach_ < 0 && !std::getenv("EM_OLD_WMREFRESH")) return;
     HokTeam& team = save_.teams[size_t(human_team_)];
+    // 162c:146c starts with the recount of the players on the ice (sub_46386 via 24A5E; running penalties counted by
+    // sub_42E90(team, 0)): after a game the record gets the count of the lines then on the ice (REAL-CODE period 45: 4 in
+    // the last minute with an injured player assigned, 5 after the evening lineup)
+    if (!std::getenv("EM_OLD_DAYRECOUNT")) {
+        const int running = ((team.penalty_code & 7) != 0) + (((team.penalty_code >> 4) & 7) != 0);
+        int per_line[2] = {line_counts_[0][0], line_counts_[0][1]};
+        recount_skaters(team, save_.squad, save_.players, running, per_line);
+        if (std::getenv("EM_DAYRECOUNT_LINES")) {  // the per-line counts DS:CC37 (written by the original as well; unverified here)
+            line_counts_[0][0] = uint8_t(per_line[0]); line_counts_[0][1] = uint8_t(per_line[1]);
+            human_.per_line[0] = per_line[0]; human_.per_line[1] = per_line[1];
+        }
+    }
     for (int kind = 0; kind < 2; kind++) {
         int sum[3] = {};
         for (int line = 0; line < 3; line++) {
@@ -3555,7 +3567,12 @@ void Game::advance_day() {
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
-    if (message_step_pending_) {  // ovr038:3019 / 3067 when the play step starts from the menu
+    // The day loop sub_6153F (ovr038:2E5E..3067) passes the manager block and the count-down before every day with a calendar
+    // event (byte not 0, 9 or 0xFF), also a cup / EuroCup / playoff day without a manager inside a play step; the WM branch
+    // (byte_32089) bypasses it (REAL-CODE period 44: two EuroCup days without the club count a general message down).
+    const uint8_t day_event = calendar_.event(day_ + 1);
+    const bool event_day = day_event != 0 && day_event != 9 && day_event != 0xFF && day_event != kEventWorldChampionship && !std::getenv("EM_OLD_MSGSTEP");
+    if (message_step_pending_ || event_day) {  // ovr038:3019 / 3067
         // ovr038:3006..3019: the sort only runs when the day has league games (calendar byte & 7) or a manager plays on
         // it (sub_24C41, var_1A); the count-down always (REAL-CODE period 30: no sort before the first WM day)
         const uint8_t ev = calendar_.event(day_ + 1);
