@@ -735,6 +735,13 @@ void Game::play_cup_day() {
     if (cup_round_ == 5 && cup_winner_ < 0 && cup_series_.size() == 1 && cup_game_ == 2 && !std::getenv("EM_OLD_FINALCLOSE") &&
         (cup_series_[0].wins_higher == 2 || cup_series_[0].wins_lower == 2)) {
         close_cup_final();
+        // the closing day still sets the match load of the managers like a cup day without them (REAL-CODE Köln period 36)
+        if (!std::getenv("EM_OLD_CLOSELOAD"))
+            for (int m = 0; m < managers_; m++) {
+                const ManagerState& mg = mgr_[size_t(m)];
+                if (mg.team >= 0 && mg.team < kHokTeams)
+                    save_.state.at(manager_block(m) + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mg.team)], mg.squad));
+            }
         return;
     }
     if (cup_draw_.empty() || (cup_winner_ >= 0 && !replay)) return;
