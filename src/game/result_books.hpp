@@ -13,8 +13,8 @@ void book_series(Bytes& state, int team, int side, int goals_for, int goals_agai
 // the current series of his club (state 0x9EC8 = max(0x9EC8, series of `team`)).
 void update_series_records(Bytes& state, int team);
 
-// Head-to-head results of the human club (state 0x8F88): the result enters the opponent's row.
-void book_head_to_head(Bytes& state, int home, int away, int home_goals, int away_goals, int human_team);
+// Head-to-head results of the human club of `manager` (state 0x8F88 + manager * 0x280): the result enters the opponent's row.
+void book_head_to_head(Bytes& state, int home, int away, int home_goals, int away_goals, int human_team, int manager = 0);
 
 // Club records of both teams (state 0xA11C, opponents 0x9F1C), ovl13_3e43.
 void book_records(Bytes& state, int home, int away, int home_goals, int away_goals);

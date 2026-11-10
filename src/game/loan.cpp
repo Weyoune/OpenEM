@@ -63,8 +63,8 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     save_.state.at(kPlayerBase + size_t(id - 1) * 33 + 0x1D) = uint8_t(mgr_[0].team);
     player->team = mgr_[0].team;
     if (inserted.shifted)
-        std::move_backward(injured_role_.begin() + inserted.slot, injured_role_.end() - 1, injured_role_.end());
-    injured_role_[size_t(inserted.slot)] = 0;
+        std::move_backward(mgr_[0].injured_role.begin() + inserted.slot, mgr_[0].injured_role.end() - 1, mgr_[0].injured_role.end());
+    mgr_[0].injured_role[size_t(inserted.slot)] = 0;
     native_remove_storage_row(save_, 4, int(slot), 10);
     save_.squad = hok_squad(save_, 0);
     brng_ = next;

@@ -309,6 +309,11 @@ struct HokFile {
     std::array<std::array<std::array<HokPairing, 3>, 5>, 2> wm_rounds{};      // [group][round]
     HokFinance finance;
     std::vector<HokSquadPlayer> squad;  // human manager (manager 0)
+    // Squads of the human managers 1..3 (blocks 1..3), decoded for the managers the save counts (state 0x0DC6) and empty
+    // otherwise; store_hok writes them back like `squad` (docs/MEHRSPIELER_PLAN.md step 3b). squad_of(m) gives either.
+    std::array<std::vector<HokSquadPlayer>, 3> other_squads;
+    std::vector<HokSquadPlayer>& squad_of(int m) { return m == 0 ? squad : other_squads.at(size_t(m - 1)); }
+    const std::vector<HokSquadPlayer>& squad_of(int m) const { return m == 0 ? squad : other_squads.at(size_t(m - 1)); }
 
     HokFile() = default;
     HokFile(const HokFile&) = delete;  // raw pointers refer to this object's `state`
@@ -334,7 +339,7 @@ HokFile clone_hok(const HokFile& source);
 std::vector<HokSquadPlayer> hok_squad(const HokFile& h, int manager);
 
 // Writes the decoded fields back into HokFile::state (teams, players, table rows, date,
-// matchdays, next pairings, table order, cup round and draw, squad records of manager 0). Fields
+// matchdays, next pairings, table order, cup round and draw, squad records of managers 0..3). Fields
 // that are not exact in the structs stay untouched: names, the foreigner flag, the table-row
 // copies at +0x09/+0x14/+0x18, squad salary (kept in DM), exhaustion (scaled), status, and all
 // money of HokFinance (scaled) - write those into `state` directly. Team and player records are
