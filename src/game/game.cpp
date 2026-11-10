@@ -741,6 +741,10 @@ void Game::play_cup_day() {
         }
     // a cup day on which every series is already decided plays no game: no live round, no spin (REAL-CODE period 49)
     empty_cup_day_ = draw.empty();
+    // a cup day on which only other clubs play (the human series is decided) skips the evening refresh too (REAL-CODE period 81:
+    // the weekly drift of the club record reaches the next day's month end, 146c refreshes only at the end of the step)
+    idle_cup_day_ = !draw.empty() && mgr_[0].team >= 0 && !std::getenv("EM_OLD_IDLECUP") &&
+                    std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == mgr_[0].team || p.away == mgr_[0].team; });
     if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) &&
         std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == mgr_[0].team || p.away == mgr_[0].team; })) {
         // without the human club the live round still starts with the match load of the human squad (manager +0xF0,
@@ -3941,9 +3945,9 @@ g_draw_scope = "stadium-week";
     // this at the menu only and leaves DS:0375 at 0 within a step (docs/DEVIATIONS.md); the saved mode DS:0376 is the same
     // in both, as the copy runs once per step (above), so the lineups agree (REAL-CODE periods 2-29).
     // after a cup day without a game the evening lineup runs, but the club record is not refreshed (REAL-CODE period 49)
-    skip_refresh_once_ = empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP");
+    skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_;
     prepare_human_lineup();
-    empty_cup_day_ = false;
+    empty_cup_day_ = idle_cup_day_ = false;
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
     // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
     // (DS:E1A4, ovr034:1CD2). REAL-CODE: both draws end every period of the original.
