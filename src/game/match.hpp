@@ -95,10 +95,12 @@ struct HumanSquad {
     BorlandRandom* selection_rng = nullptr;  // separate native stream for individual player selection
     PenaltyTimers* timers = nullptr;  // the manager's penalty timers DS:D096 (they outlive the match; nullptr: per match)
     int minimum_players = 0;  // career policy: 9; 0 permits isolated small-squad physics simulations
+    mutable bool goalie_found = true;  // DS:DE16+manager: the last defence line_strength call found a goalie on the ice
     std::function<void(bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working)> on_chance;  // scorer and assist pick of one chance of this manager team (ovl14_2349)
     std::function<void(bool goal, const HokTeam& scorer)> on_opponent_chance;  // the opponent's chance in the same match (ovl14_2349 looks up a manager of the scoring club)
     std::function<void(bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working)> on_shot;  // one shoot-out shot of this manager team (ovl14_2349 with param_3 = 1)
     std::function<void(int minute, int load, const HokTeam& team)> on_minute;  // per-minute injury check of the manager's match (ovr030:3706)
+    std::function<void(int conceded)> on_minute_end;  // after the chances of a minute (ovr030:2A47): goalie minutes and goals against
 };
 
 // Native independent control bytes DS:A6FB/A707 + manager (HOK 01FF/01F3).

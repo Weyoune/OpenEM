@@ -151,6 +151,7 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
     s1 /= 3;
     s2 /= 3;
     f /= 3;
+    if (kind == 0) hs.goalie_found = goalie_found;
     if (kind == 0 && (man_advantage < 0 || !goalie_found)) {
         s2 -= (45 - lo_nibbles) + (-1 - man_advantage) * 16;
         if (!goalie_found) s2 /= 3;
@@ -287,9 +288,21 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
 }
 
 // FUN_162c_23c4 for a computer match: does the chance of side 0 (home) or 1 (away) become a goal?
+bool chance_roll(const HokTeam& h, const HokTeam& a, int side, int minute, GameRandom& rng, int level,
+                 const HumanSquad* hh, const HumanSquad* ha, bool* shot, const int* kinds_h, const int* kinds_a);
+
+// 162c:277E..27BE: after the rolls, a chance against a manager's club whose last defence strength call found no goalie
+// on the ice (DS:DE16+manager == 0) is a goal in any case (REAL-CODE Koeln period 89: two away goals at Koeln without a draw).
 bool chance_is_goal(const HokTeam& h, const HokTeam& a, int side, int minute, GameRandom& rng, int level,
                     const HumanSquad* hh, const HumanSquad* ha, bool* shot = nullptr, const int* kinds_h = nullptr,
                     const int* kinds_a = nullptr) {
+    if (chance_roll(h, a, side, minute, rng, level, hh, ha, shot, kinds_h, kinds_a)) return true;
+    const HumanSquad* defending = side == 0 ? ha : hh;
+    return defending && !defending->goalie_found && !std::getenv("EM_OLD_NOGOALIE");
+}
+
+bool chance_roll(const HokTeam& h, const HokTeam& a, int side, int minute, GameRandom& rng, int level,
+                 const HumanSquad* hh, const HumanSquad* ha, bool* shot, const int* kinds_h, const int* kinds_a) {
     if (shot) *shot = false;
     const int ch = h.skaters - a.skaters, ca = a.skaters - h.skaters;
     // ovl06_1371 without recomputation (23c4): the per-kind values come from the goal-point step of the same minute (DS:E06E)
@@ -989,6 +1002,10 @@ struct MatchRun::Impl {
             sync_away();
             if (stats) stats->after_goal(1, equal, a.skaters, h.skaters, ap != nullptr, hp != nullptr);
         }
+        // ovr030:2A47: after the chance routine (whose 162c:2337 counts a goal against the goalkeepers on the ice) both teams
+        // add the minute to their goalkeepers with a role and a line (162c:068d)
+        if (hp && hp->on_minute_end) hp->on_minute_end(away_goal ? 1 : 0);
+        if (ap && ap->on_minute_end) ap->on_minute_end(home_goal ? 1 : 0);
         // ovl06_2522 (whole-program differential test): energy, line changes and effort only run for a match with a manager
         // (var_F); computer against computer matches skip them (their draws do not appear in the original's stream).
         // Order of the original minute (ovr030:2A47..2B64): energy, line-energy refresh, tactics mode (odd minutes, 162c:000b),

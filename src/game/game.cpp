@@ -563,6 +563,7 @@ void Game::play_league_day() {
         sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
         sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
         sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
+        if (!std::getenv("EM_OLD_GOALIEMIN")) sq.on_minute_end = [this, m](int conceded) { goalie_minute(conceded, m); };
     }
     std::vector<std::vector<std::pair<int, int>>> played;
     std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1..
@@ -574,6 +575,7 @@ void Game::play_league_day() {
         sq.on_minute = nullptr;
         sq.on_chance = nullptr;
         sq.on_opponent_chance = nullptr;
+        sq.on_minute_end = nullptr;
     }
     injuries_in_minutes_ = true;
     for (size_t d = 0; d < league_days.size(); d++) {
@@ -1219,6 +1221,28 @@ void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
             for (size_t i = 0; i < 4; i++) save_.state.at(0x025B + size_t(m) * 8 + kind * 4 + i) = active[i];
         }
         break;
+    }
+}
+
+// 162c:2337 (league only, byte_32092 == 7) and 162c:068d: every goalkeeper (player +0x18 == 0) of the manager's squad with a
+// role and a line gets the goal against (+0x03, up to 255) and the minute (player +0x1F). A goalkeeper injured in the match
+// keeps only the minutes he played (REAL-CODE Koeln period 89: hurt in minute 7, 6 minutes and 1 of 12 goals).
+void Game::goalie_minute(int conceded, int m) {
+    mgr_[size_t(m)].goalie_tracked = true;
+    auto& squad = save_.squad_of(m);
+    for (size_t slot = 0; slot < squad.size(); slot++) {
+        auto& sp = squad[slot];
+        if (sp.player < 0 || sp.role == 0 || sp.line == 0) continue;
+        auto& player = save_.players[size_t(sp.player)];
+        if (player.position != 0) continue;
+        if (conceded && sp.league_goals_byte < 0xFF) {
+            sp.goals_against = sp.league_goals_byte = sp.league_goals_byte + 1;
+            save_.state.at(squad_block(m) + slot * kSquadRecord + 3) = uint8_t(sp.league_goals_byte);
+        }
+        const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
+        const int value = le16(save_.state, at) + 1;
+        save_.state.at(at) = uint8_t(value);
+        save_.state.at(at + 1) = uint8_t(value >> 8);
     }
 }
 
@@ -2789,12 +2813,13 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
         sp.status = SquadStatus::Team;
         if (!league_statistics) continue;
         player.league_games = uint8_t(player.league_games + 1);
-        if (player.position == 0 && !goalkeeper_booked) {
+        if (player.position == 0 && !goalkeeper_booked && !mgr_[size_t(m)].goalie_tracked) {
             sp.goals_against = sp.league_goals_byte = std::min(255, sp.league_goals_byte + goals_against);
             add_assists(player, 60);  // a goalkeeper's +0x1F stores minutes, not assists
             goalkeeper_booked = true;
         }
     }
+    if (m >= 0 && m < kMaxManagers) mgr_[size_t(m)].goalie_tracked = false;
 }
 
 bool Game::book_forfeit(const MatchStats& stats, int manager) {

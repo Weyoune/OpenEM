@@ -397,6 +397,7 @@ private:
     void prepare_human_lineup(bool restore_saved_mode = true, int m = 0);
     void match_injuries(int m = 0);
     void injury_minute(int load, const HokTeam* on_ice = nullptr, int m = 0);  // ovl06_364f for one minute of the human club's match
+    void goalie_minute(int conceded, int m);  // 162c:068d / 162c:2337 at the end of a league match minute
     void make_offers(int m = 0);
     void restore_offers(int m = 0);
     void expire_contracts(int m = 0);
@@ -469,6 +470,7 @@ private:
         std::vector<ManagerOffer> transfer_offers;  // open interests of computer clubs in his players
         std::array<int, 30> injured_role{};    // role (+0x0A) of an injured player before he got hurt
         std::array<bool, 30> hurt_in_match{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
+        bool goalie_tracked = false;  // the running league match booked goalie minutes and goals against minute by minute
     };
     std::array<ManagerState, 4> mgr_{};
     int active_manager_ = 0;  // the manager the UI actions act for (step 5); the day loop plays all managers
