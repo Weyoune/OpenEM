@@ -36,14 +36,14 @@ void ClassicApplication::click_statistics(int x,int y,bool right){
         // ovr028:493A..499C: a press latches the arrow (sub_586C8 without wait) and keeps the list scrolling
         // while the button is held; the list bands scroll at the current pointer position.
         const bool arrow=x>=0xA5&&x<=0xA5+8&&y>=0x1E&&y<=0x27+8&&classic_stats_history_scroll(x,y)!=0;
-        stats_hold_=StatsHold{arrow,x,y,SDL_GetTicks64()+kStatsRepeatMs};
+        stats_hold_=StatsHold{arrow,x,y,classic_ticks()+kStatsRepeatMs};
     }else if(stats_page_==2){
         // ovr028:25A6..25D4: the upper arrow (-1 from sub_586C8) moves to the next year, the lower one back;
         // without a press check, so a held arrow repeats.
         const int years=classic_stats_club_years(snapshot()),arrow=classic_stats_club_arrow(x,y);
         if(years&&arrow==1&&stats_scroll_<years-1)++stats_scroll_;
         else if(years&&arrow==-1&&stats_scroll_>0)--stats_scroll_;
-        if(arrow)stats_hold_=StatsHold{true,x,y,SDL_GetTicks64()+kStatsRepeatMs};
+        if(arrow)stats_hold_=StatsHold{true,x,y,classic_ticks()+kStatsRepeatMs};
     }else if(stats_page_==3){
         const int button=classic_stats_players_button(x,y);
         if(button>=0&&button<3)stats_mode_=button;
