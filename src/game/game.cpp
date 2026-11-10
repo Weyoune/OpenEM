@@ -2443,6 +2443,30 @@ void Game::play_playoff_day(bool setup_only) {
             }
         }
     }
+    // after the games a play-off day without the human club rests like a EuroCup day without him: all 64 club records
+    // energy 90 (the managed clubs keep their mode, the teams of today's quick games too), the squad fitness from the load
+    // (rested_fitness), DS:A88D = FF (REAL-CODE Köln period 35: after the cup final Köln and Berlin, finalist of the
+    // play-offs, stand at 90 on 30.03.; in the Mannheim chain everything was rested long before, so it did not show)
+    if (!human_today && !std::getenv("EM_OLD_PODAYREST")) {
+        for (int team = 0; team < 64; team++) {
+            HokTeam& t = save_.teams[size_t(team)];
+            const int mode = manager_team(team) ? (t.flags & 0x07) : 0;
+            prepare_match_energy(t, nullptr);
+            t.flags |= mode;
+        }
+        for (int m = 0; m < managers_; m++) {
+            const ManagerState& mg = mgr_[size_t(m)];
+            if (mg.team < 0 || mg.team >= kHokTeams) continue;
+            auto& own_squad = save_.squad_of(m);
+            for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                if (save_.state.at(squad_block(m) + slot * kSquadRecord + 0x0F) == 0) continue;
+                const uint8_t f = rested_fitness(save_.state.at(squad_block(m) + slot * kSquadRecord + 0x13));
+                save_.state.at(squad_block(m) + slot * kSquadRecord + 0x1B) = f;
+                own_squad[slot].fitness = f;
+            }
+        }
+        save_.state.at(0x784) = 0xFF;
+    }
     if (stage == 2 && series_.size() == 1 && champion_ < 0 && (series_[0].wins_higher == 3 || series_[0].wins_lower == 3)) {
         champion_ = series_[0].winner();
         log_.push_back("German champion: " + save_.teams[size_t(champion_)].name);
@@ -4293,11 +4317,13 @@ g_draw_scope = "weekly-injuries-offers-training";
         // DS:A70E is the manager loop index of the original; the menu loop leaves it at 0 (ovr037 376d3, REAL-CODE period 29)
         if (national_coach_ < 0) save_.state.at(0x0788) = 0;
         // the club menu refreshes the copies of the table (REAL-CODE period 28); before a WM day it is not entered (period 29);
-        // before a play-off day the copies keep the 43rd matchday (REAL-CODE Köln period 33)
-        if (next_event != kEventWorldChampionship && (next_event != kEventPlayoff || std::getenv("EM_OLD_PLAYOFFCOPY"))) {
+        // after the last league day the copies keep the 43rd matchday for the rest of the season, also at the menus before
+        // play-off and cup days (REAL-CODE Köln periods 33 and 35)
+        const bool season_over = matchday_[0] > 4 * (kHokLeagueSize - 1) && !std::getenv("EM_OLD_PLAYOFFCOPY");
+        if (next_event != kEventWorldChampionship && !season_over) {
             write_table_copies(save_.state, table_rows());
             table_copies_frozen_ = league_since_refresh_ = false;
-        } else if (next_event == kEventPlayoff && league_since_refresh_) {
+        } else if (season_over && league_since_refresh_) {
             table_copies_frozen_ = true;
         }
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
