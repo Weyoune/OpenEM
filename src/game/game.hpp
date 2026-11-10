@@ -406,6 +406,10 @@ private:
     bool interactive_played_ = false;
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
     std::array<bool, kMaxManagers> idle_cup_day_{};  // a cup day with games, none of them this manager club's
+    // the recovery of a managed cup game that was not played on a squad day comes with the next squad day (REAL-CODE Köln
+    // period 4); not stored in checkpoints (a save between the cup day and the squad day loses it)
+    struct PendingCupRecovery { int amount = 0; int teams[2] = {-1, -1}; };
+    std::array<PendingCupRecovery, kMaxManagers> pending_cup_recovery_{};
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
     std::vector<std::string> manager_news_;
     std::vector<std::string> immediate_messages_;

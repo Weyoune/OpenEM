@@ -894,7 +894,12 @@ void Game::play_cup_day() {
             // original treats index 0 as an empty marker, as with the running penalties; REAL-CODE period 63 against
             // periods 6 and 34, same day and game index)
             const bool squad_day = (day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0 || (opponent == 0 && !std::getenv("EM_OLD_CUPREC"));
-            const int recover = squad_day ? 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0) : 0;
+            const int full_recover = 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0);
+            const int recover = squad_day ? full_recover : 0;
+            // EXPERIMENT (off): Köln period 4 recovers on the next squad day, Mannheim periods 6, 34 and 96 in the same
+            // calendar position do not; the condition is open (docs/DEVIATIONS.md)
+            if (!squad_day && full_recover > 0 && std::getenv("EM_TRY_CUPRECDEFER"))
+                pending_cup_recovery_[size_t(m)] = {full_recover, {opponent, own_team}};
             if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d day %d game %d round %d next-event %d prev-event %d weekday-mod7 %d year %d\n", played, recover, day_, cup_game_, cup_round_, int(calendar_.event(day_ + 1)), int(calendar_.event(day_ - 1)), day_ % 7, save_.year);
             if (recover > 0) {
                 for (int team : {opponent, own_team})
@@ -3954,6 +3959,15 @@ void Game::advance_day() {
     if (!std::getenv("EM_OLD_WMBEGIN") && calendar_.event(day_) == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
         for (int m = 0; m < managers_; m++)
             if (national_coach_ != m) save_.state.at(manager_block(m) + 0xF3) = 0;
+    // the first play step of a fresh game (START.HOK, day 0): the original leaves all 150 teams with line energy 90 and the
+    // upper bytes of DS:A88D at FF (the new-game routine writes 0 there; REAL-CODE Köln period 1; the Mannheim chain only
+    // started from a state the original had already played, mid1.HOK)
+    if (day_ == 0 && !std::getenv("EM_OLD_FIRSTINIT")) {
+        for (HokTeam& team : save_.teams)
+            for (auto& kind : team.energy)
+                for (auto& e : kind) e = 90;
+        for (size_t i = 0x785; i < 0x788; i++) save_.state.at(i) = 0xFF;
+    }
     const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
     // The day loop sub_6153F (ovr038:2E5E..3067) passes the manager block and the count-down before every day with a calendar
     // event (byte not 0, 9 or 0xFF), also a cup / EuroCup / playoff day without a manager inside a play step; the WM branch
@@ -4084,6 +4098,21 @@ g_draw_scope = "match-injuries";
     // (ovr038:33FA..3443, Amiga 17752..17764).
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
+        for (int m = 0; m < managers_; m++) {
+            PendingCupRecovery& p = pending_cup_recovery_[size_t(m)];
+            if (p.amount <= 0) continue;
+            for (int team : p.teams)
+                if (team >= 0)
+                    for (auto& kind : save_.teams[size_t(team)].energy)
+                        for (auto& e : kind) e = uint8_t(std::min(90, e + p.amount));
+            auto& squad = save_.squad_of(m);
+            for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                uint8_t& f = save_.state.at(squad_block(m) + slot * kSquadRecord + 0x1B);
+                f = uint8_t(std::min(90, int(f) + p.amount));
+                squad[slot].fitness = f;
+            }
+            p = {};
+        }
         talent_search_week();  // ovr038:33FA, before 162c:1c5b and 146e:0c89
         weekly_team_drift();
         if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: weekly at day %d event(today) %d event(next) %d league_day(next) %d\n", day_, int(calendar_.event(day_)), int(calendar_.event(day_ + 1)), int(calendar_.league_day(day_ + 1)));

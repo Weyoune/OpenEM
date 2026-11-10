@@ -256,6 +256,9 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             }
             team.skaters = m.skaters;
             team.penalty_code = m.penalty_code;
+            // as in the league (season.cpp): only team record 0 ends its running penalties with the game (REAL-CODE Köln
+            // period 3: DEB cup Memmingen... tie 5-0, team 0 with a 10 at the end keeps 5 skaters and +0x33 = 0)
+            if (&team == &teams[0] && team.penalty_code && !std::getenv("EM_OLD_CUPTEAM0")) { team.penalty_code = 0; team.skaters = std::max(team.skaters, 5); }
             for (int i = 0; i < kTacticSituations; i++) {
                 team.effort[i] = m.effort[i];
                 team.offence[i] = m.offence[i];
