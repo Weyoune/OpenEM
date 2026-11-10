@@ -1,0 +1,103 @@
+# Version 1.0 acceptance run (tests/classic_season_run_tests.cpp, ui/classic_script.hpp): a new game played
+# through the classic UI, headless, with the virtual clock and the fixed session seed.
+# Coordinates: main-menu tiles at (43 + 77*col, 108 + 60*row), sub-menu items at (26 + 53*item, 220),
+# Gemischtes = tile 6 (197,168), Laden = item 0, Speichern = item 1; the file name field at (150,199).
+
+# --- New game: face and name in row 0, a club, "Los jetzt!" ----------------------------------------------
+expect screen=NewManager
+click 20 60
+click 210 60
+type TESTER
+key return
+click 150 60
+click 210 60
+click 280 213
+expect screen=Main
+expect date=09.09.1993
+render new-game.bmp
+
+# --- every page of the main menu once ---------------------------------------------------------------------
+tour
+
+# --- first half of the season, then save and load as .OEM --------------------------------------------------
+play until date>=15.12.1993
+main
+click 197 168
+click 79 220
+expect screen=Files
+click 150 199
+type RUN1.OEM
+key return
+expect screen=Main
+main
+click 197 168
+click 26 220
+expect screen=Files
+click 150 199
+type D:\RUN1.OEM
+key return
+expect screen=Main
+expect date>=15.12.1993
+echo OEM geladen
+
+# --- on to the play-offs, then save and load as native .HOK -------------------------------------------------
+play until date>=01.03.1994
+main
+click 197 168
+click 79 220
+click 150 199
+type RUN1.HOK
+key return
+expect screen=Main
+main
+expect date=21.03.1994
+# the original refuses a save of the same day ("Keinen heutigen Spielstand laden !", timed notice)
+click 197 168
+click 26 220
+click 150 199
+type D:\RUN1.HOK
+key return
+expect notice~Keinen heutigen
+main
+# the guard holds for every save of the running program; after a restart (with the AUTOSAVE.HOK of the game)
+# the save loads through the file dialog and the game goes back to its day
+restart AUTOSAVE.HOK
+main
+click 197 168
+click 26 220
+click 150 199
+type D:\RUN1.HOK
+key return
+expect screen=Main
+expect date=21.03.1994
+echo HOK geladen
+tour
+
+# --- end of the first season: review and its messages, summer, into the second season -----------------------
+play until modal=review-overview
+render review1-overview.bmp
+click 160 120
+render review1.bmp
+play until date>=20.09.1994
+main
+expect idle
+tour
+
+# --- second season: the contracts of the first season run out at its end -------------------------------------
+# one player is let go ("Lass' ich!"), the others get the one-year proposal ("Mach' ich!")
+contracts no 1
+play until modal=contract-question
+render contract-question.bmp
+play until modal=review-overview
+render review2-overview.bmp
+click 160 120
+render review2.bmp
+# the passive manager ends the second season deep in debt: the financial license is withdrawn (insolvency;
+# the original has no page of its own for it, docs/logic/MELDUNGEN.md)
+expect news~financial license withdrawn
+play until date>=20.09.1995
+main
+expect idle
+tour
+render season3.bmp
+echo Ende des Laufs

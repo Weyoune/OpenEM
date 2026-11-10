@@ -157,7 +157,7 @@ bool Session::advance_day() {
         q.player = player.player;
         q.name = player.player >= 0 ? next->save().players.at(size_t(player.player)).name : "Spieler";
         q.age = player.age;
-        q.monthly_salary = demand + demand / 10;
+        q.monthly_salary = demand;  // the proposal of ovl02_0000 (raw)
         contract_question_ = std::move(q);
         throw NeedContract{};
     });
@@ -187,7 +187,7 @@ bool Session::next_day_has_match() const {
 
 bool Session::answer_contract(bool renew) {
     if (!contract_question_) throw std::logic_error("Keine Vertragsentscheidung offen.");
-    contract_answers_.push_back(renew ? 2 : 0);
+    contract_answers_.push_back(renew ? 1 : 0);  // "Mach' ich!" takes the unchanged one-year proposal (Game::expire_contracts)
     contract_question_.reset();
     return advance_day();
 }

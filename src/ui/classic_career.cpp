@@ -108,6 +108,13 @@ bool ClassicApplication::career_key(int) {
     return true;
 }
 
+std::string ClassicApplication::career_modal() const {
+    if (!career_) return {};
+    if (career_->messages.active()) return "messages";
+    if (career_->review) return career_->review_overview ? "review-overview" : "review";
+    return {};
+}
+
 void ClassicApplication::draw_career() {
     if (!career_ || !session_.loaded() || screen_ != ClassicScreen::Main) return;
     if (career_->review) {

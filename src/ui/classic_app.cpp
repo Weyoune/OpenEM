@@ -24,7 +24,10 @@ constexpr auto mini=ClassicFontId::Mini, flow=ClassicFontId::Flow;
 constexpr uint64_t kMatchBannerMs=900;
 bool inside(int x,int y,int l,int t,int r,int b) {return x>=l&&x<=r&&y>=t&&y<=b;}
 std::string upper(std::string s){for(char& c:s)c=char(std::toupper(static_cast<unsigned char>(c)));return s;}
+uint64_t (*ui_clock)()=nullptr;
 }
+uint64_t classic_ticks(){return ui_clock?ui_clock():SDL_GetTicks64();}
+void set_classic_clock(uint64_t (*clock)()){ui_clock=clock;}
 
 ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::path& initial)
     :data_(std::move(data)),saves_(std::move(saves)),session_(data_),canvas_(data_),roster_help_(read_file(data_/"EM.EXE")),transfer_help_(read_file(data_/"EM.EXE")),calendar_(load_season_calendar(read_file(data_/"EM.EXE"))),schedule_(load_schedule_tables(read_file(data_/"EM.EXE"))) {
@@ -61,7 +64,7 @@ void ClassicApplication::timed_native_notice(std::string text,bool return_main){
     notice(std::move(text));native_notice_return_main_=return_main;
     //199F:08C8 mode75 ->2115:019E divides by3, then waits25 BIOS ticks.
     //PIT1193182Hz /65536 gives a rounded-up wall interval of1374ms.
-    native_notice_until_=SDL_GetTicks64()+1374;
+    native_notice_until_=classic_ticks()+1374;
 }
 void ClassicApplication::action(const std::function<ActionResult(Game&)>& fn){
     try{const auto result=session_.apply(fn);invalidate();if(!result.message.empty())notice(result.message);}
@@ -94,11 +97,11 @@ void ClassicApplication::begin_match_view(){
     // DS:0226 = flag 9, only the final lines)
     const GameSettings settings=session_.game().settings();
     match_frames_=classic_board_messages(classic_goal_flashes(std::move(frames)),settings.speed,settings.flags[9],canvas_.data());match_frame_=0;replay_key_=false;
-    match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_frame_ms(match_frames_[0],session_.game().settings().speed));
+    match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[0],session_.game().settings().speed));
 }
 bool ClassicApplication::tick_match_view(){
     if(match_frames_.empty())return false;
-    const uint64_t now=SDL_GetTicks64();
+    const uint64_t now=classic_ticks();
     if(match_frames_[match_frame_].cup_table)return true;  // the cup table waits for a click (FUN_199f_0118)
     if(now<match_frame_until_)return true;
     if(match_frames_[match_frame_].after_scene){
@@ -118,7 +121,7 @@ bool ClassicApplication::tick_match_view(){
 }
 void ClassicApplication::tick(){
     if(native_notice_until_){
-        if(SDL_GetTicks64()<*native_notice_until_)return;
+        if(classic_ticks()<*native_notice_until_)return;
         finish_timed_native_notice();
     }
     if(!advancing_)update_roster_hover();
@@ -126,7 +129,7 @@ void ClassicApplication::tick(){
     if(!advancing_)check_new_messages();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
     if(match_banner_until_){
-        if(SDL_GetTicks64()<*match_banner_until_)return;
+        if(classic_ticks()<*match_banner_until_)return;
         match_banner_until_.reset();
     }
     try{
@@ -136,7 +139,7 @@ void ClassicApplication::tick(){
         }
         // The original announces the own league match with a banner before the day is played.
         if(match_day&&match_banner_day_!=session_.game().season_day()&&calendar_.league_day(session_.game().season_day()+1)){
-            match_banner_day_=session_.game().season_day();match_banner_until_=SDL_GetTicks64()+kMatchBannerMs;return;
+            match_banner_day_=session_.game().season_day();match_banner_until_=classic_ticks()+kMatchBannerMs;return;
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
         prepare_match_view(match_day);
@@ -257,7 +260,7 @@ void ClassicApplication::click(int x,int y,bool right){
             while(next<match_frames_.size()&&!match_frames_[next].cup_table)next++;
         }
         if(next>=match_frames_.size()){match_frames_.clear();return;}
-        match_frame_=next;match_frame_until_=SDL_GetTicks64()+uint64_t(classic_match_frame_ms(match_frames_[next],session_.game().settings().speed));
+        match_frame_=next;match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[next],session_.game().settings().speed));
         return;
     }
     if(native_notice_until_)return;
@@ -284,7 +287,8 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(session_.contract_question()){
         if(!right&&(inside(x,y,96,167,151,177)||inside(x,y,166,167,221,177))){
-            try{pending_match_frames_.clear();if(session_.answer_contract(x<160))begin_match_view();invalidate();advance_first_=false;}
+            // the last answer completes the day: as in tick, the season review and its messages follow
+            try{pending_match_frames_.clear();if(session_.answer_contract(x<160)){invalidate();show_manager_news();begin_match_view();}invalidate();advance_first_=false;}
             catch(const std::exception&e){notice(e.what());}
         }
         return;
@@ -655,7 +659,7 @@ void ClassicApplication::draw_dialog(){
     }else if(session_.contract_question()){
         const auto& q=*session_.contract_question();
         canvas_.text(mini,105,141,q.name,7,0,210);
-        canvas_.text(mini,105,149,"Neuer Vertrag für 2 Jahre",7,0,210);
+        canvas_.text(mini,105,149,"Neuer Vertrag für 1 Jahr",7,0,210);
         canvas_.text(mini,105,157,money(q.monthly_salary)+" / Monat",7,0,210);
     }else{
         std::vector<std::string> lines;
