@@ -53,7 +53,7 @@ enum Cmd : UINT {
     ID_HELP_ABOUT = 140,
     IDC_TOOLBAR = 201, IDC_LIST, IDC_STATUS, IDC_TAB,
     IDC_TRACK_R = 210, IDC_TRACK_G, IDC_TRACK_B,
-    IDC_PALSEL = 400, IDC_CREST_PEN = 420, IDC_CREST_FILL, IDC_CREST_UNDO, IDC_CREST_SAVE,
+    IDC_PALSEL = 400, IDC_CREST_PEN = 420, IDC_CREST_FILL, IDC_CREST_UNDO, IDC_CREST_SAVE, IDC_CREST_ZOUT, IDC_CREST_ZIN,
     IDC_CLUB = 300, IDC_NAME0 = 310, IDC_FOR0 = 340, IDC_CREST = 370, IDC_PLACE, IDC_STR0 = 372, IDC_JER0 = 380, IDC_SWAP_BTN = 390, IDC_SWAP_COMBO,
 };
 
@@ -73,7 +73,7 @@ int floordiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 struct TeamUi {
     HWND club = nullptr, name[25] = {}, foreign[25] = {}, crest = nullptr, crest_ud = nullptr, place = nullptr, place_ud = nullptr;
     HWND str[3] = {}, str_ud[3] = {}, jer[3] = {}, jer_lbl[3] = {}, preview = nullptr, swap_combo = nullptr, swap_btn = nullptr;
-    HWND crest_view = nullptr, cr_pen = nullptr, cr_fill = nullptr, cr_undo = nullptr, cr_save = nullptr;
+    HWND crest_view = nullptr, cr_pen = nullptr, cr_fill = nullptr, cr_undo = nullptr, cr_save = nullptr, cr_zout = nullptr, cr_zin = nullptr;
     HWND lbl_club = nullptr, lbl_crest = nullptr, lbl_place = nullptr, lbl_str[3] = {}, lbl_jersey = nullptr, lbl_swap = nullptr, lbl_players = nullptr;
     std::vector<HWND> all;  // every control of the page, for show/hide and fonts
 };
@@ -96,6 +96,7 @@ struct App {
     std::unique_ptr<TeamDoc> team;
     TeamUi tu;
     int team_sel = 0;
+    int crest_zoom = 5, cscroll_x = 0, cscroll_y = 0;  // crest editor view
     bool loading_team = false;
     em::Image crest_img;
     int crest_no = -1;
@@ -819,12 +820,14 @@ void create_team_controls(App& a) {
     u.lbl_swap = make(L"STATIC", L"Mannschaft tauschen mit", 0, 0, 0);
     u.swap_combo = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, IDC_SWAP_COMBO);
     u.swap_btn = make(L"BUTTON", L"Tauschen", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_SWAP_BTN);
-    u.crest_view = CreateWindowExW(WS_EX_CLIENTEDGE, kCrestClass, nullptr, WS_CHILD, 0, 0, 0, 0, a.main, nullptr, a.inst, nullptr);
+    u.crest_view = CreateWindowExW(WS_EX_CLIENTEDGE, kCrestClass, nullptr, WS_CHILD | WS_HSCROLL | WS_VSCROLL, 0, 0, 0, 0, a.main, nullptr, a.inst, nullptr);
     u.all.push_back(u.crest_view);
     u.cr_pen = make(L"BUTTON", L"Stift", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_PEN);
     u.cr_fill = make(L"BUTTON", L"Füllen", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_FILL);
     u.cr_undo = make(L"BUTTON", L"Rückgängig", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_UNDO);
     u.cr_save = make(L"BUTTON", L"Wappen speichern", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_SAVE);
+    u.cr_zout = make(L"BUTTON", L"Zoom −", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_ZOUT);
+    u.cr_zin = make(L"BUTTON", L"Zoom +", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_ZIN);
     for (HWND w : u.all) SendMessage(w, WM_SETFONT, (WPARAM)a.font, TRUE);
 }
 
@@ -834,27 +837,29 @@ void show_team(App& a, bool on) {
 
 void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
     TeamUi& u = a.tu;
-    (void)h;
     if (!u.club) return;
-    const int m = a.px(14), rowh = a.px(28), eh = a.px(23);
+    const int m = a.px(14), rowh = a.px(28), eh = a.px(23), prow = a.px(25);
     MoveWindow(u.lbl_club, x + m, y + m + a.px(3), a.px(50), eh, TRUE);
     MoveWindow(u.club, x + m + a.px(54), y + m, a.px(280), eh, TRUE);
     MoveWindow(u.lbl_players, x + m, y + m + rowh + a.px(8), a.px(300), eh, TRUE);
     const int colw = (w - 3 * m) / 2, top = y + m + 2 * rowh + a.px(8);
     for (int i = 0; i < 25; i++) {
         const int col = i < 13 ? 0 : 1, row = i < 13 ? i : i - 13;
-        const int cx = x + m + col * (colw + m), cy = top + row * rowh;
+        const int cx = x + m + col * (colw + m), cy = top + row * prow;
         MoveWindow(u.name[i], cx, cy, colw - a.px(64), eh, TRUE);
         MoveWindow(u.foreign[i], cx + colw - a.px(58), cy, a.px(58), eh, TRUE);
     }
     {   // crest editor under the players
-        const int ch = a.px(176), cy0 = top + 13 * rowh + a.px(10);
-        MoveWindow(u.crest_view, x + m, cy0, a.px(330), ch, TRUE);
-        const int bx = x + m + a.px(344), bw = a.px(150);
+        const int cy0 = top + 13 * prow + a.px(8), ch = std::max(a.px(120), y + h - cy0 - a.px(6));
+        const int bw = a.px(150), cwid = std::max(a.px(300), w - 2 * m - bw - a.px(12));
+        MoveWindow(u.crest_view, x + m, cy0, cwid, ch, TRUE);
+        const int bx = x + m + cwid + a.px(12), half = (bw - a.px(6)) / 2;
         MoveWindow(u.cr_pen, bx, cy0, bw, eh, TRUE);
         MoveWindow(u.cr_fill, bx, cy0 + rowh, bw, eh, TRUE);
         MoveWindow(u.cr_undo, bx, cy0 + 2 * rowh, bw, eh, TRUE);
-        MoveWindow(u.cr_save, bx, cy0 + 3 * rowh + a.px(8), bw, eh + 2, TRUE);
+        MoveWindow(u.cr_zout, bx, cy0 + 3 * rowh, half, eh, TRUE);
+        MoveWindow(u.cr_zin, bx + half + a.px(6), cy0 + 3 * rowh, half, eh, TRUE);
+        MoveWindow(u.cr_save, bx, cy0 + 4 * rowh + a.px(8), bw, eh + 2, TRUE);
     }
     // right column
     const int cx = rx + a.px(12), cw = rw - a.px(24), nw = a.px(70);
@@ -1031,21 +1036,60 @@ void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {
 
 // ------------------------------------------------------------------------------------------ crest editor
 // A small pixel editor for the crest of the selected team (KB80 + crest), embedded in the team page.
+// The picture has its own zoom (2x..16x) and scroll bars; the palette stays at the right edge.
 
 struct CrestGeo {
-    int x, y, zoom, pal_x, pal_y, cell;
+    int x, y, zoom, view_w, view_h, pal_x, pal_y, cell;
 };
 
 CrestGeo crest_geo(App& a) {
+    RECT r;
+    GetClientRect(a.tu.crest_view, &r);
     const auto& img = a.crest_ed->image();
     CrestGeo g{};
-    g.x = a.px(6);
-    g.y = a.px(6);
-    g.zoom = a.px(4);
+    g.zoom = a.px(a.crest_zoom);
     g.cell = a.px(8);
-    g.pal_x = g.x + std::max(1, img.width) * g.zoom + a.px(14);
-    g.pal_y = g.y;
+    const int m = a.px(6);
+    g.pal_x = std::max(m, int(r.right) - 16 * g.cell - m);
+    g.pal_y = m;
+    g.view_w = std::max(1, g.pal_x - a.px(10));
+    g.view_h = int(r.bottom);
+    const int iw = img.width * g.zoom, ih = img.height * g.zoom;
+    g.x = iw + 2 * m <= g.view_w ? m + (g.view_w - 2 * m - iw) / 2 : m - a.cscroll_x;
+    g.y = ih + 2 * m <= g.view_h ? m + (g.view_h - 2 * m - ih) / 2 : m - a.cscroll_y;
     return g;
+}
+
+void update_crest_scroll(App& a) {
+    HWND h = a.tu.crest_view;
+    if (!h) return;
+    if (a.crest_ed->current() < 0) {
+        ShowScrollBar(h, SB_BOTH, FALSE);
+        return;
+    }
+    const auto& img = a.crest_ed->image();
+    for (int pass = 0; pass < 2; pass++) {
+        CrestGeo g = crest_geo(a);
+        const int m = a.px(6), tw = img.width * g.zoom + 2 * m, th = img.height * g.zoom + 2 * m;
+        a.cscroll_x = std::clamp(a.cscroll_x, 0, std::max(0, tw - g.view_w));
+        a.cscroll_y = std::clamp(a.cscroll_y, 0, std::max(0, th - g.view_h));
+        SCROLLINFO si{sizeof si, SIF_RANGE | SIF_PAGE | SIF_POS};
+        si.nMin = 0;
+        si.nMax = tw - 1;
+        si.nPage = UINT(g.view_w);
+        si.nPos = a.cscroll_x;
+        SetScrollInfo(h, SB_HORZ, &si, TRUE);
+        si.nMax = th - 1;
+        si.nPage = UINT(g.view_h);
+        si.nPos = a.cscroll_y;
+        SetScrollInfo(h, SB_VERT, &si, TRUE);
+    }
+}
+
+void set_crest_zoom(App& a, int z) {
+    a.crest_zoom = std::clamp(z, 2, 16);
+    update_crest_scroll(a);
+    InvalidateRect(a.tu.crest_view, nullptr, FALSE);
 }
 
 void paint_crest(App& a, HWND h) {
@@ -1075,21 +1119,26 @@ void paint_crest(App& a, HWND h) {
         bi.bmiHeader.biHeight = -img.height;
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
+        SaveDC(mem);
+        IntersectClipRect(mem, 0, 0, g.view_w, g.view_h);  // the picture scrolls inside its viewport
         SetStretchBltMode(mem, COLORONCOLOR);
         StretchDIBits(mem, g.x, g.y, img.width * g.zoom, img.height * g.zoom, 0, 0, img.width, img.height, bits.data(), &bi,
                       DIB_RGB_COLORS, SRCCOPY);
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 158));
-        HGDIOBJ op = SelectObject(mem, pen);
-        for (int x = 0; x <= img.width; x++) {
-            MoveToEx(mem, g.x + x * g.zoom, g.y, nullptr);
-            LineTo(mem, g.x + x * g.zoom, g.y + img.height * g.zoom);
+        if (g.zoom >= 4) {
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 158));
+            HGDIOBJ op = SelectObject(mem, pen);
+            for (int x = 0; x <= img.width; x++) {
+                MoveToEx(mem, g.x + x * g.zoom, g.y, nullptr);
+                LineTo(mem, g.x + x * g.zoom, g.y + img.height * g.zoom);
+            }
+            for (int y = 0; y <= img.height; y++) {
+                MoveToEx(mem, g.x, g.y + y * g.zoom, nullptr);
+                LineTo(mem, g.x + img.width * g.zoom, g.y + y * g.zoom);
+            }
+            SelectObject(mem, op);
+            DeleteObject(pen);
         }
-        for (int y = 0; y <= img.height; y++) {
-            MoveToEx(mem, g.x, g.y + y * g.zoom, nullptr);
-            LineTo(mem, g.x + img.width * g.zoom, g.y + y * g.zoom);
-        }
-        SelectObject(mem, op);
-        DeleteObject(pen);
+        RestoreDC(mem, -1);
         for (int i = 0; i < 256; i++) {
             const auto& c = pal.rgb[size_t(i)];
             HBRUSH b = CreateSolidBrush(RGB(c[0], c[1], c[2]));
@@ -1103,8 +1152,10 @@ void paint_crest(App& a, HWND h) {
         InflateRect(&sr, 1, 1);
         FrameRect(mem, &sr, (HBRUSH)GetStockObject(BLACK_BRUSH));
         SetTextColor(mem, GetSysColor(COLOR_GRAYTEXT));
-        std::wstring t = L"Wappen " + std::to_wstring(e.current() - 80) + L" (KB" + std::to_wstring(e.current()) + L")" + (e.dirty() ? L" – geändert" : L"");
+        std::wstring t = L"Wappen " + std::to_wstring(e.current() - 80) + L" (KB" + std::to_wstring(e.current()) + L")";
+        std::wstring t2 = L"Zoom " + std::to_wstring(a.crest_zoom) + L"×" + (e.dirty() ? L"  – geändert" : L"");
         TextOutW(mem, g.pal_x, g.pal_y + 16 * g.cell + a.px(6), t.c_str(), int(t.size()));
+        TextOutW(mem, g.pal_x, g.pal_y + 16 * g.cell + a.px(24), t2.c_str(), int(t2.size()));
     } else {
         SetTextColor(mem, GetSysColor(COLOR_GRAYTEXT));
         DrawTextW(mem, L"Europapokal-Vereine haben kein Wappen", -1, &cr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1121,7 +1172,7 @@ bool crest_hit_image(App& a, int mx, int my, int& ix, int& iy) {
     const auto& img = a.crest_ed->image();
     ix = floordiv(mx - g.x, g.zoom);
     iy = floordiv(my - g.y, g.zoom);
-    return a.crest_ed->current() >= 0 && ix >= 0 && iy >= 0 && ix < img.width && iy < img.height;
+    return a.crest_ed->current() >= 0 && mx < g.view_w && ix >= 0 && iy >= 0 && ix < img.width && iy < img.height;
 }
 
 LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1134,6 +1185,7 @@ LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_ERASEBKGND: return 1;
         case WM_PAINT: paint_crest(a, h); return 0;
+        case WM_SIZE: update_crest_scroll(a); return 0;
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursor(nullptr, IDC_CROSS)); return TRUE; }
             break;
@@ -1172,6 +1224,36 @@ LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         }
+        case WM_MOUSEWHEEL: {
+            const int d = GET_WHEEL_DELTA_WPARAM(wp);
+            if (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) {
+                set_crest_zoom(a, a.crest_zoom + (d > 0 ? 1 : -1));
+            } else {
+                (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT ? a.cscroll_x : a.cscroll_y) -= d / 2;
+                update_crest_scroll(a);
+                InvalidateRect(h, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_HSCROLL:
+        case WM_VSCROLL: {
+            const bool horz = msg == WM_HSCROLL;
+            SCROLLINFO si{sizeof si, SIF_ALL};
+            GetScrollInfo(h, horz ? SB_HORZ : SB_VERT, &si);
+            int pos = si.nPos;
+            switch (LOWORD(wp)) {
+                case SB_LINEUP: pos -= a.px(16); break;
+                case SB_LINEDOWN: pos += a.px(16); break;
+                case SB_PAGEUP: pos -= int(si.nPage); break;
+                case SB_PAGEDOWN: pos += int(si.nPage); break;
+                case SB_THUMBTRACK: pos = si.nTrackPos; break;
+                default: break;
+            }
+            (horz ? a.cscroll_x : a.cscroll_y) = pos;
+            update_crest_scroll(a);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
         default: break;
     }
     return DefWindowProc(h, msg, wp, lp);
@@ -1183,7 +1265,9 @@ void load_crest(App& a) {
     if (TeamDoc::has_players(t) && a.team->data(t).crest >= 0) a.crest_ed->load(80 + a.team->data(t).crest);
     else a.crest_ed->close();
     const BOOL on = a.crest_ed->current() >= 0;
-    for (HWND w : {a.tu.cr_pen, a.tu.cr_fill, a.tu.cr_undo, a.tu.cr_save}) EnableWindow(w, on);
+    for (HWND w : {a.tu.cr_pen, a.tu.cr_fill, a.tu.cr_undo, a.tu.cr_save, a.tu.cr_zout, a.tu.cr_zin}) EnableWindow(w, on);
+    a.cscroll_x = a.cscroll_y = 0;
+    update_crest_scroll(a);
     InvalidateRect(a.tu.crest_view, nullptr, FALSE);
 }
 
@@ -1494,11 +1578,13 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == IDC_SWAP_BTN) { team_swap(a); return 0; }
-            if (id >= IDC_CREST_PEN && id <= IDC_CREST_SAVE) {
+            if (id >= IDC_CREST_PEN && id <= IDC_CREST_ZIN) {
                 PixelEditor& ce = *a.crest_ed;
                 if (id == IDC_CREST_PEN) ce.set_tool(PixelEditor::Tool::Pencil);
                 else if (id == IDC_CREST_FILL) ce.set_tool(PixelEditor::Tool::Fill);
                 else if (id == IDC_CREST_UNDO) ce.undo();
+                else if (id == IDC_CREST_ZOUT) set_crest_zoom(a, a.crest_zoom - 1);
+                else if (id == IDC_CREST_ZIN) set_crest_zoom(a, a.crest_zoom + 1);
                 else ce.save();
                 InvalidateRect(a.tu.crest_view, nullptr, FALSE);
                 refresh(a);
