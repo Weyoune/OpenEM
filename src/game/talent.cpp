@@ -30,12 +30,12 @@
 namespace em {
 namespace {
 constexpr size_t kRecord = 52, kPlayerBase = 0x4FC6;
-constexpr size_t kPrice = 0x18, kLevelByte = 0xAEB4;  // the price is one field so far (per manager unverified)
+constexpr size_t kPrice = 0x18, kLevelByte = 0xAEB4;  // the price: u32 per manager (DS:020D + 4 * manager, ovr032:1F44..1FAE)
 constexpr size_t counter_at(int manager) { return manager_block(manager) + 0xEC; }  // running steps, manager block +0xEC
 void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at(at + size_t(n)) = uint8_t(v >> (8 * n)); }
 }  // namespace
 
-long Game::talent_search_price() const { return long(int32_t(le32(save_.state, kPrice))); }
+long Game::talent_search_price() const { return long(int32_t(le32(save_.state, kPrice + 4 * size_t(active_manager_)))); }
 int Game::talent_search_days() const { return save_.state.at(counter_at(active_manager_)); }
 
 TalentResult Game::start_talent_search() {  // for the active manager (docs/MEHRSPIELER_PLAN.md step 5)
@@ -94,9 +94,14 @@ bool Game::talent_player(int skill, long percent, int m) {
     return true;
 }
 
+// 146e:0ac5 walks the managers 0..N-1 itself (DS:A70E from 0 while below DS:0386, 146e:0ac8..0ba4).
 void Game::talent_search_week() {
-    if (national_coach_ >= 0 || mgr_[0].team < 0 || mgr_[0].team >= 52) return;
-    uint8_t& counter = save_.state.at(counter_at(0));  // the day loop runs the search of manager 0 (step 7: every manager)
+    for (int m = 0; m < managers_; m++) talent_search_step(m);
+}
+
+void Game::talent_search_step(int m) {
+    if (national_coach_ == m || mgr_[size_t(m)].team < 0 || mgr_[size_t(m)].team >= 52) return;
+    uint8_t& counter = save_.state.at(counter_at(m));
     if (counter == 0) return;
     if (--counter != 0) return;  // DS:4860 (immediate evaluation) is never set in a normal game
     const int level = save_.state.at(kLevelByte);
@@ -104,10 +109,10 @@ void Game::talent_search_week() {
     auto talent_message = [&](const char* first, const char* second) {
         const GameDate d = date_of_season_day(day_ + 1, save_.year);
         native_add_message(save_.state, brng_, {d.day, d.month, d.year, day_ + 1}, MessageKind::TwoLines,
-                           {MessageArg::str(first), MessageArg::str(second)}, 0, true);
+                           {MessageArg::str(first), MessageArg::str(second)}, m, true);
     };
     if (brng_.range(0, 5 - level / 2) == 0) {
-        if (talent_player(brng_.range(40, 90), 80)) {
+        if (talent_player(brng_.range(40, 90), 80, m)) {
             talent_message("Ihre Talentsuche war ein Erfolg.", "Ein junger Spieler st|~t zu Ihrem Kader.");
             manager_news_.push_back("Ihre Talentsuche war ein Erfolg.\nEin junger Spieler stößt zu Ihrem Kader.");
         }

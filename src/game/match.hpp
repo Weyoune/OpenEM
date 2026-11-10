@@ -286,6 +286,9 @@ public:
     PenaltyBox& home_box();  // the running penalties travel with the team record in the original (+0x32/+0x33)
     PenaltyBox& away_box();
     int take_phantom_release();
+    // the pair-table error replaced a manager's club in its own pairing: the match stays managed (squad, energy, lines), but
+    // the per-minute check of ovr030:3680 (rand(0, 200 + ...)) compares the club id and stops (REAL-CODE period 98)
+    void drop_human(int side);
     void mark_same_club();  // the pair-table error made both sides one club: the penalty pair roll stops (ovr030:04BA compares the team ids)  // a manager penalty without bound player ended in the last minute: its saved role, else -1 (DEVIATIONS.md)
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;

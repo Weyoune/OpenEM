@@ -189,6 +189,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             // the replaced team keeps the penalty minutes it had so far; the shared record counts on for the new team (REAL-CODE period 28)
             if (f->frozen[side] < 0) f->frozen[side] = side_box(*f, side).minutes_assessed();
             side_box(*f, side) = copy.box;
+            if (humans.is_human(id) && !humans.is_human(next) && !std::getenv("EM_OLD_DROPHUMAN")) f->run->drop_human(side);
             id = next;
             if (f->home == f->away) f->run->mark_same_club();
             if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d\n", f->pair, side, next);

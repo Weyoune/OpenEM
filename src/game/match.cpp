@@ -774,6 +774,7 @@ struct MatchRun::Impl {
     PenaltyBox hbox, abox;
     BorlandRandom fallback_selection{1};
     std::unique_ptr<PenaltySide> hpen, apen;
+    bool minute_check_off[2] = {false, false};  // the club left the pairing (pair-table error): no injury / event check per minute
     MatchResult score;
     int last = 60;
     int minute = 0;
@@ -885,7 +886,7 @@ struct MatchRun::Impl {
         for (int side = 0; side < 2; side++) {
             const HumanSquad* m = side == 0 ? hp : ap;
             const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
-            if (m && m->on_minute) {
+            if (m && m->on_minute && !minute_check_off[side]) {
                 m->on_minute(minute, load, side == 0 ? h : a);
                 // a player injured in this minute (ovr030:23B6) leaves the running lineup at once (REAL-CODE period 28: the
                 // original opens the lineup screen; confirmed unchanged, the place stays empty)
@@ -1052,6 +1053,7 @@ int MatchRun::take_phantom_release() {
     const int a = p_->ap ? p_->abox.take_phantom_release() : -1;
     return h >= 0 ? h : a;
 }
+void MatchRun::drop_human(int side) { if (side == 0 || side == 1) p_->minute_check_off[side] = true; }
 void MatchRun::mark_same_club() {
     if (!p_->hpen || p_->box_shared) return;
     p_->synced_away = true;

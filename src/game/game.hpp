@@ -21,8 +21,9 @@
 // relegation (relegation groups, Oberliga 11th/12th against regional clubs 36-41) swap team
 // indices like ovl06_0c29, a new European cup draw, prizes, ageing, contract years, retirement of
 // computer club players, cleared statistics, 132 summer finance/healing days and a new cup draw.
-// Only manager 0 is played. Injuries: injuries.hpp (twice-weekly club preparation and after
-// matches of the human club).
+// The day loop runs every human manager 0..N-1 in the order of the original's manager loops (docs/MEHRSPIELER_PLAN.md
+// step 7); the season change and the WM branch still book manager 0 only. Injuries: injuries.hpp (twice-weekly club
+// preparation and after matches of the human club).
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -320,7 +321,8 @@ public:
 private:
     void play_league_day();
     // Per-manager steps take the manager index m (0..3) last; every caller still passes 0 (docs/MEHRSPIELER_PLAN.md step 4).
-    void manager_day(bool home_game_today, int m = 0);
+    void manager_day(bool home_game_today, int m = 0);  // the squad bookkeeping of sub_60D60 for one manager
+    void spin_match_stream();                           // sub_33CE9, once per match day with a manager game
     void update_series(int team, int side, int goals_for, int goals_against);
     void record_head_to_head(int home, int away, int home_goals, int away_goals, int m = 0);
     void update_records(int home, int away, int home_goals, int away_goals);
@@ -358,6 +360,9 @@ private:
     void home_game(int guest, int kind, int home_class, int guest_class, int home_rank, int guest_rank,
                    bool league_statistics = false, int manager = 0);
     void train_squad(int m = 0);
+    void manager_stadium_week(int m);
+    void manager_finance_day(int m, const GameDate& finance_date, int finance_month_days, bool world_phase);
+    void menu_pass(bool menu);  // transfer-list roll and (with a menu) the daily factor of every manager
     void injure(size_t slot, int kind, int m = 0);
     void squad_injuries(bool weekly, bool no_match_today, int m = 0);
     void heal_squad(bool weekly, int m = 0);
@@ -373,12 +378,13 @@ private:
     void remove_squad_record(int block, int slot, int end_slot);
     void refresh_human_team(int m = 0);
     void weekly_team_drift();  // 162c:1c5b(1) for all 64 national and club teams, twice a week (ovl14)
-    void talent_search_week();  // seg002:0AC5, src/game/talent.cpp
+    void talent_search_week();  // seg002:0AC5, src/game/talent.cpp: every manager in index order
+    void talent_search_step(int m);
     bool talent_player(int skill,long percent,int m = 0);  // seg002:089F
     void refresh_menu_manager(int manager);
     void update_sponsors(int m = 0);
     int current_club_image(int m = 0);
-    void expire_advert_options();
+    void expire_advert_options(int m = 0);
     int team_rank(int team) const;
 
     HokFile save_;
@@ -399,7 +405,7 @@ private:
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
     bool interactive_played_ = false;
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
-    bool idle_cup_day_ = false;   // a cup day with games, none of them the human club's
+    std::array<bool, kMaxManagers> idle_cup_day_{};  // a cup day with games, none of them this manager club's
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
     std::vector<std::string> manager_news_;
     std::vector<std::string> immediate_messages_;
@@ -419,7 +425,7 @@ private:
     std::vector<HokPairing> cup_draw_;
     std::vector<Series> cup_series_;  // higher/lower are the first-leg home/away teams here
     int cup_round_ = 1, cup_game_ = 0;
-    // The human managers (docs/MEHRSPIELER_PLAN.md); only index 0 is simulated so far.
+    // The human managers (docs/MEHRSPIELER_PLAN.md); the day loop simulates 0..managers_-1 (step 7).
     struct ManagerState {
         int team = -1;                // manager block +0x14
         HumanSquad squad;             // the squad and its controls in matches
@@ -434,13 +440,13 @@ private:
         std::array<bool, 30> hurt_in_match{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     };
     std::array<ManagerState, 4> mgr_{};
-    int active_manager_ = 0;  // the manager the UI actions act for (step 5); the day loop still plays manager 0
+    int active_manager_ = 0;  // the manager the UI actions act for (step 5); the day loop plays all managers
     // Match layer (step 6): the manager whose club is `team` (0..managers_-1, else -1) and the human sides of a match.
     int manager_of_team(int team) const;
     bool manager_team(int team) const { return manager_of_team(team) >= 0; }
     const HumanSquad* manager_squad(int team) const;
     HumanSide human_sides(MatchStats* stats, std::array<MatchStats, kMaxManagers>& other_stats) const;
-    int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4; only manager 0 is simulated so far (docs/MEHRSPIELER_PLAN.md)
+    int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4 (docs/MEHRSPIELER_PLAN.md; more than one is unverified until step 9)
     // Native BSS is zero; only a visited club/national refresh fills its pair.
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.
     std::array<std::array<uint8_t,2>,6> line_counts_{};

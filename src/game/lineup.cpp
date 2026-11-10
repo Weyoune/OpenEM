@@ -15,6 +15,9 @@ bool auto_lineup(HokFile& h, int manager) {
     const size_t mode = 0x078A + size_t(manager) * 2;
     if (h.state.at(mode) == 0) return false;
     const size_t base = 0x696D + size_t(manager) * 0x618;
+    // the decoded squad of a human manager 0..3 (empty for the pool party and the national coach)
+    std::vector<HokSquadPlayer> no_squad;
+    std::vector<HokSquadPlayer>& decoded = manager < 4 ? h.squad_of(manager) : no_squad;
     for (int slot = 0; slot < kPlaces; slot++) h.state.at(base + size_t(slot) * kRecord + 0x0A) = 0;
     auto pick = [&](int requested) {
         const int direction = requested == 2 && h.state.at(mode) < 4 ? -1 : 1;
@@ -31,8 +34,8 @@ bool auto_lineup(HokFile& h, int manager) {
                 const int pos = h.state.at(kPlayers + size_t(id - 1) * kPlayerSize + 24);
                 const int natural = pos == 0 ? 0 : pos < 60 ? 1 : 2;
                 if (natural != kind) continue;
-                int candidate = manager == 0 && size_t(slot) < h.squad.size()
-                    ? h.squad[size_t(slot)].strength()
+                int candidate = size_t(slot) < decoded.size()
+                    ? decoded[size_t(slot)].strength()
                     : (h.state.at(at + 16) + h.state.at(at + 17) + h.state.at(at + 18)) / 3;
                 if (natural == 0 && requested != 0) {
                     candidate = saw_goalkeeper ? 1 : -1;
@@ -68,12 +71,11 @@ bool auto_lineup(HokFile& h, int manager) {
         for (int kind = 2; kind >= 0 && selected < 22; kind--)
             if (assign(kind, 0)) { selected++; found = true; }
     }
-    if (manager == 0)
-        for (size_t slot = 0; slot < h.squad.size() && slot < size_t(kPlaces); slot++) {
-            if (h.squad[slot].player < 0) continue;
-            h.squad[slot].role = h.state.at(base + slot * kRecord + 10);
-            h.squad[slot].line = h.state.at(base + slot * kRecord + 21);
-        }
+    for (size_t slot = 0; slot < decoded.size() && slot < size_t(kPlaces); slot++) {
+        if (decoded[slot].player < 0) continue;
+        decoded[slot].role = h.state.at(base + slot * kRecord + 10);
+        decoded[slot].line = h.state.at(base + slot * kRecord + 21);
+    }
     return true;
 }
 
@@ -124,8 +126,10 @@ ManualDiagram manual_diagram(const HokFile& h, size_t base, int count) {
 }
 
 void sync_manual_player(HokFile& h, int manager, size_t slot, size_t at) {
-    if (manager || slot >= h.squad.size() || h.squad[slot].player < 0) return;
-    auto& player = h.squad[slot];
+    if (manager < 0 || manager >= 4) return;  // the decoded squads of the human managers 0..3
+    auto& squad = h.squad_of(manager);
+    if (slot >= squad.size() || squad[slot].player < 0) return;
+    auto& player = squad[slot];
     player.role = h.state[at + 0x0a];
     player.line = h.state[at + 0x15];
     // Keep the same status meaning as hok_squad():1A is appearance/team
