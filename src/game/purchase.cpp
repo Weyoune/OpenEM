@@ -45,8 +45,8 @@ PurchaseResult Game::begin_transfer_purchase(size_t slot,long fee,PurchaseDraft&
     std::copy_n(prepared.state.begin()+squad,30*record,save_.state.begin()+squad);
     save_.state.at(players+size_t(id-1)*33+0x1D)=uint8_t(mgr_[0].team);
     player->team=mgr_[0].team;
-    if(shifted)std::move_backward(injured_role_.begin()+inserted,injured_role_.end()-1,injured_role_.end());
-    injured_role_[size_t(inserted)]=0;
+    if(shifted)std::move_backward(mgr_[0].injured_role.begin()+inserted,mgr_[0].injured_role.end()-1,mgr_[0].injured_role.end());
+    mgr_[0].injured_role[size_t(inserted)]=0;
     save_.squad=hok_squad(save_,0);brng_=next;
     draft={int(slot),id,inserted,old_team,fee,long(int32_t(le32(save_.state,destination+0x28)))};
     return PurchaseResult::Negotiating;
@@ -58,8 +58,8 @@ bool Game::cancel_transfer_purchase(const PurchaseDraft& draft){
     save_.state.at(player+0x1D)=uint8_t(draft.old_team);
     player_by_exe_index(draft.player_id)->team=draft.old_team==255?-1:draft.old_team;
     save_.state.at(pool+size_t(draft.pool_slot)*record+0x1A)|=0x81;
-    std::move(injured_role_.begin()+draft.club_slot+1,injured_role_.end(),injured_role_.begin()+draft.club_slot);
-    injured_role_.back()=0;save_.squad=hok_squad(save_,0);
+    std::move(mgr_[0].injured_role.begin()+draft.club_slot+1,mgr_[0].injured_role.end(),mgr_[0].injured_role.begin()+draft.club_slot);
+    mgr_[0].injured_role.back()=0;save_.squad=hok_squad(save_,0);
     return true;
 }
 PurchaseResult Game::finish_transfer_purchase(const PurchaseDraft& draft,int years,long salary,bool accept_subsidy,bool prepare_lineup){

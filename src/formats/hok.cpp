@@ -21,7 +21,7 @@ constexpr size_t kEuroGroupsCopy = 0x8E71;
 constexpr size_t kPairings = 0x8DFD, kCupDraw = 0x8E51, kCupDrawMax = 32, kCupRound = 0x8ED1, kTableOrder = 0x8EDC;
 constexpr size_t kHoldings = 0x30, kSharePrices = 0xB0, kManagerStats = 0x0F40;
 constexpr long kMoneyFactor = 3;  // EM keeps every amount tripled
-constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34;
+constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618, kManagerCount = 0x0DC6;
 
 long money(const Bytes& s, size_t off) { return long(int32_t(le32(s, off))) / kMoneyFactor; }
 
@@ -48,12 +48,13 @@ HokFile clone_hok(const HokFile& source) {
     copy.cup_round = source.cup_round; copy.cup_draw = source.cup_draw;
     copy.euro_groups = source.euro_groups; copy.euro_rounds = source.euro_rounds;
     copy.wm_rounds = source.wm_rounds; copy.finance = source.finance; copy.squad = source.squad;
+    copy.other_squads = source.other_squads;
     return copy;
 }
 
 std::vector<HokSquadPlayer> hok_squad(const HokFile& h, int manager) {
     if (manager < 0 || manager >= kHokManagers) throw FormatError("HOK: invalid squad manager");
-    const size_t base = kSquad + size_t(manager) * 0x618;
+    const size_t base = kSquad + size_t(manager) * kSquadBlock;
     size_t slots = 0;
     for (size_t slot = 0; slot < kHokSquadSlots; slot++)
         if (h.state.at(base + slot * kSquadRecord + 0x0F)) slots = slot + 1;
@@ -223,6 +224,15 @@ HokFile decode_hok(const Bytes& d) {
     for (size_t i = 0; i + 1 < kCupDrawMax && h.state[kCupDraw + i] != 0xFF; i += 2)
         h.cup_draw.push_back({h.state[kCupDraw + i], h.state[kCupDraw + i + 1]});
     h.squad = hok_squad(h, 0);  // explicit native player ids also retain called club players
+    // the other human managers (state 0x0DC6 = DS:0386 counts them); an unused block stays empty and is not written back
+    const int managers = std::clamp(int(h.state.at(kManagerCount)), 1, 4);
+    for (int m = 1; m < managers; m++) {
+        try {
+            h.other_squads[size_t(m - 1)] = hok_squad(h, m);
+        } catch (const FormatError&) {
+            h.other_squads[size_t(m - 1)].clear();  // a stale count over an unused block: keep its bytes as they are
+        }
+    }
     HokFinance& f = h.finance;
     for (int c = 0; c < kHokShares; c++) {
         f.share_cost[c] = money(h.state, kHoldings + size_t(c) * 8);
@@ -373,10 +383,11 @@ void store_hok(HokFile& h) {
                 s[o + 1] = uint8_t(h.euro_rounds[g][r][p].away);
             }
     }
-    for (size_t slot = 0; slot < h.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-        const HokSquadPlayer& sp = h.squad[slot];
+    for (int m = 0; m < 4; m++)
+    for (size_t slot = 0; slot < h.squad_of(m).size() && slot < size_t(kHokSquadSlots); slot++) {
+        const HokSquadPlayer& sp = h.squad_of(m)[slot];
         if (sp.player < 0) continue;  // retain opaque bytes of an unoccupied native slot
-        uint8_t* r = s.data() + kSquad + slot * kSquadRecord;
+        uint8_t* r = s.data() + kSquad + size_t(m) * kSquadBlock + slot * kSquadRecord;
         r[0x00] = uint8_t(sp.major_penalties);
         r[0x01] = uint8_t(sp.minor_penalties);
         r[0x02] = uint8_t(sp.home_line);

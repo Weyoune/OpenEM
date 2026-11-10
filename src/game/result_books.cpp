@@ -37,10 +37,10 @@ void update_series_records(Bytes& state, int team) {
     for (size_t k = 0; k < 21; k++) rec[k] = std::max(rec[k], cur[k]);
 }
 
-void book_head_to_head(Bytes& state, int home, int away, int home_goals, int away_goals, int human_team) {
+void book_head_to_head(Bytes& state, int home, int away, int home_goals, int away_goals, int human_team, int manager) {
     auto put = [&](int opp, int side, int own, int against) {
         if (opp < 0 || opp >= kSeriesTeams) return;  // the block has 64 rows
-        uint8_t* row = state.data() + kHeadToHead + size_t(opp) * 10;
+        uint8_t* row = state.data() + kHeadToHead + size_t(manager) * 0x280 + size_t(opp) * 10;
         const uint8_t v = uint8_t(std::min(against, 15) << 4 | std::min(own, 15));
         std::vector<uint8_t*> slots;  // the column, or both for nations and later teams
         if (opp < kFirstNationalTeam) {

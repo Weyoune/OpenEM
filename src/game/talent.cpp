@@ -83,8 +83,8 @@ bool Game::talent_player(int skill, long percent) {
     player->form = s.at(global + 0x17);
     player->team = mgr_[0].team;
     if (inserted.shifted)
-        std::move_backward(injured_role_.begin() + inserted.slot, injured_role_.end() - 1, injured_role_.end());
-    injured_role_[size_t(inserted.slot)] = 0;
+        std::move_backward(mgr_[0].injured_role.begin() + inserted.slot, mgr_[0].injured_role.end() - 1, mgr_[0].injured_role.end());
+    mgr_[0].injured_role[size_t(inserted.slot)] = 0;
     save_.squad = hok_squad(save_, 0);
     log_.push_back(player->name + " joins from the talent search");
     refresh_budget_roster();

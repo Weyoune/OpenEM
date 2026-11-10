@@ -195,7 +195,7 @@ public:
     const GroupTable& relegation_group(int g) const { return relegation_[size_t(g)]; }
     const HokFile& save() const { return save_; }
     // Open offers for the manager's players. Accepting sells the player to the bidder at once.
-    const std::vector<ManagerOffer>& offers() const { return manager_offers_; }
+    const std::vector<ManagerOffer>& offers() const { return mgr_[0].transfer_offers; }
     bool accept_offer(size_t i);
     bool begin_sale_offer(int block,int slot,int16_t native_si,SaleQuote&);
     bool finish_sale_offer(const SaleQuote&,bool sell);
@@ -308,9 +308,10 @@ public:
 
 private:
     void play_league_day();
-    void manager_day(bool home_game_today);
+    // Per-manager steps take the manager index m (0..3) last; every caller still passes 0 (docs/MEHRSPIELER_PLAN.md step 4).
+    void manager_day(bool home_game_today, int m = 0);
     void update_series(int team, int side, int goals_for, int goals_against);
-    void record_head_to_head(int home, int away, int home_goals, int away_goals);
+    void record_head_to_head(int home, int away, int home_goals, int away_goals, int m = 0);
     void update_records(int home, int away, int home_goals, int away_goals);
     void book_special_teams(const MatchStats& stats, int side, int manager = 0);
     void play_cup_day();
@@ -330,8 +331,8 @@ private:
     void book_match_condition(const MatchStats& stats, int side, int manager);
     bool book_forfeit(const MatchStats& stats, int manager = 0);
     void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0,
-                         bool credit_goals = true);
-    void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr, const std::vector<HokSquadPlayer>* working = nullptr);
+                         bool credit_goals = true, int m = 0);
+    void credit_human_goal(int competition, bool penalty, bool goal = true, const HokTeam* on_ice = nullptr, const std::vector<HokSquadPlayer>* working = nullptr, int m = 0);
     void credit_opponent_goal(int competition, bool goal, const HokTeam& scorer);
     bool message_step_pending_ = true;  // a loaded game stands in the menu: the next play step sorts and counts the messages
     bool table_copies_frozen_ = false;   // a play step passed a league day without returning to the menu: the copies of the table stay (HokFile::keep_table_copies)
@@ -344,28 +345,28 @@ private:
     TransferMoveResult move_owned_player(size_t slot, bool to_market,bool prepare_lineup);
     void swap_teams(int a, int b);
     void home_game(int guest, int kind, int home_class, int guest_class, int home_rank, int guest_rank,
-                   bool league_statistics = false);
-    void train_squad();
-    void injure(size_t slot, int kind);
-    void squad_injuries(bool weekly, bool no_match_today);
-    void heal_squad(bool weekly);
-    void refresh_budget_roster();
-    void clear_insurance_locks();
-    void prepare_human_lineup(bool restore_saved_mode=true);
-    void match_injuries();
-    void injury_minute(int load, const HokTeam* on_ice = nullptr);  // ovl06_364f for one minute of the human club's match
-    void make_offers();
-    void restore_offers();
-    void expire_contracts();
+                   bool league_statistics = false, int manager = 0);
+    void train_squad(int m = 0);
+    void injure(size_t slot, int kind, int m = 0);
+    void squad_injuries(bool weekly, bool no_match_today, int m = 0);
+    void heal_squad(bool weekly, int m = 0);
+    void refresh_budget_roster(int m = 0);
+    void clear_insurance_locks(int m = 0);
+    void prepare_human_lineup(bool restore_saved_mode = true, int m = 0);
+    void match_injuries(int m = 0);
+    void injury_minute(int load, const HokTeam* on_ice = nullptr, int m = 0);  // ovl06_364f for one minute of the human club's match
+    void make_offers(int m = 0);
+    void restore_offers(int m = 0);
+    void expire_contracts(int m = 0);
     HokPlayer* player_by_exe_index(int exe_index);  // squad +0x0F = HOK player record + 1
     void remove_squad_record(int block, int slot, int end_slot);
-    void refresh_human_team();
+    void refresh_human_team(int m = 0);
     void weekly_team_drift();  // 162c:1c5b(1) for all 64 national and club teams, twice a week (ovl14)
     void talent_search_week();  // seg002:0AC5, src/game/talent.cpp
     bool talent_player(int skill,long percent);  // seg002:089F
     void refresh_menu_manager(int manager);
-    void update_sponsors();
-    int current_club_image();
+    void update_sponsors(int m = 0);
+    int current_club_image(int m = 0);
     void expire_advert_options();
     int team_rank(int team) const;
 
@@ -383,14 +384,11 @@ private:
     TrainingTables training_;
     InjuryTables injuries_;
     NationalTeamTables national_tables_;
-    std::array<int, 30> injured_role_{};  // role (+0x0A) of an injured player before he got hurt
-    std::array<bool, 30> hurt_in_match_{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     int daily_luck_ = 100;                // DS:E1A4: valuation factor 85..115 of the current play step
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
     bool interactive_played_ = false;
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
-    std::vector<ManagerOffer> manager_offers_;
     std::vector<std::string> manager_news_;
     std::vector<std::string> immediate_messages_;
     std::optional<SeasonReview> season_review_;
@@ -419,6 +417,9 @@ private:
         SponsorOffers offers{};
         int image = 0;
         bool played = false;          // the club played today
+        std::vector<ManagerOffer> transfer_offers;  // open interests of computer clubs in his players
+        std::array<int, 30> injured_role{};    // role (+0x0A) of an injured player before he got hurt
+        std::array<bool, 30> hurt_in_match{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     };
     std::array<ManagerState, 4> mgr_{};
     int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4; only manager 0 is simulated so far (docs/MEHRSPIELER_PLAN.md)

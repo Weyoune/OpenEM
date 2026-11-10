@@ -145,14 +145,17 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     // the header holds the calendar year of the save (1994 in MONAT4, February), DS:03BB the year
     // the season started; the day loop counts from the season start
     if (save_.season_year > 0) save_.year = save_.season_year;
-    mgr_[0].squad.squad = &save_.squad;
-    mgr_[0].squad.players = &save_.players;
-    mgr_[0].squad.level = finance_.level;
-    mgr_[0].squad.selection_rng = &brng_;
+    for (int m = 0; m < kMaxManagers; m++) {  // the match controls of every human squad (only manager 0 plays so far)
+        ManagerState& mg = mgr_[size_t(m)];
+        mg.squad.squad = &save_.squad_of(m);
+        mg.squad.players = &save_.players;
+        mg.squad.level = finance_.level;
+        mg.squad.selection_rng = &brng_;
+        mg.squad.minimum_players = 9;
+        mg.squad.rotation = &mg.rotation;
+        mg.squad.timers = &mg.timers;
+    }
     rng_.borland = &brng_;
-    mgr_[0].squad.minimum_players = 9;
-    mgr_[0].squad.rotation = &mgr_[0].rotation;
-    mgr_[0].squad.timers = &mgr_[0].timers;
     mgr_[0].budget = budget_from_save(save_, 0);
     mgr_[0].offers = sponsor_offers_from_save(save_.state, 0);
     for (int d = 0; d < kTrainingDays; d++)
@@ -301,7 +304,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         national_rotation_ = checkpoint.national_rotation;
         mgr_[0].timers = checkpoint.club_timers;
         national_timers_ = checkpoint.national_timers;
-        injured_role_ = checkpoint.injured_roles;
+        mgr_[0].injured_role = checkpoint.injured_roles;
         for (size_t slot = 0; slot < save_.squad.size(); slot++)
             save_.squad[slot].status = SquadStatus(checkpoint.squad_status.at(slot));
         seasons_ = checkpoint.seasons;
@@ -310,7 +313,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         mgr_[0].budget.squad_costs = checkpoint.squad_costs;
         mgr_[0].budget.pool_costs = checkpoint.pool_costs;
         for (const auto& offer : checkpoint.offers)
-            manager_offers_.push_back({offer.player, offer.listed, offer.bidder, offer.amount});
+            mgr_[0].transfer_offers.push_back({offer.player, offer.listed, offer.bidder, offer.amount});
         mgr_[0].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[0].team);
         configure_human_tactics(mgr_[0].squad, save_, 0);
     } else {
@@ -349,7 +352,7 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.national_rotation = national_rotation_;
     checkpoint.club_timers = mgr_[0].timers;
     checkpoint.national_timers = national_timers_;
-    checkpoint.injured_roles = injured_role_;
+    checkpoint.injured_roles = mgr_[0].injured_role;
     for (size_t slot = 0; slot < save_.squad.size(); slot++)
         checkpoint.squad_status.at(slot) = uint8_t(save_.squad[slot].status);
     checkpoint.seasons = seasons_;
@@ -357,7 +360,7 @@ Bytes Game::checkpoint_bytes() const {
     checkpoint.players = mgr_[0].budget.players;
     checkpoint.squad_costs = mgr_[0].budget.squad_costs;
     checkpoint.pool_costs = mgr_[0].budget.pool_costs;
-    for (const auto& offer : manager_offers_)
+    for (const auto& offer : mgr_[0].transfer_offers)
         checkpoint.offers.push_back({offer.player, offer.bidder, offer.listed, offer.amount});
     return encode_game_checkpoint(checkpoint);
 }
@@ -375,30 +378,30 @@ int Game::team_rank(int team) const {
 }
 
 void Game::home_game(int guest, int kind, int home_class, int guest_class, int home_rank, int guest_rank,
-                     bool league_statistics) {
+                     bool league_statistics, int manager) {
     AttendanceMatch m;
     m.home_class = home_class;
     m.away_class = guest_class;
-    m.home_strength = attendance_strength(save_.teams[size_t(mgr_[0].team)]);
+    m.home_strength = attendance_strength(save_.teams[size_t(mgr_[manager].team)]);
     m.away_strength = attendance_strength(save_.teams[size_t(guest)]);
     m.home_rank = home_rank;
     m.away_rank = guest_rank;
     m.guest = guest;
     m.kind = kind;
     m.league_statistics = league_statistics;
-    const uint8_t previous_home_games = uint8_t(mgr_[0].budget.home_games);
+    const uint8_t previous_home_games = uint8_t(mgr_[manager].budget.home_games);
     if (std::getenv("EM_DEBUG_GATE"))
         std::fprintf(stderr, "gate vs %d: class %d/%d strength %d/%d rank %d/%d kind %d places %d/%d price %d games %d image %d\n", guest, m.home_class, m.away_class,
-                     m.home_strength, m.away_strength, m.home_rank, m.away_rank, kind, int(mgr_[0].budget.places[0]), int(mgr_[0].budget.places[1]),
-                     int(mgr_[0].budget.ticket_price), int(mgr_[0].budget.home_games), mgr_[0].image);
-    const long spectators = home_attendance(finance_, mgr_[0].budget, m, brng_);
+                     m.home_strength, m.away_strength, m.home_rank, m.away_rank, kind, int(mgr_[manager].budget.places[0]), int(mgr_[manager].budget.places[1]),
+                     int(mgr_[manager].budget.ticket_price), int(mgr_[manager].budget.home_games), mgr_[manager].image);
+    const long spectators = home_attendance(finance_, mgr_[manager].budget, m, brng_);
     match_attendance_ = spectators;
-    match_sold_out_ = spectators == long(mgr_[0].budget.places[0]) + mgr_[0].budget.places[1];
+    match_sold_out_ = spectators == long(mgr_[manager].budget.places[0]) + mgr_[manager].budget.places[1];
     if (league_statistics)
-        save_.state.at(kManagerBlock + 0xFE + previous_home_games) = uint8_t(spectators / 1000);
+        save_.state.at(manager_block(manager) + 0xFE + previous_home_games) = uint8_t(spectators / 1000);
     char line[160];
     std::snprintf(line, sizeof line, "  %ld spectators against %s, %ld DM tickets", spectators,
-                  save_.teams[size_t(guest)].name.c_str(), long(mgr_[0].budget.ticket_price) * spectators);
+                  save_.teams[size_t(guest)].name.c_str(), long(mgr_[manager].budget.ticket_price) * spectators);
     log_.push_back(line);
 }
 
@@ -428,21 +431,22 @@ void Game::book_special_teams(const MatchStats& st, int side, int manager) {
 // skill-based home line, +2 := +0x15 & 0x7F) and, for a home game, one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag;
 // sub_33CE9 then spins the game random stream rand(100, 300) times (REAL-CODE probe of the original). It runs on every day
 // with a game of the human club (league and cup).
-void Game::manager_day(bool home_game_today) {
+void Game::manager_day(bool home_game_today, int m) {
     g_draw_scope = "manager-day";
-    const size_t squad_at = 0x696D;
+    const size_t squad_at = squad_block(m);
+    auto& squad = save_.squad_of(m);
     int slots = 0;
     for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_at + size_t(s) * 0x34 + 0x0F) != 0;
     for (int s = 0; s < slots; s++)
         if (brng_.range(0, 4) == 0) {
             const uint8_t line = save_.state.at(squad_at + size_t(s) * 0x34 + 0x15) & 0x7F;
             save_.state.at(squad_at + size_t(s) * 0x34 + 2) = line;
-            if (size_t(s) < save_.squad.size()) save_.squad[size_t(s)].home_line = line;  // mgr_[0].squad.squad points at this vector
+            if (size_t(s) < squad.size()) squad[size_t(s)].home_line = line;  // mgr_[m].squad.squad points at this vector
         }
-    const int places_low = le16(save_.state, kManagerBlock + 0x133), places_high = le16(save_.state, kManagerBlock + 0x137);
+    const int places_low = le16(save_.state, manager_block(m) + 0x133), places_high = le16(save_.state, manager_block(m) + 0x137);
     int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
     x = std::clamp(x, 0, 30);
-    if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(kManagerBlock + 0xF1) |= 1;
+    if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(m) + 0xF1) |= 1;
     g_draw_scope = "randomize";
     if (std::getenv("EM_DEBUG_MDAY")) std::fprintf(stderr, "manager_day day %d slots %d home %d B%zu\n", day_, slots, int(home_game_today), g_borland_log ? g_borland_log->size() : size_t(0));
     const int spin = brng_.range(100, 300);
@@ -899,16 +903,16 @@ void Game::play_cup_day() {
 
 // 1000:3d1a on squad slot `slot` (see injuries.hpp). Recovery leaves lineup
 // selection to the saved manual/automatic mode, just like 146e:1732.
-void Game::injure(size_t slot, int kind) {
-    HokSquadPlayer& sp = save_.squad[slot];
-    uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
+void Game::injure(size_t slot, int kind, int m) {
+    HokSquadPlayer& sp = save_.squad_of(m)[slot];
+    uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
     HokPlayer& pl = save_.players[size_t(sp.player)];
     if (pl.form > 20) pl.form -= brng_.range(10, 15);
     const Injury in = draw_injury(injuries_, kind, finance_.level, brng_);
     r[0x0D] = uint8_t(in.weeks);
     r[0x09] |= 2;
     r[0x17] = uint8_t(in.type);
-    if (r[0x0A]) injured_role_[slot] = r[0x0A];
+    if (r[0x0A]) mgr_[m].injured_role[slot] = r[0x0A];
     r[0x0A] = 0;
     sp.role = 0;
     char line[160];
@@ -918,29 +922,29 @@ void Game::injure(size_t slot, int kind) {
         std::snprintf(line, sizeof line, "%s: %s, out for %d weeks", pl.name.c_str(),
                       injuries_.names[size_t(in.type)].c_str(), in.weeks);
     log_.push_back(line);
-    const long premium = int32_t(le32(save_.state, kSquad + slot * kSquadRecord + 0x30));
+    const long premium = int32_t(le32(save_.state, squad_block(m) + slot * kSquadRecord + 0x30));
     if (premium != 0) {
         // 146e:0ba9, used after both training and match injuries: native
         // CL=2 left shift pays FOUR premiums, despite the manual's six.
         const long payment = int32_t(uint32_t(premium) << 2);
-        mgr_[0].budget.balance += payment;
+        mgr_[m].budget.balance += payment;
         log_.push_back(pl.name + " injury insurance payment " + std::to_string(payment / 3) + " DM");
     }
 }
 
 // 146e:1732: the summer uses healing without training injuries or training.
-void Game::heal_squad(bool weekly) {
-    for (size_t i = 0; i < save_.squad.size() && i < size_t(kHokSquadSlots); i++) {
-        uint8_t* r = save_.state.data() + kSquad + i * kSquadRecord;
-        if (save_.squad[i].player < 0) continue;
+void Game::heal_squad(bool weekly, int m) {
+    for (size_t i = 0; i < save_.squad_of(m).size() && i < size_t(kHokSquadSlots); i++) {
+        uint8_t* r = save_.state.data() + squad_block(m) + i * kSquadRecord;
+        if (save_.squad_of(m)[i].player < 0) continue;
         if (weekly && (r[0x09] & 2) && r[0x0D] != kCareerOver && r[0x0D] != 0) r[0x0D]--;
         if ((r[0x09] & 3) && r[0x0D] == 0) {
             r[0x09] &= 0xFC;
-            if (injured_role_[i]) {
+            if (mgr_[m].injured_role[i]) {
                 // Do not put him back into a manual lineup. The normal
                 // lineup preparation selects him if automatics are enabled.
-                injured_role_[i] = 0;
-                log_.push_back(save_.players[size_t(save_.squad[i].player)].name + " is fit again");
+                mgr_[m].injured_role[i] = 0;
+                log_.push_back(save_.players[size_t(save_.squad_of(m)[i].player)].name + " is fit again");
             }
         }
     }
@@ -949,12 +953,13 @@ void Game::heal_squad(bool weekly) {
 // 146e:0c89 runs on season_day % 7 == 0 or (season_day + 3) % 7 == 0.
 // Phase A (transfer-list entries of manager 0) and the per-slot player mood loop (injury roll, wish to leave, mood decay,
 // contract wish) of the original daily manager routine, with the messages of these events (src/game/messages.cpp;
-// player byte +0x1E holds the entry index).
-void Game::squad_injuries(bool weekly, bool no_match_today) {
+// player byte +0x1E holds the entry index). Phase A walks the shared transfer list (block 4), not manager m's squad: with
+// several managers its place in the original's manager loop is still open (docs/MEHRSPIELER_PLAN.md step 7).
+void Game::squad_injuries(bool weekly, bool no_match_today, int m) {
     uint8_t* st = save_.state.data();
     // phase A: the entries of the transfer list: exhaustion decay, ownership toggle, interest expiry
     for (int slot = 0; slot < kTransferListSlots; slot++) {
-        uint8_t* r = st + kSquad + 4 * 0x618 + size_t(slot) * kSquadRecord;
+        uint8_t* r = st + squad_block(4) + size_t(slot) * kSquadRecord;
         if (!r[0x0F]) break;  // sub_24D56(4, 0): the occupied prefix
         if (r[0x13] > 0x38) r[0x13] = uint8_t(r[0x13] - 10);
         if ((r[0x1A] & 0x7F) == 1 && brng_.range(0, 2) == 0) r[0x1A] ^= 1;
@@ -969,19 +974,19 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
     const GameDate today = date_of_season_day(day_ + 1, save_.year);
     const MessageDate message_date{today.day, today.month, today.year, day_ + 1};
     auto native_name = [](const uint8_t* pl) { std::string t; for (size_t k = 0; k < 19 && pl[k]; k++) t += char(pl[k]); return t; };
-    for (size_t i = 0; i < save_.squad.size() && i < size_t(kHokSquadSlots); i++) {
-        if (save_.squad[i].player < 0) continue;
-        uint8_t* r = st + kSquad + i * kSquadRecord;
+    for (size_t i = 0; i < save_.squad_of(m).size() && i < size_t(kHokSquadSlots); i++) {
+        if (save_.squad_of(m)[i].player < 0) continue;
+        uint8_t* r = st + squad_block(m) + i * kSquadRecord;
         if (std::getenv("EM_DEBUG_TINJ"))
             std::fprintf(stderr, "tinj B%zu day %d slot %zu 09=%02x 0D=%02x 0A=%02x 13=%02x\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, i, r[0x09], r[0x0D], r[0x0A], r[0x13]);
         if (r[0x0D] == 0 && r[0x09] == 0 && training_injury(r[0x13], no_match_today, finance_.level, brng_)) {
-            injure(i, 0);
+            injure(i, 0, m);
             // seg002:0FD1..1042: "Verletzung au~erhalb des Spieles:" / "NAME  (injury)" (general, ovr036:01CA)
             const uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
             native_add_message(save_.state, brng_, message_date, MessageKind::TwoLines,
                                {MessageArg::str("Verletzung au~erhalb des Spieles:"),
                                 MessageArg::str(native_name(pl) + "  (" + native_from_utf8(injuries_.names[size_t(r[0x17]) % injuries_.names.size()]) + ")")},
-                               0, true);
+                               m, true);
         }
         if (day_ >= 233) continue;
         uint8_t* pl = st + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
@@ -993,7 +998,7 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
         if (brng_.range(350, 450) < limit && !(r[0x18] & 0x80) && r[0x18] < 100) {
             r[0x18] |= 0x80;
             // seg002:110C..112A: "NAME k}ndigt an, da~ er seinen Vertrag^nicht mehr verl{ngern wird." (general)
-            native_add_message(save_.state, brng_, message_date, MessageKind::NoRenewal, {MessageArg::str(native_name(pl)), MessageArg::str("")}, 0, true);
+            native_add_message(save_.state, brng_, message_date, MessageKind::NoRenewal, {MessageArg::str(native_name(pl)), MessageArg::str("")}, m, true);
         }
         if (r[0x0D] != 0) r[0x0A] = 0;  // an injured player loses his role
         if (brng_.range(0, 3) == 0 && r[0x09] > 0x1F && pl[0x1E] != 0) {
@@ -1022,54 +1027,54 @@ void Game::squad_injuries(bool weekly, bool no_match_today) {
             // seg002:13CB..1471: "NAME bietet Ihnen an, von <years> auf <wish>^Jahre zu verl{ngern." (entry index to +0x1E)
             pl[0x1E] = uint8_t(native_add_message(save_.state, brng_, message_date, MessageKind::ContractOffer,
                                                   {MessageArg::str(native_name(pl)), MessageArg::str("von " + std::to_string(r[0x0B]) + " auf " + std::to_string(years))},
-                                                  0, false, r[0x0F]));
+                                                  m, false, r[0x0F]));
         }
     }
-    heal_squad(weekly);  // REAL-CODE period 12: the healing comes after the player loop (an injured player draws no training injury on his last week)
+    heal_squad(weekly, m);  // REAL-CODE period 12: the healing comes after the player loop (an injured player draws no training injury on his last week)
 }
 
-void Game::refresh_budget_roster() {
-    const ManagerBudget current = budget_from_save(save_, 0);
-    mgr_[0].budget.players = current.players;
-    mgr_[0].budget.squad_costs = current.squad_costs;
-    mgr_[0].budget.pool_costs = current.pool_costs;
+void Game::refresh_budget_roster(int m) {
+    const ManagerBudget current = budget_from_save(save_, m);
+    mgr_[m].budget.players = current.players;
+    mgr_[m].budget.squad_costs = current.squad_costs;
+    mgr_[m].budget.pool_costs = current.pool_costs;
 }
 
-void Game::clear_insurance_locks() {
+void Game::clear_insurance_locks(int m) {
     // ovl08_1d61 clears bit 31 of the stored value at each month-end.
     for (size_t slot = 0; slot < 29; slot++)
-        if (save_.state.at(kSquad + slot * kSquadRecord + 0x0F))
-            save_.state.at(kSquad + slot * kSquadRecord + 0x2F) &= 0x7F;
+        if (save_.state.at(squad_block(m) + slot * kSquadRecord + 0x0F))
+            save_.state.at(squad_block(m) + slot * kSquadRecord + 0x2F) &= 0x7F;
 }
 
 // ovl06_364f once per minute of a match of the human club (here after the match, so a player hurt
 // in it misses the next match on), ovl06_2385 picks the player.
-void Game::match_injuries() {
-    if (selected_match_players(mgr_[0].squad) < 9) return;  // no minutes were played in a forfeit
-    const int load = save_.state[kManagerBlock + 0xF0];
-    for (int minute = 0; minute < 60; minute++) injury_minute(load);
+void Game::match_injuries(int m) {
+    if (selected_match_players(mgr_[m].squad) < 9) return;  // no minutes were played in a forfeit
+    const int load = save_.state[manager_block(m) + 0xF0];
+    for (int minute = 0; minute < 60; minute++) injury_minute(load, nullptr, m);
 }
 
 // One minute of the check (the original runs it inside the minute loop of the match, before the goal chances).
-void Game::injury_minute(int load, const HokTeam* on_ice) {
+void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
     int with_role = 0;
-    for (const HokSquadPlayer& sp : save_.squad) with_role += sp.player >= 0 && sp.role != 0;
+    for (const HokSquadPlayer& sp : save_.squad_of(m)) with_role += sp.player >= 0 && sp.role != 0;
     if (with_role < 5) return;
     if (!match_injury_minute(load, finance_.level, brng_)) return;
     // ovr030:23B6 (sub_45215): up to 151 picks; a pick on the ice (for a watched team, sub_5F431) is chosen when rand(0,10)
     // exceeds 3 (byte +0x11 below +0x10) or 7; a goalkeeper (position / 25 == 0, sub_12380) then only when rand(0,2) is 0
     for (int tries = 0; tries <= 150; tries++) {
-        const size_t slot = size_t(brng_.range(0, int(save_.squad.size()) - 1));
-        const HokSquadPlayer& sp = save_.squad[slot];
-        const uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
+        const size_t slot = size_t(brng_.range(0, int(save_.squad_of(m).size()) - 1));
+        const HokSquadPlayer& sp = save_.squad_of(m)[slot];
+        const uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
         if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
         if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury pick slot %zu line %d role %d lines on ice %d/%d\n", slot, sp.line, sp.role, on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
         if (on_ice && (sp.line & 0x7F) != on_ice->current_line[(sp.line >> 7) & 1] + 1) continue;  // ovr030:2444: only players on the ice
         const bool weaker = r[0x11] < r[0x10];
         if (brng_.range(0, 10) <= (weaker ? 3 : 7)) continue;
         if (std::min(2, save_.players[size_t(sp.player)].position / 25) == 0 && brng_.range(0, 2) != 0) continue;
-        injure(slot, 1);
-        if (slot < hurt_in_match_.size()) hurt_in_match_[slot] = true;
+        injure(slot, 1, m);
+        if (slot < mgr_[m].hurt_in_match.size()) mgr_[m].hurt_in_match[slot] = true;
         // the original opens the line-up screen; leaving it runs sub_55DD2: the active line quotas DS:CC73 follow the
         // raw ones DS:CC43 of manager 0 (normalised to a sum of 8; REAL-CODE period 28)
         for (size_t kind = 0; kind < 2; kind++) {
@@ -1102,10 +1107,10 @@ void Game::remove_squad_record(int block, int slot, int end_slot) {
 // bit 7), then the rest of his squad (bit 6, until season day 232). 1000:3bb8 is called with the
 // slot number where it reads a player record, so the strength it matches belongs to player
 // record "slot" of DS:8253, not to the offered player - kept as in the original.
-void Game::make_offers() {
+void Game::make_offers(int m) {
     uint8_t* st = save_.state.data();
     auto pending = [&](const HokPlayer* pl) {
-        for (const ManagerOffer& o : manager_offers_)
+        for (const ManagerOffer& o : mgr_[m].transfer_offers)
             if (o.player == int(pl - save_.players.data())) return true;
         return false;
     };
@@ -1114,7 +1119,7 @@ void Game::make_offers() {
         return (p[0x15] + p[0x16] + p[0x17]) / 3;
     };
     auto offer = [&](int block, int slot, bool listed) {
-        uint8_t* r = st + kSquad + size_t(block) * 0x618 + size_t(slot) * kSquadRecord;
+        uint8_t* r = st + squad_block(block) + size_t(slot) * kSquadRecord;
         HokPlayer* pl = player_by_exe_index(r[0x0F]);
         if (std::getenv("EM_DEBUG_OFFER"))
             std::fprintf(stderr, "offer B%zu day %d block %d slot %d 09=%02x pending %d\n", g_borland_log ? g_borland_log->size() : size_t(0), day_, block, slot, r[0x09], pl ? int(pending(pl)) : -1);
@@ -1141,49 +1146,49 @@ void Game::make_offers() {
             auto cstr = [&](size_t at, size_t n) { std::string t; for (size_t k = 0; k < n && st[at + k]; k++) t += char(st[at + k]); return t; };
             const size_t record = kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
             const int handle = native_add_message(save_.state, brng_, {d.day, d.month, d.year, day_ + 1}, MessageKind::Interest,
-                {MessageArg::str(cstr(0x17E7 + size_t(bidder) * 61, 22)), MessageArg::str(cstr(record, 20))}, 0, false, r[0x0F]);
+                {MessageArg::str(cstr(0x17E7 + size_t(bidder) * 61, 22)), MessageArg::str(cstr(record, 20))}, m, false, r[0x0F]);
             st[record + 0x1E] = uint8_t(handle);
         }
         ManagerOffer o{int(pl - save_.players.data()), listed, bidder, 0};
         // Native interest creation has no sale-price draw; price begins on click.
-        manager_offers_.push_back(o);
+        mgr_[m].transfer_offers.push_back(o);
         char line[160];
         std::snprintf(line,sizeof line,"transfer interest: %s for %s",save_.teams[size_t(bidder)].name.c_str(),pl->name.c_str());
         log_.push_back(line);
     };
     for (int slot = 0; slot < kTransferListSlots; slot++) {
-        const uint8_t* r = st + kSquad + 4 * 0x618 + size_t(slot) * kSquadRecord;
-        if (!r[0x0F] || st[kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord + 0x1A] != 0) continue;  // manager 0's
+        const uint8_t* r = st + squad_block(4) + size_t(slot) * kSquadRecord;
+        if (!r[0x0F] || st[kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord + 0x1A] != m) continue;  // the manager's (player +0x1A = manager)
         if (r[0x18] & 0x80) continue;
         offer(4, slot, true);
     }
     if (day_ >= 233) return;
-    for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-        const uint8_t* r = st + kSquad + slot * kSquadRecord;
+    for (size_t slot = 0; slot < save_.squad_of(m).size() && slot < size_t(kHokSquadSlots); slot++) {
+        const uint8_t* r = st + squad_block(m) + slot * kSquadRecord;
         if (std::getenv("EM_DEBUG_OFFER") && (!r[0x0F] || r[0x0C] != 0 || (r[0x18] & 0x80)))
             std::fprintf(stderr, "offer skip day %d slot %zu 0F=%02x 0C=%02x 18=%02x\n", day_, slot, r[0x0F], r[0x0C], r[0x18]);
         if (!r[0x0F] || r[0x0C] != 0 || (r[0x18] & 0x80)) continue;
-        offer(0, int(slot), false);
+        offer(m, int(slot), false);
     }
 }
 
-void Game::restore_offers() {
+void Game::restore_offers(int m) {
     // HOK retains interest and bidder only. Import performs no price valuation
     // or random draws; the native price belongs to a later row-click modal.
     auto restore = [&](int block, int slots, uint8_t flag, bool listed) {
         for (int slot = 0; slot < slots; slot++) {
-            const size_t at = kSquad + size_t(block) * 0x618 + size_t(slot) * kSquadRecord;
+            const size_t at = squad_block(block) + size_t(slot) * kSquadRecord;
             if (!(save_.state.at(at + 9) & flag) || !save_.state.at(at + 15)) continue;
             HokPlayer* player = player_by_exe_index(save_.state.at(at + 15));
             const int bidder = save_.state.at(at + 0x16);
-            if (!player || player->raw[0x1A] != 0 || bidder >= int(save_.teams.size()) || bidder == mgr_[0].team) continue;
+            if (!player || player->raw[0x1A] != m || bidder >= int(save_.teams.size()) || bidder == mgr_[m].team) continue;
             const int index = int(player - save_.players.data());
-            if (std::any_of(manager_offers_.begin(), manager_offers_.end(), [&](const auto& o) { return o.player == index; })) continue;
-            manager_offers_.push_back({index, listed, bidder, 0});
+            if (std::any_of(mgr_[m].transfer_offers.begin(), mgr_[m].transfer_offers.end(), [&](const auto& o) { return o.player == index; })) continue;
+            mgr_[m].transfer_offers.push_back({index, listed, bidder, 0});
         }
     };
     restore(4, kTransferListSlots, 0x80, true);
-    restore(0, kHokSquadSlots, 0x40, false);
+    restore(m, kHokSquadSlots, 0x40, false);
 }
 
 // The contract dialog of ovl02_0000 for manager 0, after the contract years went down: every
@@ -1192,16 +1197,16 @@ void Game::restore_offers() {
 // demand + 10 %), he leaves: the club gets half his market value (ovl11_3d36(record, 0) / 2,
 // added to DS:97EA), his record goes (ovl09_25d6) and he is a free player (+0x1A = 6, no team)
 // for ovl16_0480. A player who accepts gets the years and the salary.
-void Game::expire_contracts() {
+void Game::expire_contracts(int m) {
     constexpr int kMatchdays = 44;
-    for (size_t slot = 0; slot < save_.squad.size();) {
-        uint8_t* r = save_.state.data() + kSquad + slot * kSquadRecord;
+    for (size_t slot = 0; slot < save_.squad_of(m).size();) {
+        uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
         if (r[0x0B] != 0 || !r[0x0F]) {
             slot++;
             continue;
         }
-        const ContractPlayer cp = contract_player(save_, 0, int(slot));
-        HokSquadPlayer& sp = save_.squad[slot];
+        const ContractPlayer cp = contract_player(save_, m, int(slot));
+        HokSquadPlayer& sp = save_.squad_of(m)[slot];
         HokPlayer& pl = save_.players[size_t(sp.player)];
         if (!std::getenv("EM_OLD_CONTRACTS")) {
             // ovl02_0000 (ovr026:0DC5..0E71, Amiga FUN_00133378) proposes 1 year at ovl11_3d36(record, 1) * (147 - age) / 100
@@ -1249,12 +1254,12 @@ void Game::expire_contracts() {
             continue;
         }
         const long fee = player_worth(contracts_, cp, Worth::Value, brng_) / 2;
-        mgr_[0].budget.balance += fee;
+        mgr_[m].budget.balance += fee;
         const int exe_index = r[0x0F];
-        remove_squad_record(0, int(slot), kHokSquadSlots - 1);
-        save_.squad.erase(save_.squad.begin() + long(slot));
-        std::move(injured_role_.begin() + long(slot) + 1, injured_role_.end(), injured_role_.begin() + long(slot));
-        injured_role_.back() = 0;
+        remove_squad_record(m, int(slot), kHokSquadSlots - 1);
+        save_.squad_of(m).erase(save_.squad_of(m).begin() + long(slot));
+        std::move(mgr_[m].injured_role.begin() + long(slot) + 1, mgr_[m].injured_role.end(), mgr_[m].injured_role.begin() + long(slot));
+        mgr_[m].injured_role.back() = 0;
         save_.state[kPlayers + size_t(exe_index - 1) * kPlayerRecord + 0x1A] = 6;
         save_.state[kPlayers + size_t(exe_index - 1) * kPlayerRecord + 0x1D] = 0xFF;
         pl.team = -1;
@@ -1277,8 +1282,8 @@ bool Game::finish_sale_offer(const SaleQuote& quote,bool sell){
         player->team=player->raw[0x1d]==255?-1:player->raw[0x1d];
         mgr_[0].budget.balance=int32_t(le32(save_.state,0x0dcd+0x18f));
         if(quote.block==0){
-            std::move(injured_role_.begin()+quote.slot+1,injured_role_.end(),injured_role_.begin()+quote.slot);
-            injured_role_.back()=0;
+            std::move(mgr_[0].injured_role.begin()+quote.slot+1,mgr_[0].injured_role.end(),mgr_[0].injured_role.begin()+quote.slot);
+            mgr_[0].injured_role.back()=0;
         }
         save_.squad=hok_squad(save_,0);
         if(buyer>=0&&buyer<int(save_.teams.size())){
@@ -1288,11 +1293,11 @@ bool Game::finish_sale_offer(const SaleQuote& quote,bool sell){
         refresh_budget_roster();
         log_.push_back(player->name+" sold for "+std::to_string(quote.amounts.net/3)+" DM");
     }
-    manager_offers_.clear();restore_offers();return true;
+    mgr_[0].transfer_offers.clear();restore_offers();return true;
 }
 bool Game::accept_offer(size_t index) {
-    if(index>=manager_offers_.size())return false;
-    const auto offer=manager_offers_[index];const auto& player=save_.players.at(size_t(offer.player));
+    if(index>=mgr_[0].transfer_offers.size())return false;
+    const auto offer=mgr_[0].transfer_offers[index];const auto& player=save_.players.at(size_t(offer.player));
     const int id=int((player.raw-save_.state.data()-kPlayers)/kPlayerRecord)+1;
     const int block=offer.listed?4:0;
     for(int slot=0;slot<(offer.listed?11:29);++slot){
@@ -1479,11 +1484,11 @@ TransferMoveResult Game::move_owned_player(size_t slot, bool to_market,bool prep
     std::copy(incoming.begin(), incoming.end(), destination);
     remove_squad_record(to_market ? 0 : 4, int(slot), to_market ? club_end : pool_end);
     if (to_market) {
-        std::move(injured_role_.begin() + long(slot) + 1, injured_role_.end(), injured_role_.begin() + long(slot));
-        injured_role_.back() = 0;
+        std::move(mgr_[0].injured_role.begin() + long(slot) + 1, mgr_[0].injured_role.end(), mgr_[0].injured_role.begin() + long(slot));
+        mgr_[0].injured_role.back() = 0;
     } else {
-        std::move_backward(injured_role_.begin() + insert, injured_role_.end() - 1, injured_role_.end());
-        injured_role_[size_t(insert)] = 0;
+        std::move_backward(mgr_[0].injured_role.begin() + insert, mgr_[0].injured_role.end() - 1, mgr_[0].injured_role.end());
+        mgr_[0].injured_role[size_t(insert)] = 0;
     }
     save_.squad = hok_squad(save_, 0);
     if(prepare_lineup)prepare_human_lineup(false);
@@ -1524,8 +1529,8 @@ ContractResult Game::negotiate_contract(size_t slot, int years, long salary, boo
 }
 
 void Game::decline_offer(size_t index) {
-    if(index>=manager_offers_.size())return;
-    const auto offer=manager_offers_[index];const auto& player=save_.players.at(size_t(offer.player));
+    if(index>=mgr_[0].transfer_offers.size())return;
+    const auto offer=mgr_[0].transfer_offers[index];const auto& player=save_.players.at(size_t(offer.player));
     const int id=int((player.raw-save_.state.data()-kPlayers)/kPlayerRecord)+1,block=offer.listed?4:0;
     for(int slot=0;slot<(offer.listed?11:29);++slot){
         if(save_.state.at(kSquad+size_t(block)*0x618+size_t(slot)*52+15)!=id)continue;
@@ -1533,12 +1538,12 @@ void Game::decline_offer(size_t index) {
     }
 }
 
-void Game::train_squad() {
-    mgr_[0].budget.balance -= mgr_[0].budget.open_97ee;  // weekly recovery costs (146e:0c89)
-    for (size_t i = 0; i < save_.squad.size(); i++) {
-        HokSquadPlayer& sp = save_.squad[i];
+void Game::train_squad(int m) {
+    mgr_[m].budget.balance -= mgr_[m].budget.open_97ee;  // weekly recovery costs (146e:0c89)
+    for (size_t i = 0; i < save_.squad_of(m).size(); i++) {
+        HokSquadPlayer& sp = save_.squad_of(m)[i];
         if (sp.player < 0) continue;
-        uint8_t* r = save_.state.data() + kSquad + i * kSquadRecord;
+        uint8_t* r = save_.state.data() + squad_block(m) + i * kSquadRecord;
         TrainingPlayer p;
         p.position = std::min(2, save_.players[size_t(sp.player)].position / 25);
         p.condition = r[0x10];
@@ -1561,18 +1566,18 @@ void Game::train_squad() {
         sp.exhaustion = p.exhaustion * 2 / 3;
         sp.raw_exhaustion = p.exhaustion;
     }
-    if (std::getenv("EM_OLD_TRAINREFRESH")) refresh_human_team();  // the training does not refresh the club record (REAL-CODE period 49: the drift of the day reaches the month end)
+    if (std::getenv("EM_OLD_TRAINREFRESH")) refresh_human_team(m);  // the training does not refresh the club record (REAL-CODE period 49: the drift of the day reaches the month end)
 }
 
 // ovl14_2e0f restores the saved automatic-lineup mode before entering the next
 // manager menu. Recompute after loading as well: a HOK can contain an older lineup.
-void Game::prepare_human_lineup(bool restore_saved_mode) {
+void Game::prepare_human_lineup(bool restore_saved_mode, int m) {
     if(restore_saved_mode)save_.state.at(0x078A) = save_.state.at(0x078B);
-    auto_lineup(save_, 0);
-    if (!skip_refresh_once_) refresh_human_team();
+    auto_lineup(save_, m);
+    if (!skip_refresh_once_) refresh_human_team(m);
     skip_refresh_once_ = false;
-    mgr_[0].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[0].team);
-    configure_human_tactics(mgr_[0].squad, save_, 0);
+    mgr_[m].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[m].team);
+    configure_human_tactics(mgr_[m].squad, save_, m);
 }
 
 // 162c:146c (called by the day loop): the human club's team record follows its squad. Per kind
@@ -1593,28 +1598,28 @@ void Game::weekly_team_drift() {
     }
 }
 
-void Game::refresh_human_team() {
+void Game::refresh_human_team(int m) {
     // From the first WM day on, the WM branch of the day loop runs with manager index 5; without a human national coach
     // 162c:146c is no longer called for the club, whose record keeps the value of the last club day into the season-end
     // rerate (REAL-CODE period 30: 69/68/67/68 -> 65/65/63/63, the strength 256 of the summer bookings)
     if (wm_round_ > 0 && national_coach_ < 0 && !std::getenv("EM_OLD_WMREFRESH")) return;
-    HokTeam& team = save_.teams[size_t(mgr_[0].team)];
+    HokTeam& team = save_.teams[size_t(mgr_[m].team)];
     // 162c:146c starts with the recount of the players on the ice (sub_46386 via 24A5E; running penalties counted by
     // sub_42E90(team, 0)): after a game the record gets the count of the lines then on the ice (REAL-CODE period 45: 4 in
     // the last minute with an injured player assigned, 5 after the evening lineup)
     if (!std::getenv("EM_OLD_DAYRECOUNT")) {
         const int running = ((team.penalty_code & 7) != 0) + (((team.penalty_code >> 4) & 7) != 0);
-        int per_line[2] = {line_counts_[0][0], line_counts_[0][1]};
-        recount_skaters(team, save_.squad, save_.players, running, per_line);
+        int per_line[2] = {line_counts_[size_t(m)][0], line_counts_[size_t(m)][1]};
+        recount_skaters(team, save_.squad_of(m), save_.players, running, per_line);
         if (std::getenv("EM_DAYRECOUNT_LINES")) {  // the per-line counts DS:CC37 (written by the original as well; unverified here)
-            line_counts_[0][0] = uint8_t(per_line[0]); line_counts_[0][1] = uint8_t(per_line[1]);
-            mgr_[0].squad.per_line[0] = per_line[0]; mgr_[0].squad.per_line[1] = per_line[1];
+            line_counts_[size_t(m)][0] = uint8_t(per_line[0]); line_counts_[size_t(m)][1] = uint8_t(per_line[1]);
+            mgr_[m].squad.per_line[0] = per_line[0]; mgr_[m].squad.per_line[1] = per_line[1];
         }
     }
     for (int kind = 0; kind < 2; kind++) {
         int sum[3] = {};
         for (int line = 0; line < 3; line++) {
-            const LineValues v = line_strength(team, mgr_[0].squad, line, kind, false, 0);
+            const LineValues v = line_strength(team, mgr_[m].squad, line, kind, false, 0);
             sum[0] += v.skill1;
             sum[1] += v.skill2;
             sum[2] += v.form;
@@ -1623,8 +1628,8 @@ void Game::refresh_human_team() {
         team.skill2[kind] = sum[1] / 3;
         team.form[kind] = sum[2] / 3;
     }
-    mgr_[0].budget.team_strength = team.skill1[0] + team.skill1[1] + team.skill2[0] + team.skill2[1];
-    if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "strength day %d [%s]: %d (skaters %d) s1 %d/%d s2 %d/%d at %zu\n", day_, g_draw_scope, mgr_[0].budget.team_strength, team.skaters, team.skill1[0], team.skill1[1], team.skill2[0], team.skill2[1], (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
+    mgr_[m].budget.team_strength = team.skill1[0] + team.skill1[1] + team.skill2[0] + team.skill2[1];
+    if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "strength day %d [%s]: %d (skaters %d) s1 %d/%d s2 %d/%d at %zu\n", day_, g_draw_scope, mgr_[m].budget.team_strength, team.skaters, team.skill1[0], team.skill1[1], team.skill2[0], team.skill2[1], (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
 }
 
 bool Game::enter_advertising() {
@@ -1722,15 +1727,15 @@ void Game::expire_advert_options() {
         }
 }
 
-int Game::current_club_image() {
+int Game::current_club_image(int m) {
     ImageInputs in;
-    const auto competition = image_competition_factors(save_, 0);
+    const auto competition = image_competition_factors(save_, m);
     in.in_competition = competition.playoffs;
     in.cup = competition.cup;
     in.euro = competition.euro;
-    in.league = mgr_[0].budget.league;
-    in.matchday = matchday_[size_t(std::clamp(mgr_[0].budget.league, 0, 2))];
-    const int team = mgr_[0].team;
+    in.league = mgr_[m].budget.league;
+    in.matchday = matchday_[size_t(std::clamp(mgr_[m].budget.league, 0, 2))];
+    const int team = mgr_[m].team;
     const League& league = leagues_[size_t(std::clamp(in.league, 0, 2))];
     const int row_slot = team - league.first_team;
     for (int j = std::max(in.matchday - 5, 1); j < in.matchday; j++) {
@@ -1743,19 +1748,19 @@ int Game::current_club_image() {
     std::vector<ContractPlayer> image_squad;
     for (int slot = 0; slot < kHokSquadSlots; slot++) {
         int p = -1;
-        ContractPlayer c = contract_player(save_, 0, slot, &p);
+        ContractPlayer c = contract_player(save_, m, slot, &p);
         if (p >= 0) image_squad.push_back(c);
     }
-    in.stadium = stadium_score(sponsor_tables_, mgr_[0].budget.stadium, mgr_[0].budget.places);
+    in.stadium = stadium_score(sponsor_tables_, mgr_[m].budget.stadium, mgr_[m].budget.places);
     return club_image(in, image_squad, contracts_, brng_);
 }
 
-void Game::update_sponsors() {
+void Game::update_sponsors(int m) {
     // ovl08_2ba7 uses the image already stored by the preceding daily
     // preparation; calculating a new image here changes both phase and RNG.
-    generate_sponsor_offers(sponsor_tables_, mgr_[0].image, false, mgr_[0].offers, brng_);
+    generate_sponsor_offers(sponsor_tables_, mgr_[m].image, false, mgr_[m].offers, brng_);
     char line[96];
-    std::snprintf(line, sizeof line, "image %d, sponsor offers renewed", mgr_[0].image);
+    std::snprintf(line, sizeof line, "image %d, sponsor offers renewed", mgr_[m].image);
     log_.push_back(line);
 }
 
@@ -2329,37 +2334,38 @@ void Game::credit_opponent_goal(int competition, bool goal, const HokTeam& score
 }
 
 void Game::credit_human_goal(int competition, bool penalty, bool goal, const HokTeam* on_ice,
-                             const std::vector<HokSquadPlayer>* working) {
+                             const std::vector<HokSquadPlayer>* working, int m) {
     auto add_assists = [&](const HokPlayer& player, int count) {
         const size_t at = size_t(player.raw - save_.state.data()) + 0x1F;
         const int value = le16(save_.state, at) + count;
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
+    auto& squad = save_.squad_of(m);
     GoalCredit credit;
-    if (working && working->size() == save_.squad.size()) {
+    if (working && working->size() == squad.size()) {
         // the pick sees the squad of the running match: a player in the penalty box has no role there (REAL-CODE period 8)
-        std::vector<HokSquadPlayer> view = save_.squad;
+        std::vector<HokSquadPlayer> view = squad;
         for (size_t i = 0; i < view.size(); i++) view[i].role = (*working)[i].role;
         credit = credit_goal(view, save_.players, brng_, competition, penalty, goal, on_ice);
         for (size_t i = 0; i < view.size(); i++) {  // the goal counters go to the stored squad
-            save_.squad[i].league_goals = view[i].league_goals; save_.squad[i].league_goals_byte = view[i].league_goals_byte;
-            save_.squad[i].cup_goals = view[i].cup_goals; save_.squad[i].cup_goals_byte = view[i].cup_goals_byte;
-            save_.squad[i].other_goals = view[i].other_goals; save_.squad[i].other_goals_byte = view[i].other_goals_byte;
+            squad[i].league_goals = view[i].league_goals; squad[i].league_goals_byte = view[i].league_goals_byte;
+            squad[i].cup_goals = view[i].cup_goals; squad[i].cup_goals_byte = view[i].cup_goals_byte;
+            squad[i].other_goals = view[i].other_goals; squad[i].other_goals_byte = view[i].other_goals_byte;
         }
     } else {
-        credit = credit_goal(save_.squad, save_.players, brng_, competition, penalty, goal, on_ice);
+        credit = credit_goal(squad, save_.players, brng_, competition, penalty, goal, on_ice);
     }
     if (credit.scorer >= 0) last_scorer_slot_ = credit.scorer;
     if (!goal || credit.scorer < 0) return;
-    auto& scorer = save_.players[size_t(save_.squad[size_t(credit.scorer)].player)];
+    auto& scorer = save_.players[size_t(squad[size_t(credit.scorer)].player)];
     if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
     // ovl14_2349 also credits this assist for a successful penalty shot.
-    if (credit.assist >= 0) add_assists(save_.players[size_t(save_.squad[size_t(credit.assist)].player)], 1);
+    if (credit.assist >= 0) add_assists(save_.players[size_t(squad[size_t(credit.assist)].player)], 1);
 }
 
 void Game::book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals,
-                           bool credit_goals) {
+                           bool credit_goals, int m) {
     interactive_played_ = true;
     const bool cup = competition == 1;
     auto add_assists = [&](const HokPlayer& player, int count) {
@@ -2370,21 +2376,21 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
     };
     for (int goal = 0; goal < own_goals; goal++) {
         const bool penalty = goal >= own_goals - shootout_goals;
-        if (credit_goals || penalty) credit_human_goal(competition, penalty);  // minute-wise credited goals are not booked twice
+        if (credit_goals || penalty) credit_human_goal(competition, penalty, true, nullptr, nullptr, m);  // minute-wise credited goals are not booked twice
     }
     bool goalkeeper_booked = false;
-    for (size_t slot = 0; slot < save_.squad.size(); slot++) {
-        auto& sp = save_.squad[slot];
+    for (size_t slot = 0; slot < save_.squad_of(m).size(); slot++) {
+        auto& sp = save_.squad_of(m)[slot];
         if (sp.player >= 0) {
-            save_.state.at(kSquad + slot * kSquadRecord + 0x1A) &= 0x7F;
+            save_.state.at(squad_block(m) + slot * kSquadRecord + 0x1A) &= 0x7F;
             sp.status = sp.role == 0 ? SquadStatus::None : SquadStatus::Reserve;
         }
-        const bool hurt = slot < hurt_in_match_.size() && hurt_in_match_[slot];  // a player injured in the match started it
-        if (slot < hurt_in_match_.size()) hurt_in_match_[slot] = false;
+        const bool hurt = slot < mgr_[m].hurt_in_match.size() && mgr_[m].hurt_in_match[slot];  // a player injured in the match started it
+        if (slot < mgr_[m].hurt_in_match.size()) mgr_[m].hurt_in_match[slot] = false;
         if (sp.player < 0 || (sp.role == 0 && !hurt) || sp.line == 0) continue;
         auto& player = save_.players[size_t(sp.player)];
         if (competition == 2) {
-            const size_t at = kSquad + slot * kSquadRecord;
+            const size_t at = squad_block(m) + slot * kSquadRecord;
             save_.state.at(at + 8)++;
             const int games = le16(save_.state, at + 0x20) + 1;
             save_.state.at(at + 0x20) = uint8_t(games);
@@ -2394,7 +2400,7 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
             season++;
             // the season byte and the career total (+0x1C league / +0x1E cup) go up at once: the contract wish of the next
             // squad day reads the total (REAL-CODE period 36)
-            const size_t at = kSquad + slot * kSquadRecord;
+            const size_t at = squad_block(m) + slot * kSquadRecord;
             save_.state.at(at + (cup ? 7 : 6)) = uint8_t(season);
             const size_t total_at = at + (cup ? 0x1E : 0x1C);
             const int games = le16(save_.state, total_at) + 1;
@@ -2416,7 +2422,7 @@ bool Game::book_forfeit(const MatchStats& stats, int manager) {
     if (stats.forfeit_side == 0) return false;
     interactive_played_ = true;
     const long fine = long(int64_t(200000) * finance_.money_num / finance_.money_den);
-    if (manager == 0) mgr_[0].budget.balance -= fine;
+    if (manager < kMaxManagers) mgr_[size_t(manager)].budget.balance -= fine;  // the national coach (5) has no ManagerBudget
     else {
         const size_t account = kManagerBlock + size_t(manager) * 0x1AF + 0x18F;
         const uint32_t balance = le32(save_.state, account) - uint32_t(fine);
@@ -2430,7 +2436,7 @@ bool Game::book_forfeit(const MatchStats& stats, int manager) {
 void Game::book_match_condition(const MatchStats& stats, int side, int manager) {
     if (stats.initial_load[side] >= 0)
         save_.state.at(kManagerBlock + size_t(manager) * 0x1AF + 0xF0) = uint8_t(stats.initial_load[side]);
-    const int team = manager == 0 ? mgr_[0].team : national_team();
+    const int team = manager < kMaxManagers ? mgr_[size_t(manager)].team : national_team();
     const HokTeam& played_team = stats.final_teams[size_t(side)];
     if (played_team.raw && team >= 0 && team < kHokTeams) {
         HokTeam& stored = save_.teams[size_t(team)];
@@ -2458,8 +2464,8 @@ void Game::book_match_condition(const MatchStats& stats, int side, int manager) 
         save_.state.at(at + 0x1B) = uint8_t(played.fitness);
         save_.state.at(at + 0x00) = uint8_t(played.major_penalties);
         save_.state.at(at + 0x01) = uint8_t(played.minor_penalties);
-        if (manager == 0) {
-            auto& stored = save_.squad.at(slot);
+        if (manager < kMaxManagers) {
+            auto& stored = save_.squad_of(manager).at(slot);
             stored.raw_exhaustion = played.raw_exhaustion;
             stored.exhaustion = played.exhaustion;
             stored.fitness = played.fitness;
@@ -2873,8 +2879,8 @@ void Game::refresh_transfer_list() {
 // slot of the column is taken; with all five used the column moves up one slot and the new result
 // goes to the last. Opponents from DS:06AD (52) on use both columns as one list of ten. The
 // opponent info screen (ovl13_0095) shows these results and its records (highest win and so on).
-void Game::record_head_to_head(int home, int away, int home_goals, int away_goals) {
-    book_head_to_head(save_.state, home, away, home_goals, away_goals, mgr_[0].team);
+void Game::record_head_to_head(int home, int away, int home_goals, int away_goals, int m) {
+    book_head_to_head(save_.state, home, away, home_goals, away_goals, mgr_[m].team, m);
 }
 
 // ovl13_3e43, the club records of the opponent info (ovl13_12e5), from ovl13_2f93 after league and
@@ -3264,9 +3270,9 @@ void Game::new_season() {
             player->skill_b=player->raw[0x16];player->form=player->raw[0x17];
             player->team=player->raw[0x1d];
             if(intake->shifted)
-                for(size_t slot=injured_role_.size()-1;slot>size_t(intake->slot);--slot)
-                    injured_role_[slot]=injured_role_[slot-1];
-            injured_role_[size_t(intake->slot)]=0;
+                for(size_t slot=mgr_[0].injured_role.size()-1;slot>size_t(intake->slot);--slot)
+                    mgr_[0].injured_role[slot]=mgr_[0].injured_role[slot-1];
+            mgr_[0].injured_role[size_t(intake->slot)]=0;
             save_.squad=hok_squad(save_,0);
             log_.push_back(player->name+" joins from the youth team");
         }
@@ -3335,8 +3341,8 @@ void Game::new_season() {
             if(review.insurance_payment)
                 log_.push_back(pl.name+" disability insurance payment "+std::to_string(review.insurance_payment/3)+" DM");
             log_.push_back(pl.name+(review.status==AnnualPlayerStatus::Disabled?" leaves after permanent injury":" retires from ice hockey"));
-            std::move(injured_role_.begin()+review.slot+1,injured_role_.end(),injured_role_.begin()+review.slot);
-            injured_role_.back()=0;
+            std::move(mgr_[0].injured_role.begin()+review.slot+1,mgr_[0].injured_role.end(),mgr_[0].injured_role.begin()+review.slot);
+            mgr_[0].injured_role.back()=0;
             ++retired;
         }else if(review.status==AnnualPlayerStatus::Missing&&pl.team>=0&&player_retires(pl.age,brng_)){
             // The no-row CPU/BIOS edge is still an approximation; keep its
@@ -3365,7 +3371,7 @@ void Game::new_season() {
         if (!std::getenv("EM_OLD_CONTRACTS")) r[0x03] = r[0x04] = r[0x05] = r[0x08] = 0;
     }
     log_.push_back(std::to_string(retired) + " players retired");
-    manager_offers_.clear();  // the offer flags are cleared above (ovl02_0000)
+    mgr_[0].transfer_offers.clear();  // the offer flags are cleared above (ovl02_0000)
     // power play counters (manager block +0x177) start from 0 again (NEUSAIS); the series records stay
     std::fill(save_.state.begin() + long(kSpecialTeams), save_.state.begin() + long(kSpecialTeams + 12), uint8_t(0));
     expire_contracts();
@@ -3591,6 +3597,9 @@ Bytes Game::save_bytes() const {
     }
     h.cup_draw = cup_draw_;
     h.cup_round = cup_round_;
+    // Until the day loop runs per manager (docs/MEHRSPIELER_PLAN.md step 7) the squads of managers 1..3 change only in
+    // `state` (team refresh, lineup, youth): do not write the decoded copies of the load back over them.
+    for (auto& other : h.other_squads) other.clear();
     store_hok(h);
     // manager block of manager 0 (raw money)
     Bytes& s = h.state;
@@ -3743,7 +3752,7 @@ void Game::advance_day() {
         save_.state.at(0x078B) = save_.state.at(0x078A);
         save_.state.at(0x078A) = 0;
     }
-    hurt_in_match_.fill(false);  // only a match of this day can count its injured starters
+    for (ManagerState& mg : mgr_) mg.hurt_in_match.fill(false);  // only a match of this day can count its injured starters
     day_++;
     const uint8_t event = calendar_.event(day_);
     mgr_[0].played = false;
