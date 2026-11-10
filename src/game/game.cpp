@@ -3190,8 +3190,7 @@ void Game::redistribute_players(int mode) {
 //      rand(1, 13) | rand(1, 3) << 4 | rand(0, 1) << 7), games and goals from the player record,
 //      skills and form. Then +0x1A = 4, value +0x2C and salary +0x28 from ovl11_3d36 and the
 //      nibbles +0x19 = rand(3, 12) << 4 | rand(3, 12).
-// A candidate of a human club would first move to a computer club of the same class
-// (ovl11_381e); club players of managers are never free (+0x1A = 0..3), so that is left out.
+// A candidate of a manager's club takes his skills from a random computer club of the same league tier (see below).
 void Game::refresh_transfer_list() {
     constexpr size_t kBlock = kSquad + 4 * 0x618;
     constexpr int kSlots = kTransferRefreshSlots;
@@ -3240,7 +3239,19 @@ void Game::refresh_transfer_list() {
         pr[0x17] = uint8_t(pl->form);
         {  // ovr035:381E (sub_5678E): the skills are derived anew from the attack strengths of the player's club; a club of the
            // national teams narrow the random part to rand(10,14), the others rand(0,14) (REAL-CODE)
-            const int club = pr[0x1D];
+            int club = pr[0x1D];
+            // ovr035:367C..36EB: a candidate of a manager's club takes the skills of a computer club of the same league tier
+            // (DS:07C0 first team, DS:07B1 count, DS:07C6 rand ranges), drawn until it has no manager (REAL-CODE Koeln period 94)
+            if (club >= 0 && club < kHokTeams && save_.teams[size_t(club)].raw[0x16] != 0 && !std::getenv("EM_OLD_REFRESHMGR")) {
+                constexpr int kFirst[3] = {0, 12, 24}, kCount[3] = {12, 12, 12}, kLo[3] = {0, 12, 24}, kHi[3] = {11, 23, 35};
+                int tier = 0;
+                while (tier < 3 && !(kFirst[tier] <= club && kFirst[tier] + kCount[tier] > club)) tier++;
+                tier = std::min(tier, 2);
+                do club = int(brng_.range(kLo[tier], kHi[tier]));
+                while (save_.teams[size_t(club)].raw[0x16] != 0);
+                // the tier index is the loop counter var_2 of the refresh: the loop goes on from tier + 1 (original bug)
+                if (!std::getenv("EM_OLD_REFRESHCOUNTER")) k = tier;
+            }
             if (club >= 0 && club < kHokTeams && save_.teams[size_t(club)].raw[0x16] == 0) {
                 const HokTeam& tm = save_.teams[size_t(club)];
                 const int league_first = kFirstNationalTeam;  // DS:06AD (byte_2567D) = 52: the national teams
@@ -4371,7 +4382,16 @@ g_draw_scope = "weekly-injuries-offers-training";
     // after a cup day without a game the evening lineup runs, but the club record is not refreshed (REAL-CODE period 49)
     // Every manager 0..N-1 (the loop head of the next day, ovr038:2EDD..2F2A); the lineup draws nothing.
     for (int m = 0; m < managers_; m++) {
-        skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_[size_t(m)];
+        // after a cup day with the human club the record is refreshed only when the step returns to the menu (REAL-CODE Köln
+        // period 28); otherwise the weekly drift of the day reaches the next month end (Köln period 94: drift +2 at the cup day
+        // 30.12., booked at the month end 31.12., refreshed only at the next event day)
+        const uint8_t ne = calendar_.event(day_ + 1);
+        const bool step_end = calendar_.league_day(day_ + 1) || ne == kEventCup || ne == kEventEuroCup || ne == kEventPlayoff || ne == kEventWorldChampionship;
+        const bool menu_next = step_end && (calendar_.league_day(day_ + 1) ||
+                                            !((ne == kEventCup && !human_in_next_cup()) || (ne == kEventEuroCup && !human_in_next_euro()) ||
+                                              (ne == kEventPlayoff && !human_in_next_playoff()) || (ne == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0)));
+        skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_[size_t(m)] ||
+                             (calendar_.event(day_) == kEventCup && !menu_next && !std::getenv("EM_OLD_CUPREFRESH"));
         prepare_human_lineup(true, m);
     }
     empty_cup_day_ = false;
