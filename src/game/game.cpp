@@ -807,6 +807,14 @@ void Game::play_cup_day() {
     // the weekly drift of the club record reaches the next day's month end, 146c refreshes only at the end of the step)
     for (int m = 0; m < managers_; m++)
         idle_cup_day_[size_t(m)] = !draw.empty() && mgr_[size_t(m)].team >= 0 && !std::getenv("EM_OLD_IDLECUP") && !manager_in_draw(m);
+    // a cup day without any game still sets the match load of the human squads (REAL-CODE Köln period 100: write watch on
+    // DS:974B, 13 -> 12 at the empty fourth round of the third cup game), without the spin and the rest of the round
+    if (live && draw.empty() && !std::getenv("EM_OLD_EMPTYCUP") && !std::getenv("EM_OLD_EMPTYLOAD"))
+        for (int m = 0; m < managers_; m++) {
+            const ManagerState& mg = mgr_[size_t(m)];
+            if (mg.team >= 0 && mg.team < kHokTeams)
+                save_.state.at(manager_block(m) + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mg.team)], mg.squad));
+        }
     if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) && !any_in_draw) {
         // without a human club the live round still starts with the match load of the human squads (manager +0xF0,
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
