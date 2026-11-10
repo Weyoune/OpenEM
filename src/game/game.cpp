@@ -772,13 +772,16 @@ void Game::play_cup_day() {
             // REAL-CODE: on the twice-weekly squad day the managed match recovers 2 x 19 after the game, less the overtime breaks (61, 66)
             int played = 0;
             for (int line = 0; line < 4; line++) played += stats.line_minutes[0][line];
-            const bool squad_day = (day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0;  // REAL-CODE after the emulator cache fix: the rest comes only on the twice-weekly squad day
+            int opponent = -1;
+            for (const Tie& t : ties)
+                if (t.home == mgr_[0].team || t.away == mgr_[0].team) opponent = t.home == mgr_[0].team ? t.away : t.home;
+            // the rest of the managed match comes on the twice-weekly squad day, and also when the opponent is team 0 (the
+            // original treats index 0 as an empty marker, as with the running penalties; REAL-CODE period 63 against
+            // periods 6 and 34, same day and game index)
+            const bool squad_day = (day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0 || (opponent == 0 && !std::getenv("EM_OLD_CUPREC"));
             const int recover = squad_day ? 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0) : 0;
-            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d\n", played, recover);
+            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d day %d game %d round %d next-event %d prev-event %d weekday-mod7 %d year %d\n", played, recover, day_, cup_game_, cup_round_, int(calendar_.event(day_ + 1)), int(calendar_.event(day_ - 1)), day_ % 7, save_.year);
             if (recover > 0) {
-                int opponent = -1;
-                for (const Tie& t : ties)
-                    if (t.home == mgr_[0].team || t.away == mgr_[0].team) opponent = t.home == mgr_[0].team ? t.away : t.home;
                 for (int team : {opponent, mgr_[0].team})
                     if (team >= 0)
                         for (auto& kind : save_.teams[size_t(team)].energy)

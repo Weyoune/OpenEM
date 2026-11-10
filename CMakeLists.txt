@@ -98,6 +98,9 @@ target_link_libraries(em_game PUBLIC em_formats)
 # em_dump: command-line inspection of original files (see src/tools/em_dump.cpp)
 add_executable(em_dump src/tools/em_dump.cpp)
 target_link_libraries(em_dump PRIVATE em_formats em_game)
+# em_world: the new-game world of game/world_generator.hpp as a HOK (comparison with the original's first save)
+add_executable(em_world src/tools/em_world.cpp)
+target_link_libraries(em_world PRIVATE em_formats em_game)
 
 # em_view: SDL window showing one KB image with its palette
 add_executable(em_view src/tools/em_view.cpp)
@@ -589,7 +592,7 @@ if(TARGET em_realcode)
     target_include_directories(em_realcode_market_tests PRIVATE tests)
 endif()
 if(TARGET em_realcode)
-    add_test(NAME realcode_books COMMAND em_realcode_books_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
+    add_test(NAME realcode_books COMMAND em_realcode_books_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}" "62;63;3;55")
     add_test(NAME realcode_market COMMAND em_realcode_market_tests "${EM_REFERENCE}/MONAT1.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/re/out/hok_layout.csv" "${EM_DATA}")
     # whole-program differential test: the original played (in the emulator, through its menu) 9 days from a savegame; the game must reach
     # the same 47 761 state bytes with identical Borland and game random draws (periods of 4, 3, 2 and 2 days: home and away league games, a DEB cup round)
