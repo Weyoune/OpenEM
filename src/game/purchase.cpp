@@ -90,7 +90,7 @@ PurchaseResult Game::finish_transfer_purchase(const PurchaseDraft& draft,int yea
     save_.state.at(players+size_t(draft.player_id-1)*33+0x1A)=uint8_t(a);
     save_.squad_of(a)=hok_squad(save_,a);mgr_[a].budget.balance-=draft.fee;
     log_.push_back(player->name+" bought for "+std::to_string(draft.fee/3)+" DM, "+std::to_string(years)+" years at "+std::to_string(salary/3)+" DM");
-    const long subsidy=purchase_subsidy(draft.fee,brng_);
+    const long subsidy=purchase_subsidy(draft.fee,brng_);last_purchase_subsidy_=subsidy;
     if(subsidy>0){if(accept_subsidy)mgr_[a].budget.balance=long(int32_t(uint32_t(mgr_[a].budget.balance)+uint32_t(subsidy)));log_.push_back("purchase sponsor subsidy "+std::to_string(subsidy/3)+(accept_subsidy?" DM accepted":" DM declined"));}
     if(prepare_lineup)prepare_human_lineup(false,a);
     refresh_budget_roster(a);return PurchaseResult::Purchased;

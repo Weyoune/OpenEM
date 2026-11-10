@@ -6,7 +6,10 @@ void ClassicApplication::open_purchase(int slot){
     const auto& h=snapshot();const size_t record=0x81CD+size_t(slot)*52;
     const auto flags=h.state.at(record+0x1A);
     if((flags&0x81)==0x81){notice("Angebot wurde\nbereits abgelehnt.");return;}
-    if(flags&1){notice("Diese bestehende Leihe ist noch nicht nachgebaut.");return;}
+    // ovr035:1161..1314..14E8: the manager bit without 0x80 on a computer player ends the click without
+    // editor or message (every write sets the bit together with 0x80, ovr035:1303/1ADD, so this needs a
+    // hand-made save).
+    if(flags&1)return;
     roster_rules_=false;
     fee_editor_=FeeEditor{slot,{}};
 }
@@ -57,15 +60,19 @@ void ClassicApplication::cancel_purchase(bool feedback){
 void ClassicApplication::submit_purchase(){
     const auto editor=*contract_editor_;const auto draft=*purchase_draft_;
     try{
-        PurchaseResult result;
+        PurchaseResult result;long subsidy=0;const ManagerBudget budget=session_.game().budget();
         session_.apply([&](Game& game){
             result=game.finish_transfer_purchase(draft,editor.years,editor.salary,false,false);
+            if(result==PurchaseResult::Purchased)subsidy=game.last_purchase_subsidy();
             if(result==PurchaseResult::Purchased&&editor.insured&&!game.set_player_insurance(size_t(draft.club_slot),true))
                 throw FormatError("Versicherung kann derzeit nicht geändert werden.");
             return ActionResult{{},result==PurchaseResult::Purchased};
         });
         if(result==PurchaseResult::Invalid){notice("Diese Vertragswerte sind ungültig.");return;}
-        contract_editor_.reset();purchase_draft_.reset();purchase_backdrop_.reset();invalidate();
+        contract_editor_.reset();purchase_draft_.reset();invalidate();
+        // As after a loan, the sponsor question keeps the page from before the purchase (not checked in DOSBox).
+        if(result==PurchaseResult::Purchased&&subsidy>0){backdrop_budget_=budget;open_subsidy_question(subsidy);}
+        else purchase_backdrop_.reset();
         if(result!=PurchaseResult::Purchased){
             if(editor.years>4){notice("SOOOO lange\nverpflichtet\nsich kein\nEishockey-Spieler !");pending_notices_.push_back("Der Transfer\nfindet nicht statt.");}
             else notice("Der Transfer\nfindet nicht statt.");

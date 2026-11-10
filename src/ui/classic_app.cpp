@@ -122,6 +122,7 @@ void ClassicApplication::tick(){
         finish_timed_native_notice();
     }
     if(!advancing_)update_roster_hover();
+    if(!advancing_)tick_stats_hold(SDL_GetTicks64());
     if(tick_match_view())return;
     if(!advancing_)check_new_messages();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
@@ -150,6 +151,7 @@ void ClassicApplication::request_exit(){
     advertising_info_=false;if(advert_renewal_)resolve_advert_renewal(false);
     if(menu_working_)finish_page();
     fee_editor_.reset();talent_question_=false;
+    if(subsidy_offer_){subsidy_offer_=0;purchase_backdrop_.reset();backdrop_budget_.reset();}
     if(purchase_draft_){try{cancel_purchase(false);}catch(const std::exception& e){notice(e.what());return;}}
     if(screen_==ClassicScreen::Transfer)action([](Game& game){game.finish_transfer_menu();return ActionResult{};});
     if(screen_==ClassicScreen::Tactics)finish_tactics(ClassicScreen::Main);
@@ -512,6 +514,7 @@ void ClassicApplication::release(){
     //7348:1188..11B4 restores the chooser on either mouse-button release.
     //The pointer position and an additional button-down do not close it.
     file_preview_.reset();
+    stats_hold_.reset();
     career_release();
 }
 void ClassicApplication::motion(int x,int y){
@@ -745,6 +748,7 @@ void ClassicApplication::render_screen(std::string_view name){
     }
     else if(name=="loan-fee"){screen_=ClassicScreen::Transfer;update_roster_hover();open_loan(3);}
     else if(name=="talent-question"){screen_=ClassicScreen::Transfer;update_roster_hover();open_talent_question();}
+    else if(name.rfind("subsidy-question:",0)==0){screen_=ClassicScreen::Transfer;update_roster_hover();open_subsidy_question(std::stol(std::string(name.substr(17))));}
     else if(name=="lineup")open_lineup();else if(name=="tactics")open_tactics();
     else if(name=="transfer")screen_=ClassicScreen::Transfer;else throw FormatError("Unknown render screen");
     update_roster_hover();draw();

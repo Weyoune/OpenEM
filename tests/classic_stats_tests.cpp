@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
             check(h.teams.at(size_t(fair[0])).name.rfind("EISB", 0) == 0 && h.teams.at(size_t(fair[11])).name.rfind("MANNHEIM", 0) == 0, "fair play order");
             check(classic_stats_club_years(h) == 0, "first career year");
             check(classic_stats_wm_view(h).score[0] == 0, "no WM results in 1993");
-            check(classic_stats_history_scroll(169, 33) == 1 && classic_stats_history_scroll(169, 42) == -1, "history arrows");
+            check(classic_stats_history_scroll(169, 33) == -1 && classic_stats_history_scroll(169, 42) == 1, "history arrows");
             check(classic_stats_wm_team(60, 160) == 52 && classic_stats_wm_team(290, 200) == 63, "WM boxes");
         }
         {

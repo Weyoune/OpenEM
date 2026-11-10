@@ -105,8 +105,9 @@ void draw_classic_stats_history(ClassicCanvas& c, const HokFile& h, int scroll) 
 
 int classic_stats_history_scroll(int x, int y) {
     if (x >= 0xA5 && x <= 0xA5 + 8) {
-        if (y >= 0x1E && y <= 0x1E + 8) return 1;
-        if (y >= 0x27 && y <= 0x27 + 8) return -1;
+        // sub_586C8 returns -1 for the upper arrow, which decrements (49B8), +1 for the lower one (499F).
+        if (y >= 0x1E && y <= 0x1E + 8) return -1;
+        if (y >= 0x27 && y <= 0x27 + 8) return 1;
     }
     if (y > 0x39 && y < 0x44) return 1;
     if (y > 0x75 && y < 0x81) return -1;

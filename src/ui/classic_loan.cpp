@@ -15,11 +15,21 @@ void ClassicApplication::open_loan(int slot){
 }
 void ClassicApplication::finish_loan(int slot,long fee){
     try{
-        PurchaseResult result=PurchaseResult::Invalid;
-        session_.apply([&](Game& game){result=game.loan_transfer_player(size_t(slot),fee,false,false);return ActionResult{{},result==PurchaseResult::Purchased};});
+        // The sponsor question (seg001:223E) is drawn over the page as it was before the loan: the original
+        // redraws the lists only after the question (DOSBox: sponsor-question.rgb).
+        auto backing=std::make_unique<HokFile>(clone_hok(snapshot()));const ManagerBudget budget=session_.game().budget();
+        const uint16_t trail=pool_trail_;
+        PurchaseResult result=PurchaseResult::Invalid;long subsidy=0;
+        session_.apply([&](Game& game){
+            result=game.loan_transfer_player(size_t(slot),fee,false,false);
+            if(result==PurchaseResult::Purchased)subsidy=game.last_purchase_subsidy();
+            return ActionResult{{},result==PurchaseResult::Purchased};
+        });
         invalidate();
         switch(result){
-            case PurchaseResult::Purchased:break;
+            case PurchaseResult::Purchased:
+                if(subsidy>0){purchase_backdrop_=std::move(backing);backdrop_budget_=budget;pool_trail_=trail;open_subsidy_question(subsidy);}
+                break;
             case PurchaseResult::SellerRefused:notice("Ihr Angebot\nwurde abgelehnt.");break;
             case PurchaseResult::InsufficientFunds:notice("Sie haben nicht\ngenug Geld !");break;
             case PurchaseResult::SquadFull:notice("Schon 29 Mann\nim Team.");break;
