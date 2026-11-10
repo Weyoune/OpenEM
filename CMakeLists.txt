@@ -623,7 +623,7 @@ if(TARGET em_realcode)
     endforeach()
     # second chain from START.HOK (Kölner EC, 1. Bundesliga): the Mannheim chain ends in the Oberliga, where the DOS
     # pair-table error breaks every match day (DEVIATIONS.md 39)
-    foreach(periodk "0;1;7;1000" "1;2;5;1001" "2;3;2;1002" "4;5;4;1004" "5;6;7;1005" "6;7;3;1006" "7;8;7;1007" "8;9;2;1008" "11;12;4;1011" "12;13;3;1012" "13;14;11;1013" "14;15;3;1014" "15;16;4;1015" "16;17;14;1016" "17;18;5;1017" "18;19;5;1018" "19;20;2;1019" "21;22;3;1021")
+    foreach(periodk "0;1;7;1000" "1;2;5;1001" "2;3;2;1002" "4;5;4;1004" "5;6;7;1005" "6;7;3;1006" "7;8;7;1007" "8;9;2;1008" "11;12;4;1011" "12;13;3;1012" "13;14;11;1013" "14;15;3;1014" "15;16;4;1015" "16;17;14;1016" "17;18;5;1017" "18;19;5;1018" "19;20;2;1019" "21;22;3;1021" "23;24;3;1023")
         list(GET periodk 0 from)
         list(GET periodk 1 to)
         list(GET periodk 2 days)
