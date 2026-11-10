@@ -2187,6 +2187,12 @@ void Game::play_playoff_day(bool setup_only) {
             std::fill(st.begin() + long(kPlayoffTeams), st.begin() + long(kPlayoffTeams) + 32, uint8_t(0xFF));  // sub_3F514(0): row 2 starts with FF
             std::fill(st.begin() + long(kPlayoffLive), st.begin() + long(kPlayoffLive) + 32, uint8_t(0));
             std::fill(st.begin() + 0x8EB1, st.begin() + 0x8ED1, uint8_t(0xFF));
+            if (!std::getenv("EM_OLD_POCLEAR")) {
+                // the new phase starts with empty win counters (all 7 pairs, the 0x14 markers of the last final included) and
+                // empty relegation results (REAL-CODE Köln period 69: the second season still held last season's values)
+                std::fill(st.begin() + long(kPlayoffWins), st.begin() + long(kPlayoffWins) + 14, uint8_t(0));
+                std::fill(st.begin() + long(kGroupResults) + 0x48, st.begin() + long(kGroupResults) + 0x90, uint8_t(0));
+            }
         } else {  // bracket (1-8 / 3-6) and (2-7 / 4-5), then the final
             std::vector<int> w;
             for (const Series& s : series_) w.push_back(s.winner());
@@ -2328,6 +2334,18 @@ void Game::play_playoff_day(bool setup_only) {
             sq.on_shot = nullptr;
         }
         for (size_t k = 0; k < ties.size() && k < draw_index.size(); k++) live_result[draw_index[k]] = ties[k].result;
+        if (!std::getenv("EM_OLD_POREST")) {
+            // like a live cup day: the clubs of the 64 outside today's games are rested to 90, and DS:A88D holds the home
+            // team of the first manager game (REAL-CODE Köln period 69)
+            for (int team = 0; team < 64; team++) {
+                if (manager_team(team)) continue;
+                bool in_round = false;
+                for (const HokPairing& p : draw) in_round |= p.home == team || p.away == team;
+                if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);
+            }
+            for (const HokPairing& p : draw)
+                if (manager_team(p.home) || manager_team(p.away)) { save_.state.at(0x784) = uint8_t(p.home); break; }
+        }
     }
     for (size_t index = 0; index < series_.size(); index++) {
         Series& s = series_[index];
