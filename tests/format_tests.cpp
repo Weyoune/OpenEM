@@ -3071,8 +3071,10 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
             {
                 HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
                 const int own = x.state.at(0x0DCD + 0x14);
+                // Since Köln period 94 every cup day of the own club that does not end the step skips the evening refresh, so the
+                // skater count +0x32 of the record (recounted by 146c) may change on loading too.
                 if (own >= 0 && own < kHokTeams)
-                    for (size_t f = 0x18; f < 0x1E; f++) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
+                    for (size_t f : {0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x32}) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
                 bool same = x.state == y.state;
                 for (size_t i = 0; i < x.state.size() && !same; i++)
                     if (x.state[i] != y.state[i]) { std::fprintf(stderr, "cup resume diff at state %zx: %02x vs %02x (checkpoint %d)\n", i, x.state[i], y.state[i], checkpoint); break; }

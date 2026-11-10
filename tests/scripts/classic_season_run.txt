@@ -46,6 +46,8 @@ expect date>=15.12.1993
 echo OEM geladen
 
 # --- on to the play-offs, then save and load as native .HOK -------------------------------------------------
+# since the transfer-list counter of the original (ovr035:3683, Koeln period 94) the passive club reaches no menu between
+# March and the next season: the step ends on 09.09.1994 and the reviews below are those of 1995 and 1996
 play until date>=01.03.1994
 main
 click 197 168
@@ -55,7 +57,7 @@ type RUN1.HOK
 key return
 expect screen=Main
 main
-expect date=21.03.1994
+expect date=09.09.1994
 # the original refuses a save of the same day ("Keinen heutigen Spielstand laden !", timed notice)
 click 197 168
 click 26 220
@@ -74,7 +76,7 @@ click 150 199
 type D:\RUN1.HOK
 key return
 expect screen=Main
-expect date=21.03.1994
+expect date=09.09.1994
 echo HOK geladen
 tour
 
@@ -83,7 +85,7 @@ play until modal=review-overview
 render review1-overview.bmp
 click 160 120
 render review1.bmp
-play until date>=20.09.1994
+play until date>=20.09.1995
 main
 expect idle
 tour
@@ -107,11 +109,11 @@ click 38 165
 contracts no 1
 # the passive manager ends the second season deep in debt: the financial license is withdrawn (insolvency;
 # the original has no page of its own for it, docs/logic/MELDUNGEN.md)
-play until date>=29.04.1995
+play until date>=29.04.1996
 expect news~financial license withdrawn
 expect news~signs for 2 years
 expect news~leaves the club
-play until date>=20.09.1995
+play until date>=20.09.1996
 main
 expect idle
 tour

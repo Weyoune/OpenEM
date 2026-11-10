@@ -3251,6 +3251,7 @@ void Game::refresh_transfer_list() {
                 while (save_.teams[size_t(club)].raw[0x16] != 0);
                 // the tier index is the loop counter var_2 of the refresh: the loop goes on from tier + 1 (original bug)
                 if (!std::getenv("EM_OLD_REFRESHCOUNTER")) k = tier;
+                if (std::getenv("EM_DEBUG_REFRESH")) std::fprintf(stderr, "refresh: manager-club candidate %d of club %d, counter -> %d of %d\n", p, int(pr[0x1D]), k, kSlots - kept);
             }
             if (club >= 0 && club < kHokTeams && save_.teams[size_t(club)].raw[0x16] == 0) {
                 const HokTeam& tm = save_.teams[size_t(club)];

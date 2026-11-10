@@ -290,7 +290,7 @@ private:
         } else if (word == "main") to_main();
         else if (word == "tour") tour();
         else if (word == "expect") {
-            if (!condition(rest)) fail("Erwartet " + rest + ", aber " + describe());
+            if (!condition(rest)) fail("Erwartet " + rest + ", aber " + stamp() + describe());
         } else if (word == "contracts") contracts_no_ = rest == "yes" ? 0 : rest == "no" ? 1000000 : rest.rfind("no ", 0) == 0 ? contract_count_ + std::stoi(rest.substr(3)) : throw ScriptError("contracts yes|no|no N");
         else if (word == "known-gap") known_gaps_.push_back(rest);
         else if (word == "render") {
