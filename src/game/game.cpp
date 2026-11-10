@@ -3709,7 +3709,8 @@ void Game::advance_day() {
         const bool sort = calendar_.league_day(day_ + 1) || (ev == kEventCup && human_in_next_cup()) ||
                           (ev == kEventEuroCup && human_in_next_euro()) || (ev == kEventPlayoff && human_in_next_playoff()) ||
                           (ev == kEventWorldChampionship && national_coach_ >= 0) || std::getenv("EM_OLD_MSGSORT");
-        if (sort) native_sort_messages(save_.state);
+        // after a stop the sort already ran before the menu (see the step end): only days inside a step sort here
+        if (sort && (!message_step_pending_ || std::getenv("EM_OLD_MSGSORTPOS"))) native_sort_messages(save_.state);
         native_message_step(save_.state);
         message_step_pending_ = false;
     }
@@ -3902,6 +3903,12 @@ g_draw_scope = "stadium-week";
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
         // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
         // (REAL-CODE period 16: only when the next play step leaves the menu, so a message of this step keeps its count)
+        // the manager block of the next day sorts before its menu (ovr038:3006..3019, then sub_24C46; REAL-CODE period 75: a
+        // message of the last day stands first in the menu), under the condition of the day-start block below
+        if (!std::getenv("EM_OLD_MSGSORTPOS") && (calendar_.league_day(day_ + 1) || (next_event == kEventCup && human_in_next_cup()) ||
+                                                   (next_event == kEventEuroCup && human_in_next_euro()) || (next_event == kEventPlayoff && human_in_next_playoff()) ||
+                                                   (next_event == kEventWorldChampionship && national_coach_ >= 0)))
+            native_sort_messages(save_.state);
         message_step_pending_ = true;
         // before a DEB cup day the original prepares the energies of the 28 cup clubs outside the three leagues (REAL-CODE)
         if (next_event == kEventCup && cup_game_ == 0 && cup_winner_ < 0)
