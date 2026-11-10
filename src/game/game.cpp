@@ -706,7 +706,7 @@ void Game::play_cup_day() {
             save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mgr_[0].team)], mgr_[0].squad));
         if (!std::getenv("EM_OLD_CUP_MSG")) {  // the cup display passes the menu routine: messages sorted and counted (REAL-CODE period 20)
             native_sort_messages(save_.state);
-            native_message_step(save_.state);
+            if (std::getenv("EM_OLD_MSGSTEP")) native_message_step(save_.state);  // the count-down of this day already ran in the day loop (period 44); counting here too doubled it (period 64)
         }
         g_draw_scope = "randomize";
         const int spin = brng_.range(100, 300);

@@ -275,6 +275,13 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 const int now = side == 0 ? e->home : e->away;
                 if (e->frozen[side] < 0 || now == e->scheduled[side] || e->home == e->away) continue;  // one club: its shared box already counts both sides
                 if (now < own.first_team || now >= own.first_team + kHokLeagueSize) continue;
+                // a new team that still plays its own game books the shared record there already (REAL-CODE period 65: 32 in
+                // (27,32) and its own (0,32) gets 25 once)
+                bool plays_own = false;
+                for (const auto& g : entries)
+                    for (int s = 0; s < 2; s++)
+                        if (g->scheduled[s] == now && g->frozen[s] < 0 && (s == 0 ? g->home : g->away) == now) plays_own = true;
+                if (plays_own && !std::getenv("EM_OLD_PMSWAP2")) continue;
                 const int total = e->stats->penalty_minutes[side] - e->before[side];
                 HokTableRow& row = days[e->day].league->rows[size_t(now - own.first_team)];
                 row.penalty_minutes = uint16_t(row.penalty_minutes + total);
