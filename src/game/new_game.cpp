@@ -118,18 +118,8 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
         // the generator's manager name field holds 18 letters (ovr027:1666 strcpy into 0x13 bytes)
         settings.managers.push_back(WorldManager{m.name.substr(0, 18), m.face, team});
     }
-    HokFile h = generate_world(exe, db_raw, settings, seeds).save;
-    // Youth teams (DS:A075 + 0x15 * m = state 0x06B8): generate_world leaves them zero. The original sets them for a new
-    // manager at ovr027:1B46: quality 0x34 + 14 * (2 - DS:011A), grant 5 (+3), league DS:011A (+6), for the three teams;
-    // its two-manager game (work/exp/hotseat_20261110/HOT2.HOK, DS:011A = 0) has 0x50 / 5 / 0 one youth day later.
-    for (size_t m = 0; m < managers.size(); m++)
-        for (size_t i = 0; i < 3; i++) {
-            const size_t at = 0x06B8 + m * 0x15 + i;
-            h.state.at(at) = uint8_t(0x34 + 14 * (2 - settings.squad_size));
-            h.state.at(at + 3) = 5;
-            h.state.at(at + 6) = uint8_t(settings.squad_size);
-        }
-    return decode_hok(encode_hok(h));
+    // youth teams, balances and reporting modes of the managers: generate_world (ovr027:1B27..1DE8)
+    return generate_world(exe, db_raw, settings, seeds).save;
 }
 
 }  // namespace em

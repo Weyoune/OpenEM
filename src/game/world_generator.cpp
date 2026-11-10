@@ -40,6 +40,7 @@ constexpr size_t dsMatchday = 0x07A9, dsWmRound = 0x07AE, dsEuroRound = 0x07AF;
 constexpr size_t dsLeagueSize = 0x07B1, dsLeagueStart = 0x07C0;
 constexpr size_t dsClassLimit1 = 0x07C1, dsClassLimit2 = 0x07C2;
 constexpr size_t dsLevelSalary = 0x0ED8;
+constexpr size_t dsYouth = 0xA075;  // youth teams, 0x15 bytes per manager (state 0x06B8)
 constexpr size_t dsDistributionCursor = 0x48FB;
 constexpr size_t dsNationSkills = 0x4C4E, dsFormString = 0x4DC7;
 constexpr size_t dsNameRetry = 0x55EE;  // word_2A5BE: a duplicate name widens the club range by 24
@@ -621,6 +622,38 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     w.d(dsEuroRound) = 0;  // ovl05_1e6f(0); its ovl05_0ef7(2) is not ported
     w.d(dsCompetitionRound) = 0;
     w.d(dsCompetition) = 0xFF;
+    // ovr027:1B27..1DE8: after ovl16_0730 a new game (var_64 = old manager count = 0) runs the loop for added managers
+    // over every manager (Amiga FUN_001075e8 line 6309). Ported: the youth teams DS:A075 + 0x15 * m (quality
+    // 0x34 + 14 * (2 - DS:011A), grant 5, DS:011A), the balance +0x18F = DS:0ED8 * 150000 + 1200000, the reporting mode 2
+    // of the club (sub_1902B(club, 1, 2) = Amiga FUN_001072a8: the fourth club in mode 2 demotes the first computer club
+    // of mode 2 to mode 1) and +0x18B = 99999. Not ported: the Borland draw of a club of the start league with the swap
+    // ovl06_0c29(club, drawn, 0x80) (ovr027:1C0B..1CC7, when DS:011A = 0, the club is in another league or beyond DS:07CB)
+    // and the one-manager branch from ovr027:1CCA; both use the Borland stream that ovr034:0929 re-seeds afterwards.
+    for (size_t m = 0; m < managers.size(); m++) {
+        const int setting = w.d(dsSquadSize);
+        for (size_t i = 0; i < 3; i++) {
+            w.d(dsYouth + 0x15 * m + i) = uint8_t(0x34 + 14 * (2 - setting));
+            w.d(dsYouth + 0x15 * m + i + 3) = 5;
+            w.d(dsYouth + 0x15 * m + i + 6) = uint8_t(setting);
+        }
+        put32(w.ds, w.manager(m) + 0x18F, uint32_t(int32_t(w.d(dsLevelSalary)) * 150000 + 1200000));
+        const size_t club = w.club_of(m);
+        const size_t lo = club >= 52 && club < 64 ? 52 : 0, hi = club >= 52 && club < 64 ? 64 : 150;
+        int count = 0;
+        for (size_t t = lo; t < hi; t++) {
+            int next = count;
+            if ((w.team(t)[0x34] >> 6) == 2 && ++next == 4)
+                for (size_t u = lo; u < t; u++)
+                    if ((w.team(u)[0x34] >> 6) == 2 && w.team(u)[0x16] == 0) {
+                        w.team(u)[0x34] = uint8_t((w.team(u)[0x34] & 0x3F) + 0x40);
+                        next = count;
+                        break;
+                    }
+            count = next;
+        }
+        w.team(club)[0x34] = uint8_t(0x80 + (w.team(club)[0x34] & 0x3F));
+        put32(w.ds, w.manager(m) + 0x18B, 99999);
+    }
 
     // ---- _main_0 after the start menu
     w.rerate_clubs();  // ovr034:0923, sub_17F1B(10)
