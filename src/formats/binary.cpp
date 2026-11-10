@@ -38,4 +38,20 @@ std::string iso646de_to_utf8(const char* s, size_t max_len) {
     return out;
 }
 
+std::string utf8_to_iso646de(const std::string& s) {
+    static const std::pair<const char*, char> map[] = {{"Ä", '['}, {"Ö", '\\'}, {"Ü", ']'}, {"ä", '{'},
+                                                       {"ö", '|'}, {"ü", '}'}, {"ß", '~'}};
+    std::string out;
+    for (size_t i = 0; i < s.size();) {
+        if (uint8_t(s[i]) < 0x80) { out += s[i++]; continue; }
+        bool hit = false;
+        for (auto& [u, c] : map) {
+            size_t n = std::char_traits<char>::length(u);
+            if (s.compare(i, n, u) == 0) { out += c; i += n; hit = true; break; }
+        }
+        if (!hit) throw FormatError("text: character not available in the game's character set");
+    }
+    return out;
+}
+
 }  // namespace em

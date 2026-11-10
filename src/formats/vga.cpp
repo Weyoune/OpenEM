@@ -80,4 +80,62 @@ Palette decode_palette(const Bytes& d, size_t offset) {
     return p;
 }
 
+Bytes encode_palette(const Palette& p) {
+    Bytes out;
+    out.reserve(kPaletteBytes);
+    for (size_t i = 0; i < kPaletteBytes / 3; i++)
+        for (size_t c = 0; c < 3; c++) out.push_back(uint8_t(p.rgb[i][c] >> 2));
+    return out;
+}
+
+void rle_pack(const uint8_t* p, size_t n, Bytes& body) {
+    // see vga.hpp
+    size_t i = 0;
+    while (i < n) {
+            size_t run = 1;
+            while (i + run < n && run < 128 && p[i + run] == p[i]) run++;
+            if (run >= 3) {
+                body.push_back(uint8_t(0x80 | (run - 1)));
+                body.push_back(p[i]);
+                i += run;
+                continue;
+            }
+            size_t j = i;  // literal: until a run of >= 3 starts or 128 bytes
+            while (j < n && j - i < 128) {
+                if (j + 2 < n && p[j] == p[j + 1] && p[j] == p[j + 2]) break;
+                j++;
+            }
+            if (j == i) j = i + 1;
+            body.push_back(uint8_t(j - i - 1));
+            body.insert(body.end(), p + i, p + j);
+            i = j;
+    }
+    body.push_back(0x80);
+}
+
+Bytes encode_vga(const Image& img, const Palette* palette) {
+    if (img.width <= 0 || img.height <= 0 || img.width > 0xFFFF || img.height > 0xFFFF ||
+        img.pixels.size() != size_t(img.width) * img.height)
+        throw FormatError("VGA: invalid image size");
+    Bytes body;
+    auto chunk = [&](int first_row, int last_row) {
+        rle_pack(img.pixels.data() + size_t(first_row) * img.width, size_t(last_row - first_row) * img.width, body);
+    };
+    if (img.height > 200) {
+        chunk(0, 200);
+        chunk(200, img.height);
+    } else {
+        chunk(0, img.height);
+    }
+    if (body.size() > 0xFFFF) throw FormatError("VGA: packed image exceeds 65535 bytes");
+    Bytes out{uint8_t(img.width), uint8_t(img.width >> 8), uint8_t(img.height), uint8_t(img.height >> 8),
+              uint8_t(body.size()), uint8_t(body.size() >> 8)};
+    out.insert(out.end(), body.begin(), body.end());
+    if (palette) {
+        Bytes pal = encode_palette(*palette);
+        out.insert(out.end(), pal.begin(), pal.end());
+    }
+    return out;
+}
+
 }  // namespace em

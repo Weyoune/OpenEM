@@ -85,6 +85,31 @@ Bytes unpack_kb_block(const Bytes& d) {
     return out;
 }
 
+Bytes pack_kb_block(const Bytes& raw) {
+    Bytes body;
+    rle_pack(raw.data(), raw.size(), body);
+    if (body.size() > 0xFFFF) throw FormatError("KB block: packed data exceeds 65535 bytes");
+    Bytes out{uint8_t(body.size()), uint8_t(body.size() >> 8)};
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+Bytes encode_tor_sprites(const std::vector<Image>& sprites) {
+    Bytes raw;
+    for (const Image& s : sprites) {
+        if (s.width != kTorSprite || s.height != kTorSprite) throw FormatError("sprite must be 32 x 32");
+        raw.insert(raw.end(), s.pixels.begin(), s.pixels.end());
+    }
+    return pack_kb_block(raw);
+}
+
+Bytes encode_tor_panel(const Image& panel) {
+    if (panel.width != kTorPanelWidth || panel.height != kTorPanelHeight) throw FormatError("panel must be 320 x 40");
+    Bytes out;
+    rle_pack(panel.pixels.data(), panel.pixels.size(), out);
+    return out;
+}
+
 Image decode_rink(const Bytes& tiles_a, const Bytes& tiles_b, const Bytes& map) {
     Bytes tiles = unpack_kb_block(tiles_a), b = unpack_kb_block(tiles_b);
     tiles.insert(tiles.end(), b.begin(), b.end());

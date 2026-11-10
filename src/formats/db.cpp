@@ -47,4 +47,39 @@ Database decode_db(const Bytes& d) {
     return db;
 }
 
+namespace {
+void put_text(Bytes& d, size_t off, size_t width, const std::string& utf8, bool clear_only_first) {
+    if (utf8.empty()) {
+        if (clear_only_first) d[off] = 0;
+        else std::fill(d.begin() + long(off), d.begin() + long(off + width), uint8_t(0));
+        return;
+    }
+    std::string iso = utf8_to_iso646de(utf8);
+    if (iso.size() > width) throw FormatError("DB: name too long: " + utf8);
+    std::fill(d.begin() + long(off), d.begin() + long(off + width), uint8_t(0));
+    std::copy(iso.begin(), iso.end(), d.begin() + long(off));
+}
+}  // namespace
+
+Bytes encode_db(const Bytes& original, const Database& db) {
+    Database old = decode_db(original);
+    if (db.clubs.size() != size_t(kDbClubs)) throw FormatError("DB: need 64 clubs");
+    Bytes out = original;
+    for (int c = 0; c < kDbClubs; c++) {
+        const DbClub& nc = db.clubs[c];
+        const DbClub& oc = old.clubs[c];
+        if (nc.players.size() != size_t(kDbSquad)) throw FormatError("DB: need 25 players per club");
+        size_t base = kClubs + size_t(c) * kClubRecord;
+        out[base] = nc.flag;
+        if (nc.name != oc.name) put_text(out, base + 1, kClubName - 1, nc.name, false);
+        for (int p = 0; p < kDbSquad; p++) {
+            size_t o = base + kClubName + size_t(p) * kPlayerRecord;
+            out[o] = nc.players[p].flag;
+            if (nc.players[p].name != oc.players[p].name)
+                put_text(out, o + 1, kPlayerRecord - 1, nc.players[p].name, true);
+        }
+    }
+    return out;
+}
+
 }  // namespace em

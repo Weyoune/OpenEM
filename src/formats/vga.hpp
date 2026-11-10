@@ -54,4 +54,15 @@ Image decode_vga(const Bytes& data);
 // Verified against every pixel of a native DOSBox-X PNG (day_20261103/palette_runtime_proof.json).
 Palette decode_palette(const Bytes& data, size_t offset = 0);
 
+// Inverse of decode_vga: header + RLE chunks (+ 765-byte palette when `palette` is given).
+// Greedy RLE (runs of >= 3 equal pixels, otherwise literals of up to 128), each chunk closed by 0x80;
+// images taller than 200 rows get two chunks (rows 0..199 and the rest). Throws FormatError when the
+// packed stream exceeds the u16 length field or the size is out of range. decode_vga(encode_vga(x))
+// reproduces every pixel; the bytes need not match the original packer's.
+Bytes encode_vga(const Image& image, const Palette* palette = nullptr);
+// Greedy RLE of n bytes plus the 0x80 end marker, appended to `out` (shared by the KB writers).
+void rle_pack(const uint8_t* p, size_t n, Bytes& out);
+// 765 raw palette bytes (six-bit DAC values: 8-bit channel >> 2).
+Bytes encode_palette(const Palette& palette);
+
 }  // namespace em

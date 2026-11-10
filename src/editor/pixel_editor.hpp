@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: GPL-3.0-only
+#pragma once
+// Document logic of the pixel editor for the KB\*.vga images: loading, drawing tools, undo/redo, saving.
+// No user interface in here (the Windows front end is win_main.cpp), so it can be tested without a window.
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include "formats/vga.hpp"
+
+namespace em::editor {
+
+class PixelEditor {
+public:
+    enum class Kind { Image, Tiles, Sprites, Panel };
+    struct Entry {
+        int number;
+        Kind kind;
+        int w, h;       // size of the picture shown (sheets: the laid-out sheet)
+        bool embedded;  // image carries its own palette
+        std::string label;
+    };
+    enum class Tool { Pencil, Line, Rect, FilledRect, Fill, Picker };
+
+    explicit PixelEditor(const std::filesystem::path& data);
+
+    const std::vector<Entry>& files() const { return files_; }
+    bool load(int number);
+    void close();  // drop the open picture (no saving)
+    Kind kind() const { return kind_; }
+    int cell_size() const { return cell_; }     // tile or sprite edge, 0 for plain images
+    int cell_columns() const { return cols_; }  // cells per row of a sheet
+    bool save();                                       // writes KB\<n>.vga, first time with a .bak copy
+    bool export_bmp(const std::filesystem::path& to);  // 8-bit indexed BMP with the current palette
+    void undo();
+    void redo();
+    bool can_undo() const { return !undo_.empty(); }
+    bool can_redo() const { return !redo_.empty(); }
+
+    void set_tool(Tool t) { tool_ = t; }
+    Tool tool() const { return tool_; }
+    void set_color(int c) { color_ = c & 255; }
+    int color() const { return color_; }
+
+    // Strokes in image coordinates (the canvas converts the mouse position)
+    void stroke_begin(int x, int y);
+    void stroke_move(int x, int y);
+    void stroke_end();
+    bool drawing() const { return drawing_; }
+    int pick(int x, int y) const;  // colour index at a pixel, -1 outside
+
+    bool dirty() const { return dirty_; }
+    int current() const { return current_; }
+    const Image& image() const { return img_; }
+    const Palette& palette() const { return pal_; }
+    bool has_own_palette() const { return has_embedded_; }
+    const std::string& status() const { return status_; }
+    void set_status(std::string s) { status_ = std::move(s); }
+    // Bumped on every change of the picture; front ends redraw when it differs from what they showed
+    unsigned revision() const { return revision_; }
+
+private:
+    std::filesystem::path kb_;
+    std::vector<Entry> files_;
+    Palette global_pal_, tore_pal_, pal_;
+    bool has_embedded_ = false;
+    Image img_;
+    int current_ = -1;
+    Kind kind_ = Kind::Image;
+    int cell_ = 0, cols_ = 0, count_ = 0;  // sheet layout: cell edge, columns, used cells
+    bool dirty_ = false;
+    std::string status_;
+    unsigned revision_ = 0;
+
+    Tool tool_ = Tool::Pencil;
+    int color_ = 1;
+    std::vector<std::vector<uint8_t>> undo_, redo_;
+    bool drawing_ = false;
+    int sx_ = 0, sy_ = 0, lx_ = 0, ly_ = 0;
+    std::vector<uint8_t> base_;
+
+    void put(int x, int y, int c);
+    void draw_line(int x0, int y0, int x1, int y1, int c);
+    void draw_rect(int x0, int y0, int x1, int y1, int c, bool filled);
+    void flood(int x, int y, int c);
+    void push_undo();
+};
+
+}  // namespace em::editor

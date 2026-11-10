@@ -25,5 +25,7 @@ inline uint32_t le32(const Bytes& b, size_t o) { return uint32_t(le16(b, o)) | u
 // (seen in EM.EXE strings such as "TORE IN ]BERZAHL", "<TASTE DR]CKEN>"). Some names use the
 // CP437 umlauts instead (0x8E 0x99 0x9A 0x84 0x94 0x81 0xE1); both are converted.
 std::string iso646de_to_utf8(const char* s, size_t max_len = std::string::npos);
+// Inverse: Ä Ö Ü ä ö ü ß -> [ \ ] { | } ~. Throws FormatError for any other non-ASCII character.
+std::string utf8_to_iso646de(const std::string& s);
 
 }  // namespace em

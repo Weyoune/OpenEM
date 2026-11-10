@@ -45,6 +45,7 @@ add_library(em_formats STATIC
     src/formats/binary.cpp
     src/formats/db.cpp
     src/formats/hok.cpp
+    src/formats/teamdata.cpp
     src/formats/tore.cpp
     src/formats/vga.cpp)
 target_include_directories(em_formats PUBLIC src)
@@ -628,4 +629,20 @@ if(TARGET em_realcode)
     add_executable(em_realcode_boot tests/realcode_boot.cpp)
     target_link_libraries(em_realcode_boot PRIVATE em_realcode em_game)
     target_include_directories(em_realcode_boot PRIVATE tests)
+endif()
+
+# em_editor: asset editor for the original data (pixel editor for KB images); ships with the OpenEM release.
+# Windows only for now: native Win32 front end (menu, toolbar, list view, status bar, system dialogs).
+# The document logic (em_editor_lib) has no UI dependency and is built and tested everywhere.
+add_library(em_editor_lib STATIC src/editor/pixel_editor.cpp src/editor/palette_doc.cpp src/editor/team_doc.cpp)
+target_link_libraries(em_editor_lib PUBLIC em_formats)
+add_executable(em_editor_tests tests/editor_tests.cpp)
+target_link_libraries(em_editor_tests PRIVATE em_editor_lib)
+if(IS_DIRECTORY "${EM_DATA}")
+    add_test(NAME editor_original COMMAND em_editor_tests "${EM_DATA}")
+endif()
+if(WIN32)
+    add_executable(em_editor WIN32 src/editor/win_main.cpp src/editor/em_editor.manifest)
+    target_compile_definitions(em_editor PRIVATE UNICODE _UNICODE)
+    target_link_libraries(em_editor PRIVATE em_editor_lib)
 endif()

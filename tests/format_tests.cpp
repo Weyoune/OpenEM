@@ -14,6 +14,7 @@
 #include <memory>
 
 #include "formats/db.hpp"
+#include "formats/teamdata.hpp"
 #include "formats/hok.hpp"
 #include "formats/tore.hpp"
 #include "formats/vga.hpp"
@@ -77,6 +78,20 @@ static void unit_tests() {
     // eight-bit RGB indicator: native PNG color is exactly 92 B2 C3.
     p[0] = 228; p[1] = 236; p[2] = 240;
     CHECK((decode_palette(p).rgb[0] == std::array<uint8_t,3>{146,178,195}));
+
+    // encoder: round trip of runs, literals, long runs, tall images
+    for (int h : {1, 7, 200, 202, 450}) {
+        Image src(37, h);
+        for (size_t i = 0; i < src.pixels.size(); i++)
+            src.pixels[i] = (i / 300) % 3 == 0 ? uint8_t(i * 7) : uint8_t(i / 50);
+        Image back = decode_vga(encode_vga(src));
+        CHECK(back.complete && back.width == 37 && back.height == h && back.pixels == src.pixels);
+    }
+    Palette pal;
+    for (size_t i = 0; i < 256; i++) pal.rgb[i] = {uint8_t((i & 63) << 2 | (i & 63) >> 4), 0, 0};
+    Bytes withpal = encode_vga(Image(2, 2, 5), &pal);
+    CHECK(classify_vga(withpal) == VgaKind::ImageWithPalette);
+    CHECK(decode_palette(withpal, withpal.size() - 765).rgb[3] == pal.rgb[3]);
 }
 
 static void original_kb(const fs::path& em_dir) {
@@ -88,7 +103,20 @@ static void original_kb(const fs::path& em_dir) {
         VgaKind k = classify_vga(d);
         if (k == VgaKind::Image || k == VgaKind::ImageWithPalette) {
             images++;
-            complete += decode_vga(d).complete;
+            Image img = decode_vga(d);
+            complete += img.complete;
+            // encoder round trip on the original (palette from the file, six-bit)
+            if (k == VgaKind::Image) {
+                Image back = decode_vga(encode_vga(img));
+                CHECK(back.pixels == img.pixels);
+            } else {
+                Palette pal = decode_palette(d, d.size() - 765);
+                Bytes re = encode_vga(img, &pal);
+                CHECK(decode_vga(re).pixels == img.pixels);
+                Bytes want(d.end() - 765, d.end());
+                for (auto& b : want) b &= 63;
+                CHECK(encode_palette(pal) == want);
+            }
         }
     }
     std::printf("KB: %d files, %d images, %d complete\n", files, images, complete);
@@ -143,6 +171,49 @@ static void original_db(const fs::path& em_dir) {
     CHECK(db.clubs[47].name == "ESV SCHIERKE");
     CHECK(db.europe_clubs.size() == 86 && db.europe_clubs.front() == "KLAGENFURTER AC");
     std::printf("DB: %zu clubs, %zu European clubs\n", db.clubs.size(), db.europe_clubs.size());
+
+    // writer: unchanged database -> identical bytes; one edited name changes only its field
+    const Bytes orig = read_file(em_dir / "KB" / "23.vga");
+    CHECK(encode_db(orig, db) == orig);
+    Database edited = db;
+    edited.clubs[0].name = "HAMBURGER SV";
+    edited.clubs[1].players[0].name = "MÜLLER";
+    edited.clubs[1].players[1].name = "";
+    Bytes out = encode_db(orig, edited);
+    size_t diff = 0;
+    for (size_t i = 0; i < orig.size(); i++) diff += orig[i] != out[i];
+    Database back = decode_db(out);
+    CHECK(back.clubs[0].name == "HAMBURGER SV" && back.clubs[1].players[0].name == "MÜLLER");
+    CHECK(back.clubs[1].players[1].name.empty() && back.clubs[1].players[2].name == db.clubs[1].players[2].name);
+    CHECK(diff > 0 && diff < 80 && out.size() == orig.size());
+    // team tables
+    {
+        auto td = decode_team_data(orig);
+        CHECK(td.size() == 150 && encode_team_data(orig, td) == orig);
+        bool crests_ok = true;
+        for (int t = 0; t < 64; t++) crests_ok = crests_ok && td[t].crest >= 0 && td[t].crest <= 63;
+        CHECK(crests_ok);
+        // Bundesliga: place = rank by strength (largest a0 -> 1)
+        bool rank_ok = true;
+        for (int t = 0; t < 12; t++) {
+            int better = 0;
+            for (int u = 0; u < 12; u++) better += td[u].strength[0] > td[t].strength[0];
+            rank_ok = rank_ok && td[t].place == better + 1;
+        }
+        CHECK(rank_ok);
+        auto ed = td;
+        ed[3].crest = 17; ed[3].strength = {50, 51, 52}; ed[3].place = 4; ed[3].jersey = 0x0F0F;
+        auto re = decode_team_data(encode_team_data(orig, ed));
+        CHECK(re[3].crest == 17 && re[3].strength[1] == 51 && re[3].place == 4 && re[3].jersey == 0x0F0F);
+        CHECK(re[4].crest == td[4].crest && re[4].strength == td[4].strength);
+        ed[3].crest = 64;
+        bool bad = false;
+        try { encode_team_data(orig, ed); } catch (const FormatError&) { bad = true; }
+        CHECK(bad);
+    }
+    bool threw = false;
+    try { edited.clubs[0].name = "ÅÅ"; encode_db(orig, edited); } catch (const FormatError&) { threw = true; }
+    CHECK(threw);
 }
 
 // Goal scenes: every TORE script parses up to its 0xAAAA end mark with the frame count implied by
@@ -169,6 +240,18 @@ static void original_tore(const fs::path& em_dir) {
     CHECK(unpack_kb_block(read_file(kb / "231.vga")).size() == 64000);
     CHECK(unpack_kb_block(read_file(kb / "233.vga")).size() == 40960);
     CHECK(unpack_kb_block(read_file(kb / "235.vga")).size() == 12288);
+    for (const char* n : {"231.vga", "232.vga", "233.vga", "234.vga", "235.vga"}) {
+        Bytes raw = unpack_kb_block(read_file(kb / n));
+        CHECK(unpack_kb_block(pack_kb_block(raw)) == raw);
+    }
+    {
+        auto sp = decode_tor_sprites(read_file(kb / "233.vga"));
+        auto back = decode_tor_sprites(encode_tor_sprites(sp));
+        CHECK(back.size() == sp.size() && !sp.empty());
+        for (size_t i = 0; i < sp.size() && i < back.size(); i++) CHECK(back[i].pixels == sp[i].pixels);
+        Image panel = decode_tor_panel(read_file(kb / "246.vga"));
+        CHECK(decode_tor_panel(encode_tor_panel(panel)).pixels == panel.pixels);
+    }
     Image rink = decode_rink(read_file(kb / "231.vga"), read_file(kb / "232.vga"), read_file(kb / "236.vga"));
     CHECK(rink.width == 672 && rink.height == 1152);
     // centre spot: the faceoff dot in the middle of the rink is not ice colour

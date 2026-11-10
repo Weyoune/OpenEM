@@ -1,0 +1,19 @@
+# OpenEM Editor (`em_editor`)
+
+Bearbeitet die Bilddateien des Originalspiels. Stand 10.11.2026, nur Windows (Win32 mit Standard-Steuerelementen). Die Dokumentlogik (`src/editor/pixel_editor.*`, `palette_doc.*`) hat keine Oberflächenabhängigkeit und läuft im Test (`ctest -R editor_original`).
+
+```
+em_editor [--data <EM-Ordner>] [--file <KB-Nr.>] [--tab 0|1|2] [--shot out.bmp]
+```
+Ohne `--data` sucht der Editor wie `openem` (`OPENEM_DATA`, `work/EM`, Programmordner, aktueller Ordner) und fragt sonst nach dem Ordner. Vor dem ersten Überschreiben legt er neben jede Datei eine `.bak` (nie überschrieben).
+
+| Registerkarte | Inhalt |
+|---|---|
+| Bilder | alle KB-Bilder (`KB\*.vga`, auch die mit eigener Palette); Palette KB21 bzw. die eingebettete |
+| Torszenen | Hallenkacheln KB231/232 (16 × 16, 16 je Zeile), Spieler- und Torhütersprites KB233–235 (32 × 32, 8 je Zeile), Anzeigetafel KB246 (320 × 40); Palette KB247; Zellgrenzen orange, in der Statusleiste Kachel-/Spritenummer |
+| Mannschaften | `KB\23.vga`: Vereinsname (22 Zeichen), 25 Spielernamen (19 Zeichen, Großbuchstaben, Zeichensatz des Spiels) mit Ausländer-Haken, Wappen 0–63 mit Vorschau, Platz 1–12, drei Stärkewerte, Trikotfarbe der Torszenen (Rot, Grün, Blau je 0–15) mit Vorschau, Tauschen zweier Mannschaften (1–48, 53–64; LEER1–4 ausgeblendet). Änderungen gelten sofort, ohne „Übernehmen“; Speichern warnt vor doppelten Namen; „Rückgängig“ verwirft alle Änderungen der Datei |
+| Paletten | KB21 und KB247: 255 Farben mit sechs Bit je Kanal (VGA-DAC); die ungenutzten oberen Bits der Datei bleiben erhalten; „Rückgängig“ verwirft alle Änderungen der Palette |
+
+Werkzeuge: Stift (P), Linie (L), Rechteck (R), gefülltes Rechteck (B), Füllen (F), Pipette (I, oder Rechtsklick); Rückgängig/Wiederholen (Strg+Z/Y), Speichern (Strg+S), BMP-Export (Strg+E), Raster (G), Zoom (Strg+Mausrad, +/−).
+
+Noch offen: Hallenkarten KB236/242–245 (Kachelkarte), PNG-Import/-Export, Paketierung im Release. Bedeutung der drei Stärkewerte und des Platzes ist nicht abschließend geklärt (siehe `docs/formats/HOK_TORE.md`); die Ausländer-Markierung ist das Byte hinter dem Spielernamen.

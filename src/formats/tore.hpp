@@ -82,6 +82,13 @@ TorState play_tor(const TorScene& scene, size_t n);
 // u16 packed length + RLE stream (KB\231..235.vga) -> raw bytes.
 Bytes unpack_kb_block(const Bytes& data);
 
+// Inverse of unpack_kb_block: u16 packed length (RLE incl. the 0x80 end marker) + stream.
+Bytes pack_kb_block(const Bytes& raw);
+// Inverse of decode_tor_sprites (32 x 32 images, concatenated and packed).
+Bytes encode_tor_sprites(const std::vector<Image>& sprites);
+// Inverse of decode_tor_panel (320 x 40, plain RLE stream with end marker, no length).
+Bytes encode_tor_panel(const Image& panel);
+
 // Rink as one portrait image from the two tile sets (231, 232) and a tile map (236 or 242..245).
 Image decode_rink(const Bytes& tiles_a, const Bytes& tiles_b, const Bytes& map);
 
