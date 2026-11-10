@@ -25,32 +25,36 @@
 
 namespace em {
 namespace {
-constexpr size_t kSquadBase = 0x696D, kPoolBase = 0x81CD, kRecord = 52, kPlayerBase = 0x4FC6;
+constexpr size_t kPoolBase = 0x81CD, kRecord = 52, kPlayerBase = 0x4FC6;
 void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at(at + size_t(n)) = uint8_t(v >> (8 * n)); }
 }  // namespace
 
+// For the active manager (docs/MEHRSPIELER_PLAN.md step 5); his bit in pool +0x1A is 1 << manager (bit 0 verified only).
 PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_subsidy, bool prepare_lineup) {
+    const int a = active_manager_;
+    const uint8_t own_bit = uint8_t(1u << unsigned(a)), refused = uint8_t(0x80 | own_bit);
     if (slot >= 11 || fee <= 0) return PurchaseResult::Invalid;
-    if (national_coach_ >= 0 || mgr_[0].team >= 52) return PurchaseResult::Unavailable;
+    if (national_coach_ >= 0 || mgr_[a].team >= 52) return PurchaseResult::Unavailable;
     const size_t source = kPoolBase + slot * kRecord;
     const int id = save_.state.at(source + 15);
     HokPlayer* player = id ? player_by_exe_index(id) : nullptr;
     if (!player || player->raw[0x1A] != 4) return PurchaseResult::Unavailable;
     const uint8_t flags = save_.state.at(source + 0x1A);
-    if ((flags & 0x81) == 0x81) return PurchaseResult::Blocked;
-    if (flags & 1) return PurchaseResult::Unavailable;  // native: no reaction
+    if ((flags & refused) == refused) return PurchaseResult::Blocked;
+    if (flags & own_bit) return PurchaseResult::Unavailable;  // native: no reaction
     const long price = long((le32(save_.state, source + 0x2C) & 0x7FFFFFFFu) / 3u);
     if (!seller_accepts(price, fee, brng_)) {
-        save_.state.at(source + 0x1A) |= 0x81;
+        save_.state.at(source + 0x1A) |= refused;
         return PurchaseResult::SellerRefused;
     }
-    if (mgr_[0].budget.balance < fee) return PurchaseResult::InsufficientFunds;
+    if (mgr_[a].budget.balance < fee) return PurchaseResult::InsufficientFunds;
+    const size_t kSquadBase = squad_block(a);
 
     HokFile prepared = decode_hok(save_bytes());
     BorlandRandom next = brng_;
     const int old_team = player->raw[0x1D];
     const ContractRandomDraw draw = [&](int lo, int hi) { return next.range(lo, hi); };
-    const NativeRosterInsertion inserted = native_insert_player(prepared, contracts_, draw, uint8_t(id), 0, 1);
+    const NativeRosterInsertion inserted = native_insert_player(prepared, contracts_, draw, uint8_t(id), a, 1);
     if (inserted.slot >= 29) return PurchaseResult::SquadFull;
     const size_t row = kSquadBase + size_t(inserted.slot) * kRecord;
     const long salary = long(int32_t(le32(prepared.state, row + 0x28))) * next.range(90, 115) / 100;
@@ -59,24 +63,24 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     prepared.state.at(row + 0x0C) = uint8_t(old_team + 0x80);
     store32(prepared.state, row + 0x28, uint32_t(salary));
     prepared.state.at(row + 0x04) = prepared.state.at(row + 0x05) = prepared.state.at(row + 0x1A) = 0;
-    std::copy_n(prepared.state.begin() + kSquadBase, 30 * kRecord, save_.state.begin() + kSquadBase);
-    save_.state.at(kPlayerBase + size_t(id - 1) * 33 + 0x1D) = uint8_t(mgr_[0].team);
-    player->team = mgr_[0].team;
+    std::copy_n(prepared.state.begin() + long(kSquadBase), 30 * kRecord, save_.state.begin() + long(kSquadBase));
+    save_.state.at(kPlayerBase + size_t(id - 1) * 33 + 0x1D) = uint8_t(mgr_[a].team);
+    player->team = mgr_[a].team;
     if (inserted.shifted)
-        std::move_backward(mgr_[0].injured_role.begin() + inserted.slot, mgr_[0].injured_role.end() - 1, mgr_[0].injured_role.end());
-    mgr_[0].injured_role[size_t(inserted.slot)] = 0;
+        std::move_backward(mgr_[a].injured_role.begin() + inserted.slot, mgr_[a].injured_role.end() - 1, mgr_[a].injured_role.end());
+    mgr_[a].injured_role[size_t(inserted.slot)] = 0;
     native_remove_storage_row(save_, 4, int(slot), 10);
-    save_.squad = hok_squad(save_, 0);
+    save_.squad_of(a) = hok_squad(save_, a);
     brng_ = next;
-    mgr_[0].budget.balance -= fee;
+    mgr_[a].budget.balance -= fee;
     log_.push_back(player->name + " loaned for " + std::to_string(fee / 3) + " DM, salary " + std::to_string(salary / 3) + " DM");
     const long subsidy = purchase_subsidy(fee, brng_);
     if (subsidy > 0) {
-        if (accept_subsidy) mgr_[0].budget.balance = long(int32_t(uint32_t(mgr_[0].budget.balance) + uint32_t(subsidy)));
+        if (accept_subsidy) mgr_[a].budget.balance = long(int32_t(uint32_t(mgr_[a].budget.balance) + uint32_t(subsidy)));
         log_.push_back("purchase sponsor subsidy " + std::to_string(subsidy / 3) + (accept_subsidy ? " DM accepted" : " DM declined"));
     }
-    if (prepare_lineup) prepare_human_lineup(false);
-    refresh_budget_roster();
+    if (prepare_lineup) prepare_human_lineup(false, a);
+    refresh_budget_roster(a);
     return PurchaseResult::Purchased;
 }
 

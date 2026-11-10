@@ -47,14 +47,15 @@ SaleAmounts native_sale_amounts(int32_t value,bool listed,bool foreign,int years
     return result;
 }
 bool begin_native_sale(const HokFile& h,const ContractTables& tables,BorlandRandom& rng,
-    int block,int slot,int16_t incoming_si,SaleQuote& output){
-    if((block!=0&&block!=4)||slot<0||slot>=(block==4?11:29))return false;
+    int block,int slot,int16_t incoming_si,SaleQuote& output,int manager){
+    if(manager<0||manager>=4)return false;
+    if((block!=manager&&block!=4)||slot<0||slot>=(block==4?11:29))return false;
     const size_t at=row_at(block,slot);const int id=h.state.at(at+15);
     if(!id||id>199||!(h.state.at(at+9)&(block==4?0x80:0x40)))return false;
-    if(h.state.at(0x4fa5+size_t(id)*33+26)!=0)return false;
-    if(block==0&&(h.state.at(at+0x18)&0x80))return false;
+    if(h.state.at(0x4fa5+size_t(id)*33+26)!=manager)return false;
+    if(block!=4&&(h.state.at(at+0x18)&0x80))return false;
     const int bidder=h.state.at(at+22);if(bidder>=150)return false;
-    SaleQuote quote;quote.block=block;quote.slot=slot;quote.id=id;quote.bidder=bidder;
+    SaleQuote quote;quote.block=block;quote.slot=slot;quote.id=id;quote.bidder=bidder;quote.manager=manager;
     quote.years=h.state.at(at+11);quote.native_si=incoming_si;
     std::copy_n(h.state.begin()+std::ptrdiff_t(at),52,quote.row.begin());
     const auto player=contract_player(h,block,slot);
@@ -63,10 +64,11 @@ bool begin_native_sale(const HokFile& h,const ContractTables& tables,BorlandRand
     output=quote;return true;
 }
 bool current_native_sale(const HokFile& h,const SaleQuote& q){
-    if((q.block!=0&&q.block!=4)||q.slot<0||q.slot>=(q.block==4?11:29)||q.id<1||q.id>199)return false;
+    if(q.manager<0||q.manager>=4)return false;
+    if((q.block!=q.manager&&q.block!=4)||q.slot<0||q.slot>=(q.block==4?11:29)||q.id<1||q.id>199)return false;
     const size_t at=row_at(q.block,q.slot);
     return q.row[15]==q.id&&q.bidder==q.row[22]&&q.years==q.row[11]&&
-        (q.row[9]&(q.block==4?0x80:0x40))&&h.state.at(0x4fa5+size_t(q.id)*33+26)==0&&
+        (q.row[9]&(q.block==4?0x80:0x40))&&h.state.at(0x4fa5+size_t(q.id)*33+26)==q.manager&&
         std::equal(q.row.begin(),q.row.end(),h.state.begin()+std::ptrdiff_t(at));
 }
 bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool sell,int* actual_buyer){
@@ -74,17 +76,17 @@ bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool se
     const size_t at=row_at(q.block,q.slot),global=0x4fa5+size_t(q.id)*33;
     int mean=0;
     if(sell){
-        const int buyer=q.block==4?q.bidder:h.state.at(row_at(0,q.slot+1)+22);
+        const int buyer=q.block==4?q.bidder:h.state.at(row_at(q.block,q.slot+1)+22);
         if(q.block==4||buyer<64)mean=buyer_mean(h.state,buyer,q.native_si);
     }
     h.state.at(at+9)^=q.block==4?0x80:0x40;
     native_clear_player_notification(h,uint8_t(q.id));
     if(!sell)return true;
-    constexpr size_t cash=0x0dcd+0x18f;
+    const size_t cash=0x0dcd+size_t(q.manager)*0x1af+0x18f;  // the seller's manager block +0x18F
     int buyer=q.bidder;
-    if(q.block==0){
+    if(q.block!=4){
         put32(h.state,cash,i32(le32(h.state,cash)+uint32_t(q.amounts.net)));
-        native_remove_storage_row(h,0,q.slot,29);
+        native_remove_storage_row(h,q.block,q.slot,29);
         //0F69 reads the old pointer after the shift, including its bidder/skills.
         buyer=h.state.at(at+22);h.state.at(global+29)=uint8_t(buyer);
         const int strength=(int(h.state.at(at+16))+h.state.at(at+17)+h.state.at(at+18))/3;

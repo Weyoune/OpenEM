@@ -49,8 +49,8 @@ struct LeagueDay {
     int matchday;  // 0-based
 };
 std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, std::vector<HokTeam>& teams,
-                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human = nullptr,
-                                                     int human_team = -1, MatchStats* human_stats = nullptr, BorlandRandom* brng = nullptr,
+                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSide& humans = {},
+                                                     BorlandRandom* brng = nullptr,
                                                      const MatchMinuteObserver* observer = nullptr,
                                                      std::vector<std::vector<std::pair<int, int>>>* played = nullptr);  // played: home/away of every pair as actually played (the pair-table error of the original can replace teams, DEVIATIONS.md)
 

@@ -208,6 +208,41 @@ void prepare_match_energy(HokTeam& team, std::vector<HokSquadPlayer>* squad, boo
 void recount_skaters(HokTeam& t, const std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players, int penalties,
                      int per_line[2]);
 
+// The human clubs of a match: the first manager's club (or -1) with its squad and statistics, and the clubs of further
+// managers (docs/MEHRSPIELER_PLAN.md step 6; team -1 = unused). A side whose club belongs to a manager plays with his squad.
+struct HumanSide {
+    int team = -1;
+    const HumanSquad* squad = nullptr;
+    MatchStats* stats = nullptr;
+    struct Club {
+        int team = -1;
+        const HumanSquad* squad = nullptr;
+        MatchStats* stats = nullptr;
+    };
+    std::array<Club, 3> others{};
+    bool is_human(int t) const {
+        if (t == team) return true;
+        for (const Club& c : others) if (c.team >= 0 && c.team == t) return true;
+        return false;
+    }
+    const HumanSquad* squad_of(int t) const {
+        if (t == team) return squad;
+        for (const Club& c : others) if (c.team >= 0 && c.team == t) return c.squad;
+        return nullptr;
+    }
+    MatchStats* stats_of(int t) const {
+        if (t == team) return stats;
+        for (const Club& c : others) if (c.team >= 0 && c.team == t) return c.stats;
+        return nullptr;
+    }
+    // The statistics of a match between home and away: those of the side that plays with a squad, home first.
+    MatchStats* match_stats(int home, int away) const {
+        if (squad_of(home)) return stats_of(home);
+        if (squad_of(away)) return stats_of(away);
+        return nullptr;
+    }
+};
+
 // What the original's match display shows of one running match (ovl14_1dc7 / ovl14_0d46): pure bookkeeping of the minute,
 // no random numbers. Chances and goals per period count only in the regular time (ovl14_1dc7 checks minute < 61; the
 // overtime keeps the third period slot DS:4E28 = 2 but books nothing there); penalty_code is the live team byte +0x33.
