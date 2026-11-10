@@ -100,7 +100,9 @@ int main(int argc,char**argv){
         WindowsInputBridge bridge{info.info.win.window,&trace};
         SDL_SetWindowsMessageHook(input_message,&bridge);
 #endif
-        while(!app.finished()){
+        // One frame of the program: events, tick, draw, present. The match display calls it from the minute observer while
+        // the day is played (ClassicApplication::set_pump), so the minute loop sees clicks like ovl06_2522.
+        const auto frame=[&]{
             const uint64_t frame_start=SDL_GetTicks64();
             SDL_Event event;
             while(SDL_PollEvent(&event)){
@@ -121,7 +123,10 @@ int main(int argc,char**argv){
             app.tick();app.draw();const auto argb=app.canvas().argb();SDL_UpdateTexture(texture,nullptr,argb.data(),320*4);
             SDL_SetRenderDrawColor(renderer,0,0,0,255);SDL_RenderClear(renderer);SDL_RenderCopy(renderer,texture,nullptr,nullptr);SDL_RenderPresent(renderer);
             const uint64_t elapsed=SDL_GetTicks64()-frame_start;if(elapsed<16)SDL_Delay(Uint32(16-elapsed));
-        }
+        };
+        app.set_pump(frame);
+        while(!app.finished())frame();
+        app.set_pump({});
 #ifdef _WIN32
         SDL_SetWindowsMessageHook(nullptr,nullptr);
 #endif

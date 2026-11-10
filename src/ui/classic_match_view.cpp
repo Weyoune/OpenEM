@@ -298,7 +298,7 @@ std::vector<ClassicMatchFrame> classic_goal_flashes(std::vector<ClassicMatchFram
     std::vector<ClassicMatchFrame> out;
     std::optional<ClassicMatchFrame> last;  // the last minute frame (cup tables are copies of it)
     for (ClassicMatchFrame& frame : frames) {
-        if (frame.cup_table) { out.push_back(std::move(frame)); continue; }
+        if (frame.waits()) { out.push_back(std::move(frame)); continue; }
         if (last && !frame.boards.empty()) {
             const ClassicMatchFrame* previous = &*last;
             for (const ClassicReportedMatch& m : frame.reported) {
@@ -406,7 +406,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
     for (ClassicMatchFrame& frame : frames) {
         if (rink_stays && frame.flash) continue;  // no goal flashes without a board
         // cup tables and goal flashes (classic_goal_flashes runs first) pass unchanged
-        if (frame.cup_table || frame.flash || frame.message || frame.scene) { out.push_back(std::move(frame)); continue; }
+        if (frame.waits() || frame.flash || frame.message || frame.scene) { out.push_back(std::move(frame)); continue; }
         if (rink_stays && !rest)
             if (const ClassicBoard* b = human_board(frame)) {
                 rest = scene_of(*b, frame.minute);  // camera (0, 0), no objects
@@ -558,7 +558,11 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
             t.shootout_goals = p.score.shootout_goals[side];
             t.colour = team < 150 ? h.state.at(0x17E7 + size_t(team) * 61 + 0x3B) | h.state.at(0x17E7 + size_t(team) * 61 + 0x3C) << 8 : 0;
             t.human = team == game.human_team();
+            t.id = team;
             if (team == game.human_team()) {
+                // FUN_162c_0d9f: a squad player with a role in line 4 of the kind (squad +0x15 = 4 + 0x80 * kind)
+                for (const HokSquadPlayer& sp : h.squad)
+                    if (sp.role && (sp.line & 0x7F) == 4) t.fourth_line[(sp.line & 0x80) ? 1 : 0] = true;
                 // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
                 // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
                 for (const HokSquadPlayer& sp : h.squad) {
@@ -582,6 +586,36 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         frame.boards.push_back(std::move(b));
     }
     return frame;
+}
+
+std::optional<ClassicBoardOrder> classic_board_click(const ClassicMatchFrame& frame, int x, int y) {
+    if (frame.boards.empty() || frame.scene || frame.waits()) return std::nullopt;  // DS:5A56: only with boards
+    ClassicBoardOrder order;
+    bool hit = false;
+    if (x > 2 && x < 0x15 && y > 0xE1 && y < 0xEF) { order.quick = true; hit = true; }
+    // ovl14_162c: a bar of width 0x19 and height 7; ovl14_1678: a lamp of 6 x 6
+    const auto bar = [&](int left, int top, int range) {
+        return x >= left && x <= left + 0x19 && y >= top && y <= top + 6 ? (x - left) * range / 0x19 : -1;
+    };
+    for (size_t b = 0; b < frame.boards.size() && b < 5; b++) {
+        const int top = int(b) * 0x2D;
+        if (!(top < y && y < top + 0x2B)) continue;
+        const int side = x > 0xA0 ? 1 : 0;
+        const ClassicBoardTeam& t = frame.boards[b].team[size_t(side)];
+        if (!t.human) continue;
+        const int left = side ? 0xF0 : 0x0D, middle = side ? 0xB6 : 0x60;
+        order.team = t.id;
+        if (const int v = bar(left + 0x27, top + 0x16, 100); v >= 0) { order.effort = v; hit = true; }
+        if (const int v = bar(left + 0x27, top + 0x1D, 7); v >= 0) { order.offence = v; hit = true; }
+        for (int k = 0; k < 2; k++)
+            for (int c = 0; c < 4; c++) {
+                const int lx = left + k * 8 + 8, ly = top + c * 7 + 0x0E;
+                if (x >= lx && x <= lx + 5 && y >= ly && y <= ly + 5 && (c < 3 || t.fourth_line[k])) { order.line[k] = c; hit = true; }
+            }
+        if (x >= middle && x <= middle + 0x27) { order.squad = true; hit = true; }
+    }
+    if (!hit) return std::nullopt;
+    return order;
 }
 
 bool classic_match_display_wanted(const Game& game, bool human_plays, bool cup) {

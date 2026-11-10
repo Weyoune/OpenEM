@@ -33,6 +33,10 @@ public:
     void render_screen(std::string_view name);
     Bytes native_ui_bytes(); // read-only diagnostic of the native modal working image
 
+    // The frontend's frame (events, tick, draw, present). With it the match display runs live inside the minute observer
+    // while Session::advance_day plays the day, so clicks on the boards reach the next minute (ovl06_2522 / ovl06_3856).
+    void set_pump(std::function<void()> pump) { pump_ = std::move(pump); }
+
 private:
     struct FileEntry { std::filesystem::path path; std::string name; bool directory=false; bool save=false; };
     const HokFile& snapshot();
@@ -210,6 +214,19 @@ private:
     void prepare_match_view(bool human_match);
     void begin_match_view();
     bool tick_match_view();
+    // Live match display (docs/logic/SPIELANSICHT_LIVE.md)
+    std::function<void()> pump_;
+    bool live_day_=false;     // the observer shows the minutes while the day is played
+    bool live_wait_=false;    // the display reached the end of the observed minutes
+    bool live_fast_=false;    // DS:878A: the quick switch bottom left (speed 70, no goal scenes)
+    bool live_skip_=false;    // right click: the rest of the day is played without display
+    int live_scenes_=0;       // DS:878C: the goal scene setting of the day
+    size_t live_base_=0, live_out_=0;  // raw frame the processing starts at, output frames of it already shown
+    std::vector<ClassicBoardOrder> live_orders_;  // clicks of this minute, applied before the next one
+    int live_speed() const;
+    void live_minute(const std::vector<LiveMatch>& matches);
+    void append_live_frames();
+    bool live_click(int x,int y,bool right);
     void draw_banner(std::string_view text);
     bool native_notice_return_main_=false;
     std::string filename_;

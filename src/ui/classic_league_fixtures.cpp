@@ -72,13 +72,15 @@ ClassicLeagueFixtures classic_league_fixtures(const HokFile& h,const ScheduleTab
     }
     return out;
 }
-void draw_classic_league_fixtures(ClassicCanvas& c,const HokFile& h,const ScheduleTables& tables,
-    const SeasonCalendar& calendar,int league,int round,int width){
-    const auto view=classic_league_fixtures(h,tables,calendar,league,round,width);
+namespace {
+void draw_view(ClassicCanvas& c,const ClassicLeagueFixtures& view,bool live){
     constexpr auto mini=ClassicFontId::Mini,flow=ClassicFontId::Flow;
-    c.background(22);c.frame(4,15,13,8);c.frame(30,180,2,2);c.frame(250,180,2,2);c.frame(140,180,2,2);
-    c.text_native(mini,147,200,view.native_competition,1,-1,182);
-    c.blit(4,40,195,19,104,29,9);c.blit(4,260,195,19,125,29,9);
+    c.background(22);c.frame(4,15,13,8);
+    if(!live){  // mode 2 (during the matches) has no buttons
+        c.frame(30,180,2,2);c.frame(250,180,2,2);c.frame(140,180,2,2);
+        c.text_native(mini,147,200,view.native_competition,1,-1,182);
+        c.blit(4,40,195,19,104,29,9);c.blit(4,260,195,19,125,29,9);
+    }
     c.line(13,34,303,34,7);c.line(14,35,304,35,1);c.rect(8,23,310,33,4);
     c.text_native(flow,5,30,view.native_title,10,28,313);c.rect(12,35,306,157,4);
     for(const auto& row:view.rows){
@@ -89,6 +91,21 @@ void draw_classic_league_fixtures(ClassicCanvas& c,const HokFile& h,const Schedu
         c.text_native(mini,160,row.baseline+7,row.native_away_stats,8,-1,319);
         c.text_native(flow,0,row.baseline+9,row.native_score,7,-1,319);
     }
+}
+}
+void draw_classic_league_fixtures(ClassicCanvas& c,const HokFile& h,const ScheduleTables& tables,
+    const SeasonCalendar& calendar,int league,int round,int width){
+    draw_view(c,classic_league_fixtures(h,tables,calendar,league,round,width),false);
+}
+void draw_classic_league_live(ClassicCanvas& c,const HokFile& h,const ScheduleTables& tables,const SeasonCalendar& calendar,
+    int league,int minute,const std::vector<std::array<int,4>>& scores){
+    auto view=classic_league_fixtures(h,tables,calendar,league);
+    // Amiga FUN_0010e62e mode 2: the title ends with the minute instead of the date, the running scores of the round
+    constexpr std::array<const char*,3> labels{"Bundesliga","Zweite Liga","Oberliga"};
+    view.native_title=std::string(labels[size_t(league)])+"   "+number(view.round,1)+".Spieltag  "+number(minute,3)+".MINUTE";
+    for(auto& row:view.rows)
+        for(const auto& s:scores)if(s[0]==row.home&&s[1]==row.away)row.native_score=number(s[2])+":"+number(s[3]);
+    draw_view(c,view,true);
 }
 ClassicLeagueHit classic_league_fixtures_hit(const ClassicLeagueFixtures& v,int x,int y){
     if(y>=180&&y<=218){
