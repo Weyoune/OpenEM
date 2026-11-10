@@ -38,6 +38,7 @@
 #include "game/finances.hpp"
 #include "game/injuries.hpp"
 #include "game/lineup.hpp"
+#include "game/manager_layout.hpp"
 #include "game/match.hpp"
 #include "game/national_team.hpp"
 #include "game/schedule.hpp"
@@ -75,6 +76,7 @@ enum class PurchaseResult { Invalid, Unavailable, Blocked, SellerRefused, Insuff
 struct PurchaseDraft {
     int pool_slot=-1,player_id=0,club_slot=-1,old_team=-1;
     long fee=0,initial_salary=0;
+    int manager=0;  // the buying manager (the active one when the purchase began)
 };
 //The native sponsor decides before its confirmation opens. The controller
 //retains this prepared resolution and cannot save/advance while it is pending.
@@ -166,11 +168,19 @@ public:
     GameDate date() const { return date_of_season_day(day_, save_.year); }
     const League& league(int l) const { return leagues_[size_t(l)]; }
     int next_matchday(int l) const { return matchday_[size_t(l)]; }
-    const ManagerBudget& budget() const { return mgr_[0].budget; }
-    int image() const { return mgr_[0].image; }
+    // The accessors and UI actions below act for the active manager (hot seat, docs/MEHRSPIELER_PLAN.md step 5);
+    // it is manager 0 unless select_manager() chose another one of the managers() human managers.
+    const ManagerBudget& budget() const { return mgr_[size_t(active_manager_)].budget; }
+    int image() const { return mgr_[size_t(active_manager_)].image; }
     int game_level() const { return finance_.level; }  // 0 professional .. 5 beginner
-    int human_team() const { return mgr_[0].team; }
+    int human_team() const { return mgr_[size_t(active_manager_)].team; }
     int managers() const { return managers_; }
+    int active_manager() const { return active_manager_; }
+    bool select_manager(int m) {  // false (unchanged) outside 0..managers()-1
+        if (m < 0 || m >= managers_) return false;
+        active_manager_ = m;
+        return true;
+    }
     // Presentation-only event marker; includes club/national matches and forfeits.
     // It is cleared before a day and never affects RNG, finances or checkpoint state.
     bool interactive_match_played() const { return interactive_played_; }
@@ -195,8 +205,9 @@ public:
     const GroupTable& relegation_group(int g) const { return relegation_[size_t(g)]; }
     const HokFile& save() const { return save_; }
     // Open offers for the manager's players. Accepting sells the player to the bidder at once.
-    const std::vector<ManagerOffer>& offers() const { return mgr_[0].transfer_offers; }
+    const std::vector<ManagerOffer>& offers() const { return mgr_[size_t(active_manager_)].transfer_offers; }
     bool accept_offer(size_t i);
+    // block 0 = the active manager's club, 4 = the transfer list.
     bool begin_sale_offer(int block,int slot,int16_t native_si,SaleQuote&);
     bool finish_sale_offer(const SaleQuote&,bool sell);
     // Buy an ordinary CPU player from transfer-list slot 0..10. Fee and salary
@@ -260,7 +271,7 @@ public:
     // Commit a full club plan (kinds 0..8), including its native recovery fee.
     // Invalid plans/phases leave the game unchanged; no random draws or cash posting.
     bool set_training_plan(const TrainingPlan& plan);
-    const SponsorOffers& sponsor_offers() const { return mgr_[0].offers; }
+    const SponsorOffers& sponsor_offers() const { return mgr_[size_t(active_manager_)].offers; }
     //Original advertising-page entry recomputes/stores full monthly income.
     //It reads existing offers; there is no offer generation or random draw.
     bool enter_advertising();
@@ -363,7 +374,7 @@ private:
     void refresh_human_team(int m = 0);
     void weekly_team_drift();  // 162c:1c5b(1) for all 64 national and club teams, twice a week (ovl14)
     void talent_search_week();  // seg002:0AC5, src/game/talent.cpp
-    bool talent_player(int skill,long percent);  // seg002:089F
+    bool talent_player(int skill,long percent,int m = 0);  // seg002:089F
     void refresh_menu_manager(int manager);
     void update_sponsors(int m = 0);
     int current_club_image(int m = 0);
@@ -422,6 +433,12 @@ private:
         std::array<bool, 30> hurt_in_match{};  // injured during the running match: still counted as having played (REAL-CODE period 28)
     };
     std::array<ManagerState, 4> mgr_{};
+    int active_manager_ = 0;  // the manager the UI actions act for (step 5); the day loop still plays manager 0
+    // Match layer (step 6): the manager whose club is `team` (0..managers_-1, else -1) and the human sides of a match.
+    int manager_of_team(int team) const;
+    bool manager_team(int team) const { return manager_of_team(team) >= 0; }
+    const HumanSquad* manager_squad(int team) const;
+    HumanSide human_sides(MatchStats* stats, std::array<MatchStats, kMaxManagers>& other_stats) const;
     int managers_ = 1;  // DS:0386 (state 0x0DC6): human managers 1..4; only manager 0 is simulated so far (docs/MEHRSPIELER_PLAN.md)
     // Native BSS is zero; only a visited club/national refresh fills its pair.
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.

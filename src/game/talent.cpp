@@ -29,29 +29,32 @@
 
 namespace em {
 namespace {
-constexpr size_t kSquadBase = 0x696D, kRecord = 52, kPlayerBase = 0x4FC6, kManager0 = 0x0DCD;
-constexpr size_t kCounter = kManager0 + 0xEC, kPrice = 0x18, kLevelByte = 0xAEB4;
+constexpr size_t kRecord = 52, kPlayerBase = 0x4FC6;
+constexpr size_t kPrice = 0x18, kLevelByte = 0xAEB4;  // the price is one field so far (per manager unverified)
+constexpr size_t counter_at(int manager) { return manager_block(manager) + 0xEC; }  // running steps, manager block +0xEC
 void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at(at + size_t(n)) = uint8_t(v >> (8 * n)); }
 }  // namespace
 
 long Game::talent_search_price() const { return long(int32_t(le32(save_.state, kPrice))); }
-int Game::talent_search_days() const { return save_.state.at(kCounter); }
+int Game::talent_search_days() const { return save_.state.at(counter_at(active_manager_)); }
 
-TalentResult Game::start_talent_search() {
-    if (national_coach_ >= 0 || mgr_[0].team < 0 || mgr_[0].team >= 52) return TalentResult::Unavailable;
-    if (save_.state.at(kCounter) != 0) return TalentResult::Running;
+TalentResult Game::start_talent_search() {  // for the active manager (docs/MEHRSPIELER_PLAN.md step 5)
+    const int a = active_manager_;
+    if (national_coach_ >= 0 || mgr_[a].team < 0 || mgr_[a].team >= 52) return TalentResult::Unavailable;
+    if (save_.state.at(counter_at(a)) != 0) return TalentResult::Running;
     const long price = talent_search_price();
-    if (!(mgr_[0].budget.balance > price)) return TalentResult::InsufficientFunds;
-    mgr_[0].budget.balance -= price;
+    if (!(mgr_[a].budget.balance > price)) return TalentResult::InsufficientFunds;
+    mgr_[a].budget.balance -= price;
     int days = brng_.range(3, 10);
     if (brng_.range(0, 3) == 0) days += 6;
-    save_.state.at(kCounter) = uint8_t(days);
+    save_.state.at(counter_at(a)) = uint8_t(days);
     log_.push_back("talent search started for " + std::to_string(price / 3) + " DM, " + std::to_string(days) + " steps");
     return TalentResult::Started;
 }
 
-bool Game::talent_player(int skill, long percent) {
-    if (native_reserved_players(save_, 0) >= 28) return false;
+bool Game::talent_player(int skill, long percent, int m) {
+    const size_t kSquadBase = squad_block(m);
+    if (native_reserved_players(save_, m) >= 28) return false;
     HokFile prepared = decode_hok(save_bytes());
     Bytes& s = prepared.state;
     int id = 0;
@@ -62,38 +65,38 @@ bool Game::talent_player(int skill, long percent) {
     s.at(global + 0x17) = uint8_t(brng_.range(45, 55));
     s.at(global + 0x16) = uint8_t(brng_.range(skill - 5, skill + 1));
     s.at(global + 0x15) = uint8_t(brng_.range(skill - 5, skill + 1));
-    s.at(global + 0x1D) = s.at(kManager0 + 0x14);
+    s.at(global + 0x1D) = s.at(manager_block(m) + 0x14);
     const ContractRandomDraw draw = [&](int lo, int hi) { return brng_.range(lo, hi); };
-    const NativeRosterInsertion inserted = native_insert_player(prepared, contracts_, draw, uint8_t(id), 0, 0);
+    const NativeRosterInsertion inserted = native_insert_player(prepared, contracts_, draw, uint8_t(id), m, 0);
     if (inserted.slot < 0 || inserted.slot >= 30) throw FormatError("talent search: native insertion failed");
-    s.at(global + 0x1A) = 0;
+    s.at(global + 0x1A) = uint8_t(m);
     const size_t row = kSquadBase + size_t(inserted.slot) * kRecord;
     const int high = brng_.range(3, 12);
     s.at(row + 0x19) = uint8_t(high << 4 | brng_.range(3, 12));
-    const ContractPlayer contract = contract_player(prepared, 0, inserted.slot);
+    const ContractPlayer contract = contract_player(prepared, m, inserted.slot);
     store32(s, row + 0x28, uint32_t(player_worth(contracts_, contract, Worth::Salary, draw) * percent / 100));
-    store32(s, row + 0x2C, uint32_t(player_worth(contracts_, contract_player(prepared, 0, inserted.slot), Worth::Value, draw)));
+    store32(s, row + 0x2C, uint32_t(player_worth(contracts_, contract_player(prepared, m, inserted.slot), Worth::Value, draw)));
     s.at(row + 0x0B) = uint8_t(brng_.range(2, 3));
-    std::copy_n(s.begin() + kSquadBase, 30 * kRecord, save_.state.begin() + kSquadBase);
+    std::copy_n(s.begin() + long(kSquadBase), 30 * kRecord, save_.state.begin() + long(kSquadBase));
     std::copy_n(s.begin() + long(global), 33, save_.state.begin() + long(global));
     HokPlayer* player = player_by_exe_index(id);
     player->age = s.at(global + 0x14);
     player->skill_a = s.at(global + 0x15);
     player->skill_b = s.at(global + 0x16);
     player->form = s.at(global + 0x17);
-    player->team = mgr_[0].team;
+    player->team = mgr_[m].team;
     if (inserted.shifted)
-        std::move_backward(mgr_[0].injured_role.begin() + inserted.slot, mgr_[0].injured_role.end() - 1, mgr_[0].injured_role.end());
-    mgr_[0].injured_role[size_t(inserted.slot)] = 0;
-    save_.squad = hok_squad(save_, 0);
+        std::move_backward(mgr_[m].injured_role.begin() + inserted.slot, mgr_[m].injured_role.end() - 1, mgr_[m].injured_role.end());
+    mgr_[m].injured_role[size_t(inserted.slot)] = 0;
+    save_.squad_of(m) = hok_squad(save_, m);
     log_.push_back(player->name + " joins from the talent search");
-    refresh_budget_roster();
+    refresh_budget_roster(m);
     return true;
 }
 
 void Game::talent_search_week() {
     if (national_coach_ >= 0 || mgr_[0].team < 0 || mgr_[0].team >= 52) return;
-    uint8_t& counter = save_.state.at(kCounter);
+    uint8_t& counter = save_.state.at(counter_at(0));  // the day loop runs the search of manager 0 (step 7: every manager)
     if (counter == 0) return;
     if (--counter != 0) return;  // DS:4860 (immediate evaluation) is never set in a normal game
     const int level = save_.state.at(kLevelByte);

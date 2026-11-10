@@ -24,8 +24,8 @@ std::vector<HokPairing> cup_pairs(const std::vector<int>& pool) {
 // for cup games and the minute loop with play-off rules for play-off games.
 MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameRandom& rng, const HumanSide& human,
                     bool playoff) {
-    const HumanSquad* hh = home == human.team ? human.squad : nullptr;
-    const HumanSquad* ha = away == human.team ? human.squad : nullptr;
+    const HumanSquad* hh = human.squad_of(home);
+    const HumanSquad* ha = human.squad_of(away);
     if (!hh && !ha && playoff) {  // a play-off game without the human club: set-up (5 skaters, 02a5) and a quick result (REAL-CODE period 28)
         HokTeam h = teams[size_t(home)], a = teams[size_t(away)];
         prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
@@ -39,7 +39,7 @@ MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameR
     opts.knockout = true;
     opts.playoff = playoff;
     return league_match(teams[size_t(home)], teams[size_t(away)], rng, 0, hh, ha,
-                        hh || ha ? human.stats : nullptr, opts);
+                        human.match_stats(home, away), opts);
 }
 }  // namespace
 
@@ -174,8 +174,8 @@ std::vector<RelegationTie> play_relegation(const std::vector<HokTeam>& teams, co
         RelegationTie t;
         t.upper = pr[0];
         t.lower = pr[1];
-        const HumanSquad* hu = t.upper == human.team ? human.squad : nullptr;
-        const HumanSquad* hl = t.lower == human.team ? human.squad : nullptr;
+        const HumanSquad* hu = human.squad_of(t.upper);
+        const HumanSquad* hl = human.squad_of(t.lower);
         t.first_leg = league_match(teams[size_t(t.lower)], teams[size_t(t.upper)], rng, 0, hl, hu);
         t.second_leg = league_match(teams[size_t(t.upper)], teams[size_t(t.lower)], rng, 0, hu, hl);
         const int upper_goals = t.first_leg.away + t.second_leg.home;
@@ -216,10 +216,10 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
     MatchOptions opts;
     opts.knockout = true;
     for (const HokPairing& p : draw) {
-        const HumanSquad* hh = p.home == human.team ? human.squad : nullptr;
-        const HumanSquad* ha = p.away == human.team ? human.squad : nullptr;
+        const HumanSquad* hh = human.squad_of(p.home);
+        const HumanSquad* ha = human.squad_of(p.away);
         entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, 0, hh, ha,
-                                                                         hh || ha ? human.stats : nullptr, opts)});
+                                                                         human.match_stats(p.home, p.away), opts)});
     }
     std::vector<LiveMatch> live;  // the match display only observes (no draws, no state changes)
     if (observer) {
@@ -243,7 +243,7 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
     for (auto& e : entries) {
         Tie t{e.home, e.away, e.run->finish()};
         for (int side = 0; side < 2; side++) {
-            if ((side == 0 ? e.home : e.away) == human.team) continue;
+            if (human.is_human(side == 0 ? e.home : e.away)) continue;
             HokTeam& team = teams[size_t(side == 0 ? e.home : e.away)];
             const HokTeam& m = side == 0 ? e.run->home_state() : e.run->away_state();
             team.effort_current = m.effort_current;

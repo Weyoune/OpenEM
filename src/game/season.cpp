@@ -114,8 +114,8 @@ std::vector<MatchResult> play_matchday(League& league, const std::vector<HokTeam
 
 
 std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay>& days, std::vector<HokTeam>& teams,
-                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSquad* human,
-                                                     int human_team, MatchStats* human_stats, BorlandRandom* brng,
+                                                     const ScheduleTables& tables, GameRandom& rng, const HumanSide& humans,
+                                                     BorlandRandom* brng,
                                                      const MatchMinuteObserver* observer,
                                                      std::vector<std::vector<std::pair<int, int>>>* played) {
     // ovl06_2522 plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
@@ -143,11 +143,14 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             e->home = league.first_team + pairings[d][k].home;
             e->away = league.first_team + pairings[d][k].away;
             e->scheduled[0] = e->home; e->scheduled[1] = e->away;
-            e->stats = (e->home == human_team || e->away == human_team) && human_stats ? human_stats : &e->local;
+            // a match of a manager's club books into his statistics (home side first), all others locally
+            MatchStats* own = humans.is_human(e->home) ? humans.stats_of(e->home) : nullptr;
+            if (!own && humans.is_human(e->away)) own = humans.stats_of(e->away);
+            e->stats = own ? own : &e->local;
             e->before[0] = e->stats->penalty_minutes[0];
             e->before[1] = e->stats->penalty_minutes[1];
-            e->run = std::make_unique<MatchRun>(teams[size_t(e->home)], teams[size_t(e->away)], rng, 0, e->home == human_team ? human : nullptr,
-                                                e->away == human_team ? human : nullptr, e->stats);
+            e->run = std::make_unique<MatchRun>(teams[size_t(e->home)], teams[size_t(e->away)], rng, 0, humans.squad_of(e->home),
+                                                humans.squad_of(e->away), e->stats);
             entries.push_back(std::move(e));
         }
     }
@@ -240,9 +243,9 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             };
             for (int side = 0; side < 2; side++) {
                 // a team replaced by the pair-table error keeps its record as it was at the swap
-                if (e->has_frozen_team[side] && e->scheduled[side] != human_team) write_back(teams[size_t(e->scheduled[side])], e->frozen_team[side]);
+                if (e->has_frozen_team[side] && !humans.is_human(e->scheduled[side])) write_back(teams[size_t(e->scheduled[side])], e->frozen_team[side]);
                 const int tid = side == 0 ? e->home : e->away;
-                if (tid == human_team) continue;
+                if (humans.is_human(tid)) continue;
                 if (shared.count(tid)) {  // a record shared by two pairs keeps the running penalties of its box (REAL-CODE period 28: +0x33)
                     HokTeam m = shared.at(tid).team;
                     m.penalty_code = shared.at(tid).box.code();

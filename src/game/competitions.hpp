@@ -33,12 +33,7 @@ struct Tie {
     int winner() const { return result.home > result.away ? home : away; }
 };
 
-// The human manager's club (or -1) and its squad.
-struct HumanSide {
-    int team = -1;
-    const HumanSquad* squad = nullptr;
-    MatchStats* stats = nullptr;
-};
+// HumanSide (the human clubs of a match and their squads) is in match.hpp.
 
 // One cup round: plays every pair once, knock-out.
 std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw,
