@@ -30,6 +30,8 @@ public:
     const ClassicCanvas& canvas() const { return canvas_; }
     const Session& session() const { return session_; }
     ClassicScreen screen() const { return screen_; }
+    bool advancing() const { return advancing_; }            // the crest's day run is in progress
+    bool replaying() const { return !match_frames_.empty(); } // the match display is being shown
     void render_screen(std::string_view name);
     Bytes native_ui_bytes(); // read-only diagnostic of the native modal working image
 
@@ -115,7 +117,11 @@ private:
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);
-    void open_player(int slot,int manager=0);
+    void open_player(int slot,int manager=-1);  // -1: the active manager
+    // Hot seat (classic_hotseat.cpp): the manager at the menu, his name, and the hand-over of the menu
+    int active_manager() const;
+    std::string manager_name(int manager);
+    bool hand_over_menu();
     void submit_contract();
     void open_purchase(int pool_slot);
     void open_loan(int pool_slot);           // classic_loan.cpp

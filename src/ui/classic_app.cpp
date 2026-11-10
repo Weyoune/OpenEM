@@ -78,6 +78,7 @@ void ClassicApplication::autosave(){
 }
 void ClassicApplication::start_advance(){
     if(!session_.loaded())return;
+    if(hand_over_menu())return;  // hot seat (classic_hotseat.cpp): the next manager's menu before the day
     advancing_=true;advance_first_=true;advanced_days_=0;category_=-1;
 }
 // The match display (ovl06_2522): the day is computed at once by Session::advance_day, the observed minutes are shown afterwards.
@@ -238,6 +239,7 @@ void ClassicApplication::finish_timed_native_notice(){
     native_notice_return_main_=false;update_stadium_hover();
 }
 void ClassicApplication::open_player(int slot,int manager){
+    if(manager<0)manager=active_manager();  // hot seat: the squad of the manager at the menu
     try{
         const auto squad=hok_squad(snapshot(),manager);
         if(slot<0||size_t(slot)>=squad.size())return;
@@ -330,7 +332,7 @@ void ClassicApplication::click(int x,int y,bool right){
         }
         if(x>2&&x<158&&y>s+52&&y<s+78){
             const int field=int(y>s+63)+int(y>s+71);
-            const size_t record=0x696D+size_t(e.slot)*52;
+            const size_t record=squad_block(active_manager())+size_t(e.slot)*52;
             const auto& h=snapshot();
             if(field==2){
                 if((h.state.at(record+0x2F)&0x80)||(h.state.at(record+9)&3)==2)return;
@@ -455,9 +457,9 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(screen_==ClassicScreen::Contracts){
         const int slot=(y-29)/6;
-        if(right&&x>34&&x<96&&y>=29&&slot>=0&&size_t(slot)<session_.game().save().squad.size()){open_player(slot);return;}
+        if(right&&x>34&&x<96&&y>=29&&slot>=0&&size_t(slot)<session_.game().save().squad_of(active_manager()).size()){open_player(slot);return;}
         if(right||y<14){screen_=ClassicScreen::Main;return;}
-        if(x>=0&&x<=255&&slot>=0&&size_t(slot)<session_.game().save().squad.size())open_contract(slot);
+        if(x>=0&&x<=255&&slot>=0&&size_t(slot)<session_.game().save().squad_of(active_manager()).size())open_contract(slot);
         return;
     }
     if(screen_==ClassicScreen::Bank){
@@ -467,7 +469,7 @@ void ClassicApplication::click(int x,int y,bool right){
         if(!bank_selected_)return;
         const auto& b=session_.game().budget();
         const auto& h=snapshot();
-        const int64_t counter=int32_t(le32(h.state,0x0DCD+4*0x1AF+0x19B));
+        const int64_t counter=int32_t(le32(h.state,0x0DCD+4*0x1AF+0x19B+4*size_t(active_manager())));
         const bool stock=bank_party_>=5;
         const auto limit=[&]{
             if(stock){const size_t company=size_t(bank_party_-5);const int64_t price=le16(h.state,0xB0+company*72+70);return bank_deposit_?int64_t(le32(h.state,0x30+company*8+4)):price?std::max<int64_t>(0,b.balance)/price:0;}
@@ -606,7 +608,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::LeagueCompetition:draw_league_competition();break;
         case ClassicScreen::Advertising:draw_advertising();break;
         case ClassicScreen::Stadium:draw_stadium();break;
-        case ClassicScreen::Youth:draw_classic_youth(canvas_,snapshot(),session_.finance_tables());break;
+        case ClassicScreen::Youth:draw_classic_youth(canvas_,snapshot(),session_.finance_tables(),active_manager());break;
         case ClassicScreen::Settings:draw_settings();break;
         case ClassicScreen::Statistics:draw_statistics();break;
         case ClassicScreen::Highscore:case ClassicScreen::NewManager:draw_misc();break;
@@ -631,7 +633,7 @@ void ClassicApplication::draw_dialog(){
     const bool talent_question=talent_question_&&notice_.empty();
     const bool question=quit_question_||session_.contract_question().has_value()||advert_question||stadium_question||talent_question;
     canvas_.frame(75,107,7,4);
-    canvas_.text(flow,105,125,session_.loaded()?session_.game().save().manager:"",7,0,210);
+    canvas_.text(flow,105,125,session_.loaded()?manager_name(active_manager()):"",7,0,210);  // FUN_00146858: the name of the manager at the menu
     for(const int x:{83,212}){
         canvas_.rect(x,112,x+21,133,question?14:17);canvas_.outline(x+1,113,x+20,132,question?12:16);
         canvas_.text(ClassicFontId::NewBold,x,129,question?"?":"!",0,-1,x+(question?24:23));
@@ -732,7 +734,7 @@ void ClassicApplication::render_screen(std::string_view name){
         else if(name!="advertising"){
             if(name=="advertising-accepted")action([](Game& game){return ActionResult{{},game.accept_sponsor_offer(0,4)};});
             advertising_selection_={3,-1,true};
-            advertising_selection_=classic_advertising_view(snapshot(),session_.finance_tables(),advertising_selection_).selection;
+            advertising_selection_=classic_advertising_view(snapshot(),session_.finance_tables(),advertising_selection_,active_manager()).selection;
             advertising_info_=name=="advertising-info";
         }
     }

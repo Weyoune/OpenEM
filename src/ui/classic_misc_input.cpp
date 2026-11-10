@@ -45,7 +45,7 @@ void ClassicApplication::open_highscore() {
     try {
         if (!m.tables) m.tables = load_highscore_tables(read_file(data_ / "EM.EXE"));
         HighscoreRecord record;
-        action([&](Game& game) { record = game.highscore_record(0, *m.tables); return ActionResult{}; });
+        action([&](Game& game) { record = game.highscore_record(active_manager(), *m.tables); return ActionResult{}; });
         const fs::path own = saves_ / highscore_file_name(number), seed = data_ / highscore_file_name(number);
         std::error_code ec;
         m.highscore = fs::exists(own, ec) ? read_highscore_table(read_file(own))
@@ -101,17 +101,17 @@ void ClassicApplication::open_start_menu() {
 void ClassicApplication::click_start_menu(int x, int y, bool right) {
     auto& m = *misc_;
     if (m.setup.click(*m.start_base, x, y, right) != ClassicNewManager::Result::LeaveWithManager) return;
-    const auto rows = m.setup.rows();
-    const auto row = std::find_if(rows.begin(), rows.end(), [](const auto& r) { return r.face >= 0 && r.team >= 0; });
-    if (row == rows.end()) return;
+    // ovr027:1666: the complete rows become managers 0..N-1 in menu order (hot seat, classic_hotseat.cpp)
+    std::vector<NewGameSetup> managers;
+    for (const auto& r : m.setup.rows())
+        if (r.face >= 0 && r.team >= 0 && r.name.size() >= 2) managers.push_back({r.name, r.face, r.team});
+    if (managers.empty()) return;
     try {
-        session_.start_new_game({row->name, row->face, row->team});
+        session_.start_new_game(managers);
         m.start_base.reset();
         invalidate();
         screen_ = ClassicScreen::Main;
         table_order_ = session_.game().league(division_).ranking;
-        if (std::count_if(rows.begin(), rows.end(), [](const auto& r) { return r.face >= 0; }) > 1)
-            notice("Weitere Manager werden noch nicht\nunterstützt.");
     } catch (const std::exception& e) {
         notice(e.what());
     }

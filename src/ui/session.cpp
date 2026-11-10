@@ -44,7 +44,14 @@ TrainingTables Session::training_tables() const {
 std::unique_ptr<Game> Session::staged_game(const Bytes& checkpoint) const {
     auto next = std::make_unique<Game>(exe_, checkpoint);
     if (database_) next->set_database(*database_);
+    next->select_manager(active_manager_);
     return next;
+}
+
+bool Session::select_manager(int manager) {
+    if (!game_ || !game_->select_manager(manager)) return false;
+    active_manager_ = manager;
+    return true;
 }
 
 void Session::load(const std::filesystem::path& file, uint32_t seed) {
@@ -69,6 +76,7 @@ void Session::load(const std::filesystem::path& file, uint32_t seed) {
     else save_history_=next->native_save_history();
     if (database_) next->set_database(*database_);
     game_ = std::move(next);
+    active_manager_ = 0;
     loaded_path_ = file;
     dirty_ = false;
     revision_++;
@@ -83,13 +91,25 @@ bool Session::can_start_new_game() const { return database_ && find_new_game_bas
 void Session::start_new_game(const NewGameSetup& setup, uint32_t seed) {
     const auto base = find_new_game_base(data_directory_);
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
-    const Bytes bytes = encode_hok(em::start_new_game(decode_hok(read_file(*base)), *database_, setup));
+    start_from(encode_hok(em::start_new_game(decode_hok(read_file(*base)), *database_, setup)), seed);
+}
+
+void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed) {
+    if (managers.size() == 1) return start_new_game(managers.front(), seed);
+    const auto base = find_new_game_base(data_directory_);
+    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
+    const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
+    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed))), seed);
+}
+
+void Session::start_from(const Bytes& bytes, uint32_t seed) {
     // A new game is a new program run of the original: no earlier save identities, no previous game.
     save_history_ = NativeSaveHistory{};
     auto next = std::make_unique<Game>(exe_, bytes, seed, nullptr);
     next->set_native_save_history(save_history_);
     next->set_database(*database_);
     game_ = std::move(next);
+    active_manager_ = 0;
     loaded_path_.clear();
     dirty_ = true;
     revision_++;

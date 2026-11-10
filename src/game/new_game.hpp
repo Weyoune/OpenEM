@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "formats/db.hpp"
 #include "formats/hok.hpp"
@@ -43,5 +44,12 @@ bool is_new_game_base(const HokFile& h);
 std::optional<std::filesystem::path> find_new_game_base(const std::filesystem::path& data_directory);
 // The start state with manager 0 replaced by `setup` (throws FormatError on invalid input).
 HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSetup& setup);
+
+// A new game with two to four managers (hot seat). The shipped start state has a squad for one manager only, so the
+// world is built by the new-game generator (game/world_generator.hpp, three seeds = `seed`). The start menu shows the
+// clubs in the order of `base`; each chosen club is looked up by its name in the generated world (the league shuffle
+// keeps every club in its division). The settings DS:0118..011A come from `base`. `db_raw` = KB\23.vga.
+HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& base, const std::vector<NewGameSetup>& managers,
+                        uint16_t seed);
 
 }  // namespace em

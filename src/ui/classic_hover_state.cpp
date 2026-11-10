@@ -15,10 +15,10 @@ void ClassicApplication::update_roster_hover(){
     const auto kind=roster_kind();
     if(!kind){hover_kind_.reset();roster_hover_={};roster_rules_=false;transfer_hover_={};pool_rules_=pool_help_visible_=false;return;}
     hover_kind_=kind;
-    roster_hover_=classic_roster_hover(snapshot(),0,*kind,mouse_x_,mouse_y_,roster_help_);
+    roster_hover_=classic_roster_hover(snapshot(),active_manager(),*kind,mouse_x_,mouse_y_,roster_help_);
     roster_rules_=roster_hover_.row>=0;
     if(*kind==ClassicRosterKind::Transfer){
-        const auto pool=classic_transfer_hover(snapshot(),0,mouse_x_,mouse_y_,transfer_help_);
+        const auto pool=classic_transfer_hover(snapshot(),active_manager(),mouse_x_,mouse_y_,transfer_help_);
         pool_rules_=pool.row>=0;
         if(pool.row>=0){transfer_hover_=pool;pool_help_visible_=true;}
         else if(roster_hover_.row>=0)pool_help_visible_=false;

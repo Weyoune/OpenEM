@@ -54,6 +54,12 @@ public:
     // A new game from the fresh start state of the data directory (game/new_game.hpp, start menu "Los jetzt!").
     bool can_start_new_game() const;
     void start_new_game(const NewGameSetup& setup, uint32_t seed = 1);
+    // Two to four managers (hot seat): the world of the new-game generator (game/new_game.hpp start_new_world).
+    void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1);
+    // The manager the UI acts for (Game::select_manager). It is not part of a checkpoint, so the session keeps it and
+    // gives it to every staged game; loading or starting a game selects manager 0.
+    bool select_manager(int manager);
+    int active_manager() const { return active_manager_; }
     void save(const std::filesystem::path& file);  // new .oem or .hok only, never overwrite
     ActionResult apply(const std::function<ActionResult(Game&)>& action);
     bool advance_day();  // false means a contract decision is pending; game remains unchanged
@@ -66,6 +72,7 @@ public:
 
 private:
     std::unique_ptr<Game> staged_game(const Bytes& checkpoint) const;
+    void start_from(const Bytes& hok, uint32_t seed);
     void commit(std::unique_ptr<Game> next, const Bytes& before);
     void add_news(std::string text);
 
@@ -77,6 +84,7 @@ private:
     std::vector<News> news_;
     bool dirty_ = false;
     uint64_t revision_ = 0;
+    int active_manager_ = 0;
     std::vector<int> contract_answers_;
     std::optional<ContractQuestion> contract_question_;
     MatchObserver match_observer_;
