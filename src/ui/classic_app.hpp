@@ -49,7 +49,7 @@ public:
 private:
     struct FileEntry { std::filesystem::path path; std::string name; bool directory=false; bool save=false; };
     const HokFile& snapshot();
-    void invalidate() { view_.reset(); }
+    void invalidate() { view_.reset(); pool_trail_ = 0; }
     void notice(std::string text);
     void timed_native_notice(std::string text,bool return_main=false);
     void action(const std::function<ActionResult(Game&)>& fn);
@@ -135,6 +135,7 @@ private:
     void open_loan(int pool_slot);           // classic_loan.cpp
     void finish_loan(int pool_slot,long fee);
     void open_talent_question();             // classic_scout.cpp
+    void open_subsidy_question(long raw);    // sponsor offer after a purchase/loan, same box
     void answer_talent_question(bool yes);
     void draw_talent_question();
     void show_manager_news();
@@ -194,6 +195,10 @@ private:
     int euro_page_=3;
     int euro_table_page_=3,euro_fixture_page_=3; // DS:5123 / DS:5126
     bool euro_from_fixtures_=false;
+    struct StatsHold{bool latched;int x,y;uint64_t next;};  // held Frueher/Verein arrow, classic_stats_app.cpp
+    static constexpr uint64_t kStatsRepeatMs=40;
+    std::optional<StatsHold> stats_hold_;
+    void tick_stats_hold(uint64_t now);
     int stats_page_=0,stats_mode_=2,stats_scroll_=0; // 1 Frueher .. 5 WM; Spieler mode; Frueher scroll
     bool stats_managers_=false;
     int wm_table_page_=11,wm_fixture_page_=8,wm_previous_fixtures_=8,wm_page_=11,wm_round_=-1;
@@ -250,8 +255,11 @@ private:
     std::optional<PurchaseDraft> purchase_draft_;
     std::optional<SaleQuote> sale_quote_;
     bool talent_question_=false;
+    long subsidy_offer_=0;                   // raw; while set, the talent question box asks for it
+    uint16_t pool_trail_=0;                  // pool rows whose hover rules were drawn since the lists were redrawn
     int16_t transfer_native_si_=0;
     std::unique_ptr<HokFile> purchase_backdrop_;
+    std::optional<ManagerBudget> backdrop_budget_;  // the account line under a backdrop (sponsor question)
     struct PlayerDetail { int player,manager,slot;int64_t quote; };
     std::optional<PlayerDetail> player_detail_;
     std::optional<int> club_info_;

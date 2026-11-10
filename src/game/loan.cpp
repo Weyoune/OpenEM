@@ -75,6 +75,7 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     mgr_[a].budget.balance -= fee;
     log_.push_back(player->name + " loaned for " + std::to_string(fee / 3) + " DM, salary " + std::to_string(salary / 3) + " DM");
     const long subsidy = purchase_subsidy(fee, brng_);
+    last_purchase_subsidy_ = subsidy;
     if (subsidy > 0) {
         if (accept_subsidy) mgr_[a].budget.balance = long(int32_t(uint32_t(mgr_[a].budget.balance) + uint32_t(subsidy)));
         log_.push_back("purchase sponsor subsidy " + std::to_string(subsidy / 3) + (accept_subsidy ? " DM accepted" : " DM declined"));
@@ -82,6 +83,16 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     if (prepare_lineup) prepare_human_lineup(false, a);
     refresh_budget_roster(a);
     return PurchaseResult::Purchased;
+}
+
+// "Aber immer!" on the sponsor question (seg001:2329..2341): balance += offer. The offer is a multiple of
+// 300 raw (100 DM, seg001:2288); the question follows the last draw, so accepting draws nothing.
+bool Game::accept_purchase_subsidy(long raw) {
+    if (raw <= 0 || raw % 300 != 0) return false;
+    const int a = active_manager_;
+    mgr_[a].budget.balance = long(int32_t(uint32_t(mgr_[a].budget.balance) + uint32_t(raw)));
+    log_.push_back("purchase sponsor subsidy " + std::to_string(raw / 3) + " DM accepted");
+    return true;
 }
 
 }  // namespace em

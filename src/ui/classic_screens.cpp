@@ -359,5 +359,5 @@ void ClassicApplication::click_settings(int x,int y,bool right){
         }
     }else if(hit.speed>=0)action([&](Game& game){game.set_game_speed(hit.speed);return ActionResult{};});
 }
-void ClassicApplication::draw_transfer(){draw_classic_transfer(canvas_,purchase_backdrop_?*purchase_backdrop_:snapshot(),session_.game().budget());}
+void ClassicApplication::draw_transfer(){draw_classic_transfer(canvas_,purchase_backdrop_?*purchase_backdrop_:snapshot(),backdrop_budget_?*backdrop_budget_:session_.game().budget());}
 } // namespace em::ui

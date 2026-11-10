@@ -92,6 +92,25 @@ int main(int argc, char** argv) {
             require(seed_of(poor) == after_draws(seed, 2) && poor.save().state.at(pool + 15) == id,
                     "money check after both seller draws, pool unchanged");
             (void)poor_before;
+
+            // Sponsor offer (seg001:223E): rand(0,6) == 0, then fee * rand(25,65) / 30000 * 300 raw. The UI asks
+            // afterwards; accepting books the offer without further draws.
+            int offers = 0;
+            for (uint32_t s = 1; s <= 60 && offers < 2; s++) {
+                Game g(exe, before, s * 104729u);
+                if (g.loan_transfer_player(3, bid, false, false) != PurchaseResult::Purchased) continue;
+                const long offer = g.last_purchase_subsidy();
+                if (offer == 0) continue;
+                offers++;
+                require(offer % 300 == 0 && offer >= bid * 25 / 30000 * 300 && offer <= bid * 65 / 30000 * 300,
+                        "offer in the fee * 25..65 / 100 range, whole 100 DM");
+                const long cash = g.budget().balance;
+                const uint32_t drawn = seed_of(g);
+                require(!g.accept_purchase_subsidy(offer + 1) && g.budget().balance == cash, "odd amount rejected");
+                require(g.accept_purchase_subsidy(offer) && g.budget().balance == cash + offer, "offer booked");
+                require(seed_of(g) == drawn, "accepting draws nothing");
+            }
+            require(offers == 2, "sponsor offers observed");
         }
 
         // ---- talent scout ------------------------------------------------------------------
