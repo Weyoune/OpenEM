@@ -25,18 +25,19 @@ void ClassicApplication::button(int x,int y,std::string_view label){
 void ClassicApplication::open_contract(int slot){
     roster_rules_=false;
     const auto& h=snapshot();
-    if(slot<0||slot>=29||size_t(slot)>=h.squad.size()||h.squad[size_t(slot)].player<0)return;
-    const size_t at=0x696D+size_t(slot)*52;
-    const auto& player=h.players.at(size_t(h.squad[size_t(slot)].player));
+    const int m=active_manager();const auto& squad=h.squad_of(m);
+    if(slot<0||slot>=29||size_t(slot)>=squad.size()||squad[size_t(slot)].player<0)return;
+    const size_t at=squad_block(m)+size_t(slot)*52;
+    const auto& player=h.players.at(size_t(squad[size_t(slot)].player));
     if(h.state.at(at+0x0C)){notice(player.name+" ist leider von\n"+h.teams.at(size_t(player.team)).name+"\nnur ausgeliehen.");return;}
     if(h.state.at(at+0x18)&0x80){notice(player.name+" wird sich mit\nAblauf des Vertrages\nzur Ruhe setzen.");return;}
     ContractEditor editor;
-    editor.slot=slot;editor.player=h.squad[size_t(slot)].player;editor.offset=slot<12?80:0;
+    editor.slot=slot;editor.player=squad[size_t(slot)].player;editor.offset=slot<12?80:0;
     editor.years=h.state.at(at+0x0B);editor.salary=int32_t(le32(h.state,at+0x28));
     const long premium=int32_t(le32(h.state,at+0x30));
     editor.insured=editor.original_insured=premium!=0;
     BorlandRandom unused;
-    editor.premium=premium?premium:player_worth(session_.contract_tables(),contract_player(h,0,slot),Worth::Salary,unused)/2;
+    editor.premium=premium?premium:player_worth(session_.contract_tables(),contract_player(h,m,slot),Worth::Salary,unused)/2;
     contract_editor_=std::move(editor);
 }
 

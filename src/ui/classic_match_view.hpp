@@ -38,6 +38,8 @@ struct ClassicBoardTeam {
     int shootout_goals = 0;  // goals of a shoot-out (part of the score, no chance message)
     int colour = 0;          // +0x3B: shirt colour of the goal scenes (0xRGB nibbles)
     bool human = false;      // +0x34 bit 7: the manager's club (its match plays the goal scenes)
+    int id = -1;             // team record
+    bool fourth_line[2] = {};  // FUN_162c_0d9f: a squad player with a role sits in line 4 (defence / attack)
     // The manager's club only: goal and assist counters of the squad players (squad goals of all competitions,
     // player record +0x1F). The board message of a goal names the players whose counters rose in that minute.
     struct Scorer { std::string name; int goals = 0, assists = 0; };
@@ -51,6 +53,10 @@ struct ClassicBoard {
     long attendance = 0;        // home game of a manager, 0 = "(ausw.)"
     bool sold_out = false;      // attendance equals the capacity: colour 0x10
     int arena = 2;              // goal scene rink: 4 * attendance / capacity at the manager's home (ovl14_2630), else 2
+    // The goal scenes the simulation drew in this minute (MatchProgress::scenes, ovl15_0143), in chance order: home before
+    // away, the shots of a shoot-out last. Empty without goal scenes; the view then picks the scenes itself.
+    struct Scene { int side = 0; bool goal = false; int number = 2; char variant = 0; bool penalty = false; };
+    std::vector<Scene> scenes;
 };
 
 // Live result of one pair of a cup round for the table after minute 60 / 65 / 70 (ovl07_0eba).
@@ -138,9 +144,26 @@ struct ClassicMatchFrame {
     bool blink = false;               // ovl14_045c: reporter eyes closed (KB38 0x80) instead of open (KB38 0x50)
     int cup_table = 0;                // 60 / 65 / 70: the DEB-Pokal table of the round, waits for a click
     std::vector<ClassicCupLive> cup;  // live results for cup_table
+    // ovl07_0eba(7, league, minute) after minute 20 / 40 (switch Drittelpause) and 60 (Ergebnisse): the Paarungen page of
+    // the league with the running scores (Amiga FUN_0010e62e mode 2), waits for a click. 1 + league, 0 = none.
+    int league_page = 0;
+    std::vector<ClassicCupLive> league;  // the pairs of that league with their running scores
+    bool waits() const { return cup_table != 0 || league_page != 0; }
 };
 
 void draw_classic_match_view(ClassicCanvas& canvas, const ClassicMatchFrame& frame);
+
+// A click during the minute loop (ovl06_3856, docs/logic/SPIELANSICHT_LIVE.md): what the original writes before the
+// chances of the next minute. Only the boards of a manager's club react.
+struct ClassicBoardOrder {
+    bool quick = false;      // the switch bottom left (DS:878A: speed 70, no goal scenes; again: back)
+    int team = -1;           // team record of the clicked club
+    int effort = -1;         // +0x26 from the effort bar (0..100)
+    int offence = -1;        // +0x2C bits 4..6 from the offence bar (0..7)
+    int line[2] = {-1, -1};  // +0x2E / +0x30 from the line lamps
+    bool squad = false;      // the middle of the board: Aufstellung (ovl14_24bc; not built)
+};
+std::optional<ClassicBoardOrder> classic_board_click(const ClassicMatchFrame& frame, int x, int y);
 
 // Draws a goal scene frame (ClassicMatchFrame::scene): palette, rink window, objects and panel.
 void draw_classic_goal_scene(ClassicCanvas& canvas, const ClassicGoalScene& scene);

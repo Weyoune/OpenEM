@@ -5,6 +5,7 @@
 #include "game/schedule.hpp"
 #include "ui/classic_canvas.hpp"
 #include <array>
+#include <vector>
 
 namespace em::ui {
 struct ClassicLeagueFixtureRow {
@@ -27,6 +28,10 @@ ClassicLeagueFixtures classic_league_fixtures(const HokFile&,const ScheduleTable
     const SeasonCalendar&,int league,int round=-1,int incoming_numeric_width=1);
 void draw_classic_league_fixtures(ClassicCanvas&,const HokFile&,const ScheduleTables&,
     const SeasonCalendar&,int league,int round=-1,int incoming_numeric_width=1);
+// ovl07_0eba(7, league, minute) during the matches: the page of the running round with "<m>.MINUTE" and the live scores
+// {home, away, goals home, goals away}; no buttons, waits for a click.
+void draw_classic_league_live(ClassicCanvas&,const HokFile&,const ScheduleTables&,const SeasonCalendar&,
+    int league,int minute,const std::vector<std::array<int,4>>& scores);
 ClassicLeagueHit classic_league_fixtures_hit(const ClassicLeagueFixtures&,int x,int y);
 void prepare_classic_league_fixtures_working(HokFile&,const ScheduleTables&,
     const SeasonCalendar&,int league,int round=-1,int incoming_numeric_width=1);

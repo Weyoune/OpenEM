@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
         NativeSaveHistory review_history;review_history.remember(le32(review_source,0xb4));
         reference.set_native_save_history(review_history);
         reference.set_database(decode_db(read_file(data / "KB" / "23.vga")));
-        reference.set_contract_decider([](const ContractPlayer& p, long) { CHECK(p.player >= 0); return 2; });
+        reference.set_contract_decider([](const ContractPlayer& p, long) { CHECK(p.player >= 0); return 1; });
         int decisions = 0;
         while (!review.game().seasons_completed()) {
             const Bytes before_day = review.game().checkpoint_bytes();

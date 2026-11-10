@@ -223,6 +223,10 @@ public:
     // Loan of a computer transfer-list player for one season (src/game/loan.cpp, ovr035:1118 loan flag).
     // The fee is raw; Purchased means the player joined on loan.
     PurchaseResult loan_transfer_player(size_t slot,long fee,bool accept_subsidy=false,bool prepare_lineup=true);
+    // Sponsor offer (seg001:223E) of the last purchase/loan, raw, 0 = none; not in a checkpoint. The UI asks the
+    // question afterwards and books an accepted offer with accept_purchase_subsidy (no further draws).
+    long last_purchase_subsidy() const { return last_purchase_subsidy_; }
+    bool accept_purchase_subsidy(long raw);
     // Talent scout (src/game/talent.cpp): price (raw, state 0x18), running counter, start.
     long talent_search_price() const;
     int talent_search_days() const;
@@ -412,6 +416,7 @@ private:
     std::array<PendingCupRecovery, kMaxManagers> pending_cup_recovery_{};
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
     std::vector<std::string> manager_news_;
+    long last_purchase_subsidy_ = 0;
     std::vector<std::string> immediate_messages_;
     std::optional<SeasonReview> season_review_;
     ContractDecider contract_decider_;

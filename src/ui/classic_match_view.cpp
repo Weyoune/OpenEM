@@ -298,7 +298,7 @@ std::vector<ClassicMatchFrame> classic_goal_flashes(std::vector<ClassicMatchFram
     std::vector<ClassicMatchFrame> out;
     std::optional<ClassicMatchFrame> last;  // the last minute frame (cup tables are copies of it)
     for (ClassicMatchFrame& frame : frames) {
-        if (frame.cup_table) { out.push_back(std::move(frame)); continue; }
+        if (frame.waits()) { out.push_back(std::move(frame)); continue; }
         if (last && !frame.boards.empty()) {
             const ClassicMatchFrame* previous = &*last;
             for (const ClassicReportedMatch& m : frame.reported) {
@@ -406,7 +406,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
     for (ClassicMatchFrame& frame : frames) {
         if (rink_stays && frame.flash) continue;  // no goal flashes without a board
         // cup tables and goal flashes (classic_goal_flashes runs first) pass unchanged
-        if (frame.cup_table || frame.flash || frame.message || frame.scene) { out.push_back(std::move(frame)); continue; }
+        if (frame.waits() || frame.flash || frame.message || frame.scene) { out.push_back(std::move(frame)); continue; }
         if (rink_stays && !rest)
             if (const ClassicBoard* b = human_board(frame)) {
                 rest = scene_of(*b, frame.minute);  // camera (0, 0), no objects
@@ -422,30 +422,51 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                 // ovl14_1dc7: the goal scene of every chance of a match on a board (FUN_162c_23c4 var_9 != 0x1E; DS:5A56)
                 const bool scene_board = scenes;
                 std::array<int, 2> running{before.goals[0], before.goals[1]};
+                std::vector<bool> used(now.scenes.size());
+                // ovl14_1dc7: delay(30) before the scene (the board, at Stufe 2 the resting rink), then ovl14_4938
+                const auto play = [&](const std::string& script, int side, bool goal, int minute) {
+                    ClassicGoalScene s = scene_of(now, minute);
+                    s.goals = {running[0] % 30, running[1] % 30};
+                    s.script = script;
+                    ClassicMatchFrame scene_base = base;
+                    if (rink_stays) { scene_base.boards.clear(); scene_base.reported.clear(); }
+                    ClassicMatchFrame wait = scene_base;
+                    wait.message.reset();
+                    wait.flash.reset();
+                    if (rink_stays && rest) { wait.scene = *rest; wait.scene->minute = minute; wait.scene->final = false; }
+                    wait.hold_ms = 30 * 54925 / 3000;
+                    out.push_back(std::move(wait));
+                    for (ClassicMatchFrame& f : classic_goal_scene_frames(data, scene_base, s, side, goal, rink_stays))
+                        out.push_back(std::move(f));
+                    if (rink_stays) rest = out.back().scene;
+                    chance_count++;
+                };
+                // the scene the simulation drew for this chance (ovl15_0143 on the Borland stream), if any
+                const auto drawn = [&](int side, bool goal, bool penalty) -> const ClassicBoard::Scene* {
+                    for (size_t i = 0; i < now.scenes.size(); i++) {
+                        const ClassicBoard::Scene& d = now.scenes[i];
+                        if (used[i] || d.side != side || d.goal != goal || d.penalty != penalty) continue;
+                        used[i] = true;
+                        return &d;
+                    }
+                    return nullptr;
+                };
                 for (int side = 0; side < 2; side++) {
                     const ClassicBoardTeam& t = now.team[size_t(side)];
                     const ClassicBoardTeam& p = before.team[size_t(side)];
                     const auto emit = [&](ClassicBoardMessage m) {
                         if (scene_board && m.kind <= 1) {
-                            ClassicGoalScene s = scene_of(now, frame.minute);
-                            s.goals = {running[0] % 30, running[1] % 30};
-                            // ovr038:4CBD: the j scenes when the attacking side has skaters + running penalties = 6
-                            const int penalties = ((t.penalty_code & 7) != 0) + ((t.penalty_code >> 4 & 7) != 0);
-                            s.script = classic_goal_scene_script(2 + (frame.minute * 7 + chance_count * 3 + side) % 10, side,
-                                                                 m.kind == 1, false, t.skaters + penalties == 6);
-                            ClassicMatchFrame scene_base = base;
-                            if (rink_stays) { scene_base.boards.clear(); scene_base.reported.clear(); }
-                            // ovl14_1dc7: delay(30) before the scene (the board, at Stufe 2 the resting rink)
-                            ClassicMatchFrame wait = scene_base;
-                            wait.message.reset();
-                            wait.flash.reset();
-                            if (rink_stays && rest) { wait.scene = *rest; wait.scene->minute = frame.minute; wait.scene->final = false; }
-                            wait.hold_ms = 30 * 54925 / 3000;
-                            out.push_back(std::move(wait));
-                            for (ClassicMatchFrame& f : classic_goal_scene_frames(data, scene_base, s, side, m.kind == 1, rink_stays))
-                                out.push_back(std::move(f));
-                            if (rink_stays) rest = out.back().scene;
-                            chance_count++;
+                            std::string script;
+                            if (const ClassicBoard::Scene* d = drawn(side, m.kind == 1, false)) {
+                                script = classic_goal_scene_script(d->number, side, d->goal, d->variant == 'e', d->variant == 'j');
+                            } else {
+                                // without drawn scenes (a view built without the simulation): a fixed pick;
+                                // ovr038:4CBD: the j scenes when the attacking side has skaters + running penalties = 6
+                                const int penalties = ((t.penalty_code & 7) != 0) + ((t.penalty_code >> 4 & 7) != 0);
+                                script = classic_goal_scene_script(2 + (frame.minute * 7 + chance_count * 3 + side) % 10, side,
+                                                                   m.kind == 1, false, t.skaters + penalties == 6);
+                            }
+                            play(script, side, m.kind == 1, frame.minute);
                         }
                         if (m.kind == 1) running[size_t(side)]++;
                         if (speed >= 70 || rink_stays) return;
@@ -467,6 +488,16 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                     }
                     for (int miss = goals; miss < chances; miss++) emit(ClassicBoardMessage{0});
                 }
+                // ovl06_3adb: every shot of a shoot-out plays its scene (penalty = 1, variant e, minute 0x78); the board
+                // messages of the shots (kinds 5 / 6) are not drawn
+                if (scene_board)
+                    for (size_t i = 0; i < now.scenes.size(); i++) {
+                        const ClassicBoard::Scene& d = now.scenes[i];
+                        if (used[i] || !d.penalty) continue;
+                        used[i] = true;
+                        play(classic_goal_scene_script(d.number, d.side, d.goal, true, false), d.side, d.goal, 0x78);
+                        if (d.goal) running[size_t(d.side)]++;
+                    }
             }
         }
         last = frame;
@@ -507,6 +538,7 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         b.goals[0] = p.score.home;
         b.goals[1] = p.score.away;
         for (int k = 0; k < 3; k++) for (int s = 0; s < 2; s++) b.period_goals[k][s] = p.period_goals[k][s];
+        for (const GoalScene& g : p.scenes) b.scenes.push_back({g.side, g.goal, g.number, g.variant, g.penalty});
         for (int side = 0; side < 2; side++) {
             const int team = side == 0 ? m.home : m.away;
             const HokTeam& live = side == 0 ? m.run->home_state() : m.run->away_state();
@@ -526,7 +558,11 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
             t.shootout_goals = p.score.shootout_goals[side];
             t.colour = team < 150 ? h.state.at(0x17E7 + size_t(team) * 61 + 0x3B) | h.state.at(0x17E7 + size_t(team) * 61 + 0x3C) << 8 : 0;
             t.human = team == game.human_team();
+            t.id = team;
             if (team == game.human_team()) {
+                // FUN_162c_0d9f: a squad player with a role in line 4 of the kind (squad +0x15 = 4 + 0x80 * kind)
+                for (const HokSquadPlayer& sp : h.squad)
+                    if (sp.role && (sp.line & 0x7F) == 4) t.fourth_line[(sp.line & 0x80) ? 1 : 0] = true;
                 // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
                 // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
                 for (const HokSquadPlayer& sp : h.squad) {
@@ -550,6 +586,36 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         frame.boards.push_back(std::move(b));
     }
     return frame;
+}
+
+std::optional<ClassicBoardOrder> classic_board_click(const ClassicMatchFrame& frame, int x, int y) {
+    if (frame.boards.empty() || frame.scene || frame.waits()) return std::nullopt;  // DS:5A56: only with boards
+    ClassicBoardOrder order;
+    bool hit = false;
+    if (x > 2 && x < 0x15 && y > 0xE1 && y < 0xEF) { order.quick = true; hit = true; }
+    // ovl14_162c: a bar of width 0x19 and height 7; ovl14_1678: a lamp of 6 x 6
+    const auto bar = [&](int left, int top, int range) {
+        return x >= left && x <= left + 0x19 && y >= top && y <= top + 6 ? (x - left) * range / 0x19 : -1;
+    };
+    for (size_t b = 0; b < frame.boards.size() && b < 5; b++) {
+        const int top = int(b) * 0x2D;
+        if (!(top < y && y < top + 0x2B)) continue;
+        const int side = x > 0xA0 ? 1 : 0;
+        const ClassicBoardTeam& t = frame.boards[b].team[size_t(side)];
+        if (!t.human) continue;
+        const int left = side ? 0xF0 : 0x0D, middle = side ? 0xB6 : 0x60;
+        order.team = t.id;
+        if (const int v = bar(left + 0x27, top + 0x16, 100); v >= 0) { order.effort = v; hit = true; }
+        if (const int v = bar(left + 0x27, top + 0x1D, 7); v >= 0) { order.offence = v; hit = true; }
+        for (int k = 0; k < 2; k++)
+            for (int c = 0; c < 4; c++) {
+                const int lx = left + k * 8 + 8, ly = top + c * 7 + 0x0E;
+                if (x >= lx && x <= lx + 5 && y >= ly && y <= ly + 5 && (c < 3 || t.fourth_line[k])) { order.line[k] = c; hit = true; }
+            }
+        if (x >= middle && x <= middle + 0x27) { order.squad = true; hit = true; }
+    }
+    if (!hit) return std::nullopt;
+    return order;
 }
 
 bool classic_match_display_wanted(const Game& game, bool human_plays, bool cup) {

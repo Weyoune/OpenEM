@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/new_game.hpp"
+#include "game/world_generator.hpp"
 
 #include <algorithm>
 #include <system_error>
@@ -88,6 +89,46 @@ HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSet
     // header preview of manager 0 (file 0x10: league, WM flag, manager[19], club[19])
     put_text(h.header, kPreviewManager, setup.name, kPreviewText);
     put_text(h.header, kPreviewClub, club, kPreviewText);
+    return decode_hok(encode_hok(h));
+}
+
+HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& base, const std::vector<NewGameSetup>& managers,
+                        uint16_t seed) {
+    if (!is_new_game_base(base)) throw FormatError("Neues Spiel: kein frischer Startstand");
+    if (managers.size() < 2 || managers.size() > 4) throw FormatError("Neues Spiel: zwei bis vier Manager");
+    const Bytes& s = base.state;
+    WorldSettings settings;
+    settings.level = std::clamp(int(s.at(0x28)), 0, 5);       // DS:0118
+    settings.end_choice = std::clamp(int(s.at(0x29)), 0, 3);  // DS:0119
+    settings.squad_size = std::clamp(int(s.at(0x2A)), 0, 2);  // DS:011A
+    const WorldSeeds seeds{seed, seed, seed};
+    // The league shuffle runs before the start menu (ovl06_099d), so it does not depend on the managers:
+    // a first run with a placeholder manager gives the club order the generated world will have.
+    settings.managers = {WorldManager{"x", 0, 0}};
+    const HokFile order = generate_world(exe, db_raw, settings, seeds).save;
+    settings.managers.clear();
+    for (const NewGameSetup& m : managers) {
+        if (m.name.size() < 2 || m.name.size() > 19) throw FormatError("Neues Spiel: Name mit 2 bis 19 Buchstaben");
+        if (m.team < 0 || m.team >= kGermanClubs) throw FormatError("Neues Spiel: ungültiger Verein");
+        const std::string club = native_text(s, kTeams + size_t(m.team) * kTeamSize, 22);
+        int team = -1;
+        for (int t = 0; t < kGermanClubs && team < 0; t++)
+            if (native_text(order.state, kTeams + size_t(t) * kTeamSize, 22) == club) team = t;
+        if (team < 0) throw FormatError("Neues Spiel: Verein nicht gefunden");
+        // the generator's manager name field holds 18 letters (ovr027:1666 strcpy into 0x13 bytes)
+        settings.managers.push_back(WorldManager{m.name.substr(0, 18), m.face, team});
+    }
+    HokFile h = generate_world(exe, db_raw, settings, seeds).save;
+    // Youth teams (DS:A075 + 0x15 * m = state 0x06B8): generate_world leaves them zero. The original sets them for a new
+    // manager at ovr027:1B46: quality 0x34 + 14 * (2 - DS:011A), grant 5 (+3), league DS:011A (+6), for the three teams;
+    // its two-manager game (work/exp/hotseat_20261110/HOT2.HOK, DS:011A = 0) has 0x50 / 5 / 0 one youth day later.
+    for (size_t m = 0; m < managers.size(); m++)
+        for (size_t i = 0; i < 3; i++) {
+            const size_t at = 0x06B8 + m * 0x15 + i;
+            h.state.at(at) = uint8_t(0x34 + 14 * (2 - settings.squad_size));
+            h.state.at(at + 3) = 5;
+            h.state.at(at + 6) = uint8_t(settings.squad_size);
+        }
     return decode_hok(encode_hok(h));
 }
 

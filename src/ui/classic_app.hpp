@@ -13,6 +13,18 @@
 namespace em::ui {
 enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
 
+// Milliseconds of the UI clock: SDL_GetTicks64, or the clock of a scripted headless run (classic_script.hpp).
+uint64_t classic_ticks();
+void set_classic_clock(uint64_t (*clock)());
+
+// What the screen shows right now, for scripted runs (classic_script.cpp); read-only (classic_probe.cpp).
+struct ClassicUiProbe {
+    std::string modal;      // "" (plain screen), "notice", "timed-notice", "match", "cup-table", "banner", "advancing", ...
+    std::string text;       // the notice text
+    int category = -1;      // selected main-menu category
+    std::optional<uint64_t> deadline;  // classic_ticks() at which the screen moves on by itself
+};
+
 struct ClassicMiscState;  // classic_misc_input.cpp
 struct ClassicCareerState;  // classic_career.cpp
 class ClassicApplication {
@@ -30,13 +42,20 @@ public:
     const ClassicCanvas& canvas() const { return canvas_; }
     const Session& session() const { return session_; }
     ClassicScreen screen() const { return screen_; }
+    bool advancing() const { return advancing_; }            // the crest's day run is in progress
+    bool replaying() const { return !match_frames_.empty(); } // the match display is being shown
     void render_screen(std::string_view name);
     Bytes native_ui_bytes(); // read-only diagnostic of the native modal working image
+    ClassicUiProbe probe() const;
+
+    // The frontend's frame (events, tick, draw, present). With it the match display runs live inside the minute observer
+    // while Session::advance_day plays the day, so clicks on the boards reach the next minute (ovl06_2522 / ovl06_3856).
+    void set_pump(std::function<void()> pump) { pump_ = std::move(pump); }
 
 private:
     struct FileEntry { std::filesystem::path path; std::string name; bool directory=false; bool save=false; };
     const HokFile& snapshot();
-    void invalidate() { view_.reset(); }
+    void invalidate() { view_.reset(); pool_trail_ = 0; }
     void notice(std::string text);
     void timed_native_notice(std::string text,bool return_main=false);
     void action(const std::function<ActionResult(Game&)>& fn);
@@ -111,16 +130,22 @@ private:
     void career_release();
     bool career_key(int key);
     void draw_career();
+    std::string career_modal() const;  // "messages", "review-overview", "review" or ""
     std::shared_ptr<ClassicCareerState> career_;
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);
-    void open_player(int slot,int manager=0);
+    void open_player(int slot,int manager=-1);  // -1: the active manager
+    // Hot seat (classic_hotseat.cpp): the manager at the menu, his name, and the hand-over of the menu
+    int active_manager() const;
+    std::string manager_name(int manager);
+    bool hand_over_menu();
     void submit_contract();
     void open_purchase(int pool_slot);
     void open_loan(int pool_slot);           // classic_loan.cpp
     void finish_loan(int pool_slot,long fee);
     void open_talent_question();             // classic_scout.cpp
+    void open_subsidy_question(long raw);    // sponsor offer after a purchase/loan, same box
     void answer_talent_question(bool yes);
     void draw_talent_question();
     void show_manager_news();
@@ -180,6 +205,10 @@ private:
     int euro_page_=3;
     int euro_table_page_=3,euro_fixture_page_=3; // DS:5123 / DS:5126
     bool euro_from_fixtures_=false;
+    struct StatsHold{bool latched;int x,y;uint64_t next;};  // held Frueher/Verein arrow, classic_stats_app.cpp
+    static constexpr uint64_t kStatsRepeatMs=40;
+    std::optional<StatsHold> stats_hold_;
+    void tick_stats_hold(uint64_t now);
     int stats_page_=0,stats_mode_=2,stats_scroll_=0; // 1 Frueher .. 5 WM; Spieler mode; Frueher scroll
     bool stats_managers_=false;
     int wm_table_page_=11,wm_fixture_page_=8,wm_previous_fixtures_=8,wm_page_=11,wm_round_=-1;
@@ -210,6 +239,19 @@ private:
     void prepare_match_view(bool human_match);
     void begin_match_view();
     bool tick_match_view();
+    // Live match display (docs/logic/SPIELANSICHT_LIVE.md)
+    std::function<void()> pump_;
+    bool live_day_=false;     // the observer shows the minutes while the day is played
+    bool live_wait_=false;    // the display reached the end of the observed minutes
+    bool live_fast_=false;    // DS:878A: the quick switch bottom left (speed 70, no goal scenes)
+    bool live_skip_=false;    // right click: the rest of the day is played without display
+    int live_scenes_=0;       // DS:878C: the goal scene setting of the day
+    size_t live_base_=0, live_out_=0;  // raw frame the processing starts at, output frames of it already shown
+    std::vector<ClassicBoardOrder> live_orders_;  // clicks of this minute, applied before the next one
+    int live_speed() const;
+    void live_minute(const std::vector<LiveMatch>& matches);
+    void append_live_frames();
+    bool live_click(int x,int y,bool right);
     void draw_banner(std::string_view text);
     bool native_notice_return_main_=false;
     std::string filename_;
@@ -236,8 +278,11 @@ private:
     std::optional<PurchaseDraft> purchase_draft_;
     std::optional<SaleQuote> sale_quote_;
     bool talent_question_=false;
+    long subsidy_offer_=0;                   // raw; while set, the talent question box asks for it
+    uint16_t pool_trail_=0;                  // pool rows whose hover rules were drawn since the lists were redrawn
     int16_t transfer_native_si_=0;
     std::unique_ptr<HokFile> purchase_backdrop_;
+    std::optional<ManagerBudget> backdrop_budget_;  // the account line under a backdrop (sponsor question)
     struct PlayerDetail { int player,manager,slot;int64_t quote; };
     std::optional<PlayerDetail> player_detail_;
     std::optional<int> club_info_;

@@ -2,6 +2,8 @@
 // Match display of the classic UI (ovl14 boards, minute panel, "Spiele laufen") against DOSBox-X captures of the original
 // (work/exp/match_20261108), and the observer of the minute loop: the display must not change the day.
 #include "ui/classic_match_view.hpp"
+#include "ui/classic_league_fixtures.hpp"
+#include "game/schedule.hpp"
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include "ui/session.hpp"
@@ -270,6 +272,21 @@ int main(int argc, char** argv) {
             check(canvas, "games-running");
         }
         {
+            // ovl07_0eba(7, 0, 20): START with the switch Drittelpause of the Bundesliga, the Paarungen page after minute 20
+            // (dosbox-automation capture 10.11.2026, dosbox/live-period20.png)
+            const HokFile start = decode_hok(read_file(references / "START.HOK"));
+            const SeasonCalendar calendar = load_season_calendar(read_file(data / "EM.EXE"));
+            const ScheduleTables tables = load_schedule_tables(read_file(data / "EM.EXE"));
+            const ClassicLeagueFixtures view = classic_league_fixtures(start, tables, calendar, 0);
+            const int goals[6][2] = {{1, 0}, {0, 2}, {1, 0}, {0, 3}, {2, 0}, {1, 0}};
+            std::vector<std::array<int, 4>> scores;
+            for (size_t i = 0; i < 6; i++) scores.push_back({view.rows[i].home, view.rows[i].away, goals[i][0], goals[i][1]});
+            ClassicCanvas canvas(data);
+            draw_classic_league_live(canvas, start, tables, calendar, 0, 20, scores);
+            canvas.cursor(319, 239);
+            check(canvas, "live-period20");
+        }
+        {
             // the cup table after minute 60 and 65 of the same day (CUPSHRP holds the draw of the Achtelfinale, game 1)
             const HokFile before = decode_hok(read_file(references / "CUPSHRP.HOK"));
             const SeasonCalendar calendar = load_season_calendar(read_file(data / "EM.EXE"));
@@ -481,6 +498,39 @@ int main(int argc, char** argv) {
                             classic_goal_scene_script(7, 1, false, false, false) == "7.av",
                         "scene file names");
                 require(classic_board_messages(human, 70, false, data).size() == human.size(), "no scenes when switched off");
+
+                // ovl06_3856: clicks on the board of the manager's club (home of board 0) and the quick switch
+                {
+                    ClassicMatchFrame f = human[1];
+                    f.boards[0].team[0].id = 7;
+                    const auto effort = classic_board_click(f, 0x34 + 12, 0x18);
+                    require(effort && effort->team == 7 && effort->effort == 48 && effort->offence < 0, "effort bar: (x - 0x34) * 100 / 25");
+                    const auto offence = classic_board_click(f, 0x4D, 0x1F);
+                    require(offence && offence->offence == 7 && offence->effort < 0, "offence bar: (x - 0x34) * 7 / 25");
+                    const auto lamp = classic_board_click(f, 0x1E, 30);
+                    require(lamp && lamp->line[1] == 2 && lamp->line[0] < 0, "attack lamp of line 3");
+                    require(!classic_board_click(f, 0x1E, 0x0E + 21 + 2), "the fourth line only when it is staffed");
+                    f.boards[0].team[0].fourth_line[1] = true;
+                    require(classic_board_click(f, 0x1E, 0x0E + 21 + 2)->line[1] == 3, "the staffed fourth line");
+                    require(!classic_board_click(f, 0x120, 0x18), "the computer club does not react");
+                    const auto quick = classic_board_click(f, 10, 0xE8);
+                    require(quick && quick->quick && quick->team < 0, "the quick switch bottom left");
+                    require(classic_board_click(f, 0x70, 20)->squad, "the middle of the board opens the lineup");
+                }
+
+                // The scenes the simulation drew (MatchProgress::scenes) decide the files; the shots of a shoot-out
+                // follow the chances with variant e at minute 120 and run the score on.
+                std::vector<ClassicMatchFrame> drawn = human;
+                drawn[1].boards[0].scenes = {{1, false, 9, 0, false}, {0, true, 2, 'j', false}, {0, true, 2, 'e', true}, {1, false, 2, 'e', true}};
+                const auto with_drawn = classic_board_messages(drawn, 70, true, data);
+                std::vector<const ClassicGoalScene*> drawn_finals;
+                for (const auto& f : with_drawn) if (f.scene && f.hold_ms == units(6)) drawn_finals.push_back(&*f.scene);
+                require(drawn_finals.size() == 4 && drawn_finals[0]->script == "2.htj" && drawn_finals[1]->script == "9.av" &&
+                            drawn_finals[2]->script == "2.hte" && drawn_finals[3]->script == "2.ave",
+                        "drawn scenes: home goal, away chance, then the shoot-out shots");
+                require(drawn_finals[2]->minute == 120 && drawn_finals[2]->goals[0] == 2 && drawn_finals[3]->goals[0] == 2 &&
+                            drawn_finals[3]->goals[1] == 0,
+                        "shoot-out scenes at minute 120 with the running score");
             }
         }
         {

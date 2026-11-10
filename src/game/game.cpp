@@ -21,6 +21,11 @@ namespace {
 constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // DS:0393
 constexpr size_t kSquad = squad_block(0), kSquadRecord = 0x34, kTeamRecord = 0x3D;
 constexpr size_t kManagerBlock = manager_block(0);  // manager 0, see finances.hpp and game/manager_layout.hpp
+// The rest of the human squad on a EuroCup day without the own club sets the fitness from the load byte +0x13 like
+// the match set-up (prepare_match_energy: min(90, 100 - load / 8)), not a flat 90 (REAL-CODE Köln periods 14 and 15:
+// load 113 -> 86, 98 -> 88; the Mannheim squads had loads up to 80 there). A cup day without the own club rests to a flat 90
+// (Köln periods 5 and 12 break with the formula there).
+uint8_t rested_fitness(uint8_t load) { return std::getenv("EM_OLD_RESTFIT") ? uint8_t(90) : uint8_t(std::min(90, 100 - load / 8)); }
 constexpr size_t kSeries = 0x9988, kSeriesRecord = 0x9EC8, kSpecialTeams = 0x0F44;
 constexpr int kSeriesTeams = 64;  // DS:B57B .. DS:BAB7
 constexpr int kFirstNationalTeam = 52;  // DS:06AD
@@ -922,8 +927,9 @@ void Game::play_cup_day() {
             own.flags |= mode;
             for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
                 if (save_.state.at(own_block + slot * kSquadRecord + 0x0F) == 0) continue;
-                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = 90;
-                own_squad[slot].fitness = 90;
+                const uint8_t f = uint8_t(90);
+                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = f;
+                own_squad[slot].fitness = f;
             }
             // the head-to-head booking still runs for the human club's (decided) pair of the round, with the pair turned for
             // the game that is not played and a 0:0 (REAL-CODE period 7)
@@ -2041,8 +2047,9 @@ void Game::play_euro_day() {
             const size_t own_block = squad_block(m);
             for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
                 if (save_.state.at(own_block + slot * kSquadRecord + 0x0F) == 0) continue;
-                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = 90;
-                own_squad[slot].fitness = 90;
+                const uint8_t f = rested_fitness(save_.state.at(own_block + slot * kSquadRecord + 0x13));
+                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = f;
+                own_squad[slot].fitness = f;
             }
             const ManagerState& mg = mgr_[size_t(m)];
             if (mg.team >= 0 && mg.team < kHokTeams)
