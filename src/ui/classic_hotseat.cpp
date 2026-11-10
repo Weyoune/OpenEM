@@ -71,8 +71,33 @@ bool ClassicApplication::bid_to_manager(int pool_slot, long fee, bool loan) {
     return true;
 }
 
+// The DEB cup draw of a new game (ovl05_4c7b(0, 0) -> ovl05_4653 = ovr029:4693..487F, Amiga FUN_00131194): with the
+// DEB-Pokal display switch on (DS:0227) the empty draw board appears and the question "An Alle:" (argument 6) asks
+// whether to watch the draw live. OpenEM draws the cup in the generator; "Aber klar" does not show the live draw yet.
+void ClassicApplication::ask_cup_draw() {
+    if (!session_.loaded() || !session_.game().settings().flags[10]) return;
+    ManagerQuestion q;
+    q.manager = -1;  // "An Alle:"
+    q.line1 = "Sind Ihre Nerven stark genug,";
+    q.line2 = "um die DEB-Pokal-Auslosung";
+    q.line3 = "live zu verfolgen ?";
+    q.yes = "Aber klar";
+    q.no = "Kein Gedanke";
+    q.cup_draw = true;
+    manager_question_ = q;
+}
+
 void ClassicApplication::draw_manager_question() {
     const auto& q = *manager_question_;
+    if (q.cup_draw) {  // ovr029:46B4..47BD: frame, title (font 1), n / 2 rows of two KB25 bars, n = DS:03B1[round] = 32
+        canvas_.background();
+        canvas_.frame(3, 3, 13, 12);
+        canvas_.text(ClassicFontId::NewBold, 0, 0x1A, "DEB-Pokal Auslosung", 7, 1, 0x141);
+        constexpr int teams = 32;
+        int y = 0x80 - ((teams >> 1) * 11 >> 1);
+        for (int row = 0; row < teams; row += 2, y += 11)
+            for (const int x : {37, 164}) canvas_.blit(25, x, y, 0, 0, 0x78, 10, true, 0xC0);  // DS:4DD0, DS:4DD4
+    }
     canvas_.frame(75, 107, 7, 4);
     // FUN_00146858: the manager's name, "An Alle:" (DS:2AC6) for a question to everyone
     canvas_.text(ClassicFontId::Flow, 105, 125, q.manager >= 0 ? manager_name(q.manager) : "An Alle:", 7, 0, 210);
@@ -83,8 +108,10 @@ void ClassicApplication::draw_manager_question() {
     }
     canvas_.line(109, 131, 207, 131, 7);
     canvas_.line(80, 163, 237, 163, 0);
-    canvas_.text_native(ClassicFontId::Mini, 105, 145, q.line1, 7, 0, 210);
-    canvas_.text_native(ClassicFontId::Mini, 105, 153, q.line2, 7, 0, 210);
+    const int y = q.line3.empty() ? 145 : 141;  // two lines from 145, three from 141, 8 apart
+    canvas_.text_native(ClassicFontId::Mini, 105, y, q.line1, 7, 0, 210);
+    canvas_.text_native(ClassicFontId::Mini, 105, y + 8, q.line2, 7, 0, 210);
+    if (!q.line3.empty()) canvas_.text_native(ClassicFontId::Mini, 105, y + 16, q.line3, 7, 0, 210);
     button(95, 166, q.yes);
     button(165, 166, q.no);
 }
@@ -95,6 +122,7 @@ void ClassicApplication::click_manager_question(int x, int y, bool right) {
     if (!yes && !no) return;
     const ManagerQuestion q = *manager_question_;
     manager_question_.reset();
+    if (q.cup_draw) return;  // both answers continue to the main menu (the live draw of "Aber klar" is not built yet)
     // "Ihr Angebot wurde abgelehnt." is the timed notice of sub_1A2B8 (mode 75, ovr035:1A9E)
     if (q.unfair) { timed_native_notice("Ihr Angebot\nwurde abgelehnt."); return; }
     try {

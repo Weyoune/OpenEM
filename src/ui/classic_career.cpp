@@ -21,7 +21,7 @@ struct ClassicCareerState {
 
 bool ClassicApplication::main_menu_idle() const {
     return session_.loaded() && screen_ == ClassicScreen::Main && !advancing_ && notice_.empty() && !quit_question_ &&
-           !talent_question_ && !session_.contract_question() && !player_detail_ && !club_info_ && !file_preview_ &&
+           !talent_question_ && !manager_question_ && !session_.contract_question() && !player_detail_ && !club_info_ && !file_preview_ &&
            !native_notice_until_ && !match_banner_until_ && category_ < 0 && !(career_ && career_->review);
 }
 

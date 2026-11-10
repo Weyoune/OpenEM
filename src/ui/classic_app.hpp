@@ -142,7 +142,9 @@ private:
     bool hand_over_menu();
     // A question to one manager at the same seat (FUN_00146858 with his index: his name as the title, -1 = "An Alle:"),
     // here the owner's answer to a bid of another manager (classic_hotseat.cpp).
-    struct ManagerQuestion { int manager=-1; std::string line1,line2,yes,no; bool unfair=false; PurchaseDraft offer; };
+    struct ManagerQuestion { int manager=-1; std::string line1,line2,yes,no; bool unfair=false; PurchaseDraft offer;
+                             std::string line3; bool cup_draw=false; };  // cup_draw: the DEB cup draw board (ovl05_4653)
+    void ask_cup_draw();
     std::optional<ManagerQuestion> manager_question_;
     void draw_manager_question();
     void click_manager_question(int x,int y,bool right);
