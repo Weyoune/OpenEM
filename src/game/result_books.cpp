@@ -30,10 +30,10 @@ void book_series(Bytes& state, int team, int side, int goals_for, int goals_agai
         }
 }
 
-void update_series_records(Bytes& state, int team) {
-    if (team < 0 || team >= kSeriesTeams) return;
+void update_series_records(Bytes& state, int team, int manager) {
+    if (team < 0 || team >= kSeriesTeams || manager < 0 || manager >= 4) return;
     const uint8_t* cur = state.data() + kSeries + size_t(team) * 0x15;
-    uint8_t* rec = state.data() + kSeriesRecord;
+    uint8_t* rec = state.data() + kSeriesRecord + size_t(manager) * 0x15;
     for (size_t k = 0; k < 21; k++) rec[k] = std::max(rec[k], cur[k]);
 }
 

@@ -10,8 +10,9 @@ namespace em {
 void book_series(Bytes& state, int team, int side, int goals_for, int goals_against);
 
 // ovl13_3855, once per league matchday after all games: the manager record of every series becomes the maximum of
-// the current series of his club (state 0x9EC8 = max(0x9EC8, series of `team`)).
-void update_series_records(Bytes& state, int team);
+// the current series of his club (state 0x9EC8 + manager * 0x15 = max(.., series of `team`); ovr037:39EB..3A75 loops over
+// the managers 0..N-1 with their club +0x14).
+void update_series_records(Bytes& state, int team, int manager = 0);
 
 // Head-to-head results of the human club of `manager` (state 0x8F88 + manager * 0x280): the result enters the opponent's row.
 void book_head_to_head(Bytes& state, int home, int away, int home_goals, int away_goals, int human_team, int manager = 0);

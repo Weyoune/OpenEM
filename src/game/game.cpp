@@ -145,7 +145,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     // the header holds the calendar year of the save (1994 in MONAT4, February), DS:03BB the year
     // the season started; the day loop counts from the season start
     if (save_.season_year > 0) save_.year = save_.season_year;
-    for (int m = 0; m < kMaxManagers; m++) {  // the match controls of every human squad (only manager 0 plays so far)
+    for (int m = 0; m < kMaxManagers; m++) {  // the match controls of every human squad
         ManagerState& mg = mgr_[size_t(m)];
         mg.squad.squad = &save_.squad_of(m);
         mg.squad.players = &save_.players;
@@ -162,7 +162,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         for (int u = 0; u < kTrainingUnits; u++) plan_[size_t(d)][size_t(u)] = save_.state[0x070C + size_t(d * 4 + u)];
     mgr_[0].image = le16(save_.state, 0x0DCD + 0x173);
     // Managers 1.. (only with more than one manager): club, money, sponsor offers and image for the UI actions
-    // (step 5) and the match layer (step 6); their day loop follows in step 7.
+    // (step 5), the match layer (step 6) and the day loop (step 7).
     for (int m = 1; m < managers_; m++) {
         ManagerState& mg = mgr_[size_t(m)];
         mg.team = save_.state.at(manager_block(m) + 0x14);
@@ -389,7 +389,8 @@ const HumanSquad* Game::manager_squad(int team) const {
 }
 
 // Manager 0 books into `stats`; the clubs of managers 1.. play with their squads and keep their statistics in other_stats
-// (the bookings after the match are still manager 0's, docs/MEHRSPIELER_PLAN.md step 7).
+// (step 7 books every manager from the statistics of his match: HumanSide::match_stats, the home side's for a game of two
+// managers, with the manager's side).
 HumanSide Game::human_sides(MatchStats* stats, std::array<MatchStats, kMaxManagers>& other_stats) const {
     HumanSide side{mgr_[0].team, &mgr_[0].squad, stats};
     for (int m = 1; m < managers_; m++)
@@ -460,9 +461,12 @@ void Game::book_special_teams(const MatchStats& st, int side, int manager) {
 }
 
 // ovr038:2630 (sub_60D60), after the gate: the squad bookkeeping draws one rand(0, 4) per squad slot (a hit stores the
-// skill-based home line, +2 := +0x15 & 0x7F) and, for a home game, one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag;
-// sub_33CE9 then spins the game random stream rand(100, 300) times (REAL-CODE probe of the original). It runs on every day
-// with a game of the human club (league and cup).
+// skill-based home line, +2 := +0x15 & 0x7F) and, for a home game, one rand(0, 15 + 4 * (30 - x)) for the stadium warning flag.
+// sub_60D60 is called for every pair of the day in pairing order and runs its manager loop (0..N-1, then 5) inside, so with
+// several managers the gates and bookkeepings follow the pairs, within a pair the manager index (asm ovr038:2D4B..2D64).
+// sub_33CE9 then spins the game random stream rand(100, 300) times (REAL-CODE probe of the original); it is called once at
+// the start of the minute loop (ovr030:2552), not per manager: spin_match_stream() after all pairs. It runs on every day with
+// a game of a human club (league and cup).
 void Game::manager_day(bool home_game_today, int m) {
     g_draw_scope = "manager-day";
     const size_t squad_at = squad_block(m);
@@ -479,8 +483,11 @@ void Game::manager_day(bool home_game_today, int m) {
     int x = int(int16_t(uint16_t(places_high - places_low))) / 1000;
     x = std::clamp(x, 0, 30);
     if (home_game_today && brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(m) + 0xF1) |= 1;
+    if (std::getenv("EM_DEBUG_MDAY")) std::fprintf(stderr, "manager_day day %d manager %d slots %d home %d B%zu\n", day_, m, slots, int(home_game_today), g_borland_log ? g_borland_log->size() : size_t(0));
+}
+
+void Game::spin_match_stream() {
     g_draw_scope = "randomize";
-    if (std::getenv("EM_DEBUG_MDAY")) std::fprintf(stderr, "manager_day day %d slots %d home %d B%zu\n", day_, slots, int(home_game_today), g_borland_log ? g_borland_log->size() : size_t(0));
     const int spin = brng_.range(100, 300);
     for (int i = 0; i < spin; i++) rng_.range(0, 1);
 }
@@ -513,36 +520,51 @@ void Game::play_league_day() {
         league_days.push_back({&leagues_[size_t(l)], md - 1});
         day_league.push_back(l);
     }
-    // ovl14: the gate of the human home game is booked before the matches are played (REAL-CODE whole-program test)
-    bool gate_booked = false, human_plays = false;
-    for (size_t d = 0; d < league_days.size() && !human_plays; d++) {
+    // ovl14: the gate of the human home game is booked before the matches are played (REAL-CODE whole-program test).
+    // sub_60D60 per pair in pairing order (leagues 0..2), its manager loop inside (see manager_day): a forfeiting manager
+    // (+0xF0 = 100, sub_60CC0) gets no gate and no bookkeeping, an away game no gate and no stadium flag.
+    bool any_plays = false;
+    for (size_t d = 0; d < league_days.size(); d++) {
         const auto pre_pairs = round_robin_pairings(schedule_.teams12, league_days[d].matchday);
         for (const auto& p : pre_pairs) {
             const int hi = league_days[d].league->first_team + p.home, ai = league_days[d].league->first_team + p.away;
-            if (hi != mgr_[0].team && ai != mgr_[0].team) continue;
-            if (mgr_[0].squad.minimum_players > 0 && selected_match_players(mgr_[0].squad) < mgr_[0].squad.minimum_players) break;  // forfeit: no gate
-            human_plays = true;
-            save_.state.at(0x784) = uint8_t(hi);  // DS:A88D: the home team of the manager game (REAL-CODE)
-            if (hi != mgr_[0].team) break;  // an away game: no gate, no stadium flag
-            g_draw_scope = "gate";
-            home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true);
-            gate_booked = true;
-            break;
+            for (int m = 0; m < managers_; m++) {
+                ManagerState& mg = mgr_[size_t(m)];
+                if (hi != mg.team && ai != mg.team) continue;
+                if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;  // forfeit: no gate
+                any_plays = true;
+                save_.state.at(0x784) = uint8_t(hi);  // DS:A88D: the home team of the manager game (REAL-CODE)
+                bool gate_booked = false;
+                if (hi == mg.team) {
+                    g_draw_scope = "gate";
+                    home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true, m);
+                    gate_booked = true;
+                }
+                manager_day(gate_booked, m);
+            }
         }
     }
-    if (human_plays) manager_day(gate_booked);
+    if (any_plays) spin_match_stream();
     g_draw_scope = "league-day";
     MatchStats stats;
-    mgr_[0].squad.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };  // the injury check of the original runs in the match minute
-    mgr_[0].squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working); };  // every chance picks scorer and assist
-    mgr_[0].squad.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
+    // the injury check of the original runs in the match minute; every chance picks scorer and assist (ovl14_2349)
+    for (int m = 0; m < managers_; m++) {
+        HumanSquad& sq = mgr_[size_t(m)].squad;
+        sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
+        sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
+        sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
+    }
     std::vector<std::vector<std::pair<int, int>>> played;
-    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1.. (booked from step 7 on)
-    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, human_sides(&stats, other_stats), &brng_,
+    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1..
+    const HumanSide side = human_sides(&stats, other_stats);
+    const auto day_results = play_matchdays(league_days, save_.teams, schedule_, rng_, side, &brng_,
                                            match_observer_ ? &match_observer_ : nullptr, &played);
-    mgr_[0].squad.on_minute = nullptr;
-    mgr_[0].squad.on_chance = nullptr;
-    mgr_[0].squad.on_opponent_chance = nullptr;
+    for (int m = 0; m < managers_; m++) {
+        HumanSquad& sq = mgr_[size_t(m)].squad;
+        sq.on_minute = nullptr;
+        sq.on_chance = nullptr;
+        sq.on_opponent_chance = nullptr;
+    }
     injuries_in_minutes_ = true;
     for (size_t d = 0; d < league_days.size(); d++) {
         const int l = day_league[d];
@@ -583,25 +605,35 @@ void Game::play_league_day() {
             // 1238:114f: scorers of the computer clubs (player records), home first
             // a team of another league in an Oberliga pair (pair-table error) finds no player of this league: no draws
             auto in_league = [&](int t) { return t >= lg.first_team && t < lg.first_team + kHokLeagueSize; };
-            if (hi != mgr_[0].team && in_league(hi)) credit_club_scorers(save_.players, save_.state, hi, results[k].home, results[k].away, true, brng_);
-            if (ai != mgr_[0].team && in_league(ai)) credit_club_scorers(save_.players, save_.state, ai, results[k].away, results[k].home, true, brng_);
-            if (hi != mgr_[0].team && ai != mgr_[0].team) continue;
-            record_head_to_head(hi, ai, results[k].home, results[k].away);
-            const bool forfeited = book_forfeit(stats);
-            if (!forfeited) {
-                book_special_teams(stats, hi == mgr_[0].team ? 0 : 1);
-                book_match_condition(stats, hi == mgr_[0].team ? 0 : 1, 0);
+            // a manager club scores through the picks of its match (ovl14_2349), never through the computer credit
+            if (!manager_team(hi) && in_league(hi)) credit_club_scorers(save_.players, save_.state, hi, results[k].home, results[k].away, true, brng_);
+            if (!manager_team(ai) && in_league(ai)) credit_club_scorers(save_.players, save_.state, ai, results[k].away, results[k].home, true, brng_);
+            // the bookings of every manager of the pair, in manager index order (the order of sub_60D60; with the goals
+            // credited minute by minute these bookings draw nothing)
+            MatchStats* pair_stats = side.match_stats(hi, ai);
+            for (int m = 0; m < managers_; m++) {
+                const int own_team = mgr_[size_t(m)].team;
+                if (hi != own_team && ai != own_team) continue;
+                const int own_side = hi == own_team ? 0 : 1;
+                const MatchStats& st = pair_stats ? *pair_stats : stats;
+                record_head_to_head(hi, ai, results[k].home, results[k].away, m);
+                const bool forfeited = st.forfeit_side != 0;
+                if (forfeited && st.forfeit_side == own_side + 1) book_forfeit(st, m);
+                if (!forfeited) {
+                    book_special_teams(st, own_side, m);
+                    book_match_condition(st, own_side, m);
+                }
+                char line[160];
+                std::snprintf(line, sizeof line, "league matchday %d: %s - %s %d:%d%s", md, save_.teams[size_t(hi)].name.c_str(),
+                              save_.teams[size_t(ai)].name.c_str(), results[k].home, results[k].away,
+                              results[k].shootout ? " (shoot-out)" : "");
+                log_.push_back(line);
+                const int own = own_side == 0 ? results[k].home : results[k].away;
+                if (!forfeited) book_club_match(own, own_side == 0 ? results[k].away : results[k].home, 0, true, 0, false, m);
             }
-            char line[160];
-            std::snprintf(line, sizeof line, "league matchday %d: %s - %s %d:%d%s", md, save_.teams[size_t(hi)].name.c_str(),
-                          save_.teams[size_t(ai)].name.c_str(), results[k].home, results[k].away,
-                          results[k].shootout ? " (shoot-out)" : "");
-            log_.push_back(line);
-            const int own = hi == mgr_[0].team ? results[k].home : results[k].away;
-            if (!forfeited) book_club_match(own, hi == mgr_[0].team ? results[k].away : results[k].home, 0, true, 0, false);
         }
         // ovl13_3855 (after all games of the league day): the manager's series records follow his club's series
-        update_series_records(save_.state, mgr_[0].team);
+        for (int m = 0; m < managers_; m++) update_series_records(save_.state, mgr_[size_t(m)].team, m);
     }
 }
 
@@ -668,7 +700,8 @@ void Game::close_cup_final() {
     cup_winner_ = s.winner();
     save_.state.at(kStateCupWinner) = uint8_t(cup_winner_);
     save_.state.at(kStateCupRunnerUp) = uint8_t(s.winner() == s.higher ? s.lower : s.higher);
-    if (cup_winner_ == mgr_[0].team) save_.state.at(kManagerBlock + 0xE6) = uint8_t(cup_round_ + 1);
+    for (int m = 0; m < managers_; m++)
+        if (cup_winner_ == mgr_[size_t(m)].team) save_.state.at(manager_block(m) + 0xE6) = uint8_t(cup_round_ + 1);
     std::fill(save_.state.begin() + long(kCupWins), save_.state.begin() + long(kCupWins + 32), uint8_t(0));
     for (int game = 0; game < 3; game++)  // no 100 mark for an unplayed game
         if (save_.state.at(kCupScores + size_t(game) * 32) == 100)
@@ -718,57 +751,72 @@ void Game::play_cup_day() {
         active.push_back(pair);
     }
     MatchStats stats;
-    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1.. (booked from step 7 on)
+    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1..
     const HumanSide side = human_sides(&stats, other_stats);
     const bool live = save_.state.at(0xA526) != 0;  // Einstellungen: DEB cup display
-    bool gate_before = false;
+    std::array<bool, kMaxManagers> gate_before{};
     if (std::getenv("EM_DEBUG_CUP")) {
         std::fprintf(stderr, "cup day %d (game %d round %d): human %d draw:", cup_day_, cup_game_, cup_round_, mgr_[0].team);
         for (const HokPairing& p : draw) std::fprintf(stderr, " %d-%d", p.home, p.away);
         std::fprintf(stderr, "\n");
     }
+    auto in_pair = [](const HokPairing& p, int team) { return p.home == team || p.away == team; };
+    auto manager_in_draw = [&](int m) {
+        return std::any_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return in_pair(p, mgr_[size_t(m)].team); });
+    };
+    bool any_in_draw = false;
+    for (int m = 0; m < managers_; m++) any_in_draw |= manager_in_draw(m);
+    // per pair in draw order, the managers of a pair in index order, one spin after all (sub_60D60, see manager_day)
+    bool any_plays = false;
     for (const HokPairing& p : draw)
-        if (p.home == mgr_[0].team || p.away == mgr_[0].team) {
-            if (!(mgr_[0].squad.minimum_players > 0 && selected_match_players(mgr_[0].squad) < mgr_[0].squad.minimum_players)) {
-                if (live && p.home == mgr_[0].team) {  // the gate of a home game is booked before the matches, as in the league (REAL-CODE)
-                    g_draw_scope = "gate";
-                    home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away));
-                    gate_before = true;
-                }
-                manager_day(gate_before);
+        for (int m = 0; m < managers_; m++) {
+            ManagerState& mg = mgr_[size_t(m)];
+            if (!in_pair(p, mg.team)) continue;
+            if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;
+            if (live && p.home == mg.team) {  // the gate of a home game is booked before the matches, as in the league (REAL-CODE)
+                g_draw_scope = "gate";
+                home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
+                gate_before[size_t(m)] = true;
             }
-            break;
+            manager_day(gate_before[size_t(m)], m);
+            any_plays = true;
         }
+    if (any_plays) spin_match_stream();
     // a cup day on which every series is already decided plays no game: no live round, no spin (REAL-CODE period 49)
     empty_cup_day_ = draw.empty();
     // a cup day on which only other clubs play (the human series is decided) skips the evening refresh too (REAL-CODE period 81:
     // the weekly drift of the club record reaches the next day's month end, 146c refreshes only at the end of the step)
-    idle_cup_day_ = !draw.empty() && mgr_[0].team >= 0 && !std::getenv("EM_OLD_IDLECUP") &&
-                    std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == mgr_[0].team || p.away == mgr_[0].team; });
-    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) &&
-        std::none_of(draw.begin(), draw.end(), [&](const HokPairing& p) { return p.home == mgr_[0].team || p.away == mgr_[0].team; })) {
-        // without the human club the live round still starts with the match load of the human squad (manager +0xF0,
+    for (int m = 0; m < managers_; m++)
+        idle_cup_day_[size_t(m)] = !draw.empty() && mgr_[size_t(m)].team >= 0 && !std::getenv("EM_OLD_IDLECUP") && !manager_in_draw(m);
+    if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP")) && !any_in_draw) {
+        // without a human club the live round still starts with the match load of the human squads (manager +0xF0,
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
-        if (mgr_[0].team >= 0 && mgr_[0].team < kHokTeams)
-            save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mgr_[0].team)], mgr_[0].squad));
+        for (int m = 0; m < managers_; m++) {
+            const ManagerState& mg = mgr_[size_t(m)];
+            if (mg.team >= 0 && mg.team < kHokTeams)
+                save_.state.at(manager_block(m) + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mg.team)], mg.squad));
+        }
         if (!std::getenv("EM_OLD_CUP_MSG")) {  // the cup display passes the menu routine: messages sorted and counted (REAL-CODE period 20)
             native_sort_messages(save_.state);
             if (std::getenv("EM_OLD_MSGSTEP")) native_message_step(save_.state);  // the count-down of this day already ran in the day loop (period 44); counting here too doubled it (period 64)
         }
-        g_draw_scope = "randomize";
-        const int spin = brng_.range(100, 300);
-        for (int i = 0; i < spin; i++) rng_.range(0, 1);
+        spin_match_stream();
     }
-    if (live) {
-        mgr_[0].squad.on_minute = [this](int, int load, const HokTeam& team) { injury_minute(load, &team); };
-        mgr_[0].squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working); };
-        mgr_[0].squad.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
-    }
+    if (live)
+        for (int m = 0; m < managers_; m++) {
+            HumanSquad& sq = mgr_[size_t(m)].squad;
+            sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
+            sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working, m); };
+            sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
+        }
     const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr) : play_cup_round(save_.teams, draw, rng_, side);
     if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
-    mgr_[0].squad.on_minute = nullptr;
-    mgr_[0].squad.on_chance = nullptr;
-    mgr_[0].squad.on_opponent_chance = nullptr;
+    for (int m = 0; m < managers_; m++) {
+        HumanSquad& sq = mgr_[size_t(m)].squad;
+        sq.on_minute = nullptr;
+        sq.on_chance = nullptr;
+        sq.on_opponent_chance = nullptr;
+    }
     for (size_t match = 0; match < ties.size(); match++) {
         const Tie& t = ties[match];
         const size_t pair = active[match];
@@ -784,44 +832,62 @@ void Game::play_cup_day() {
             update_series(t.away, 1, t.result.away, t.result.home);
             update_records(t.home, t.away, t.result.home, t.result.away);  // DS:D0C2 = 8 counts too
         }
-        if (t.home != mgr_[0].team && t.away != mgr_[0].team) continue;
-        const bool forfeited = book_forfeit(stats);
-        if (!forfeited) {
-            book_match_condition(stats, t.home == mgr_[0].team ? 0 : 1, 0);
-            book_special_teams(stats, t.home == mgr_[0].team ? 0 : 1);
-            mgr_[0].played = true;
+        // every manager of the tie in index order; without the cup display the goals are credited here (draws), so with
+        // several managers the picks follow the ties, within a tie the manager index (assumption, docs/MEHRSPIELER_PLAN.md step 7)
+        MatchStats* tie_stats = side.match_stats(t.home, t.away);
+        for (int m = 0; m < managers_; m++) {
+            const int own_team = mgr_[size_t(m)].team;
+            if (t.home != own_team && t.away != own_team) continue;
+            const int own_side = t.home == own_team ? 0 : 1;
+            const MatchStats& st = tie_stats ? *tie_stats : stats;
+            const bool forfeited = st.forfeit_side != 0;
+            if (forfeited && st.forfeit_side == own_side + 1) book_forfeit(st, m);
+            if (!forfeited) {
+                book_match_condition(st, own_side, m);
+                book_special_teams(st, own_side, m);
+                mgr_[size_t(m)].played = true;
+            }
+            record_head_to_head(t.home, t.away, t.result.home, t.result.away, m);
+            if (!forfeited) book_club_match(own_side == 0 ? t.result.home : t.result.away,
+                            own_side == 0 ? t.result.away : t.result.home, 1, false,
+                            t.result.shootout_goals[own_side], !live, m);
+            char line[160];
+            std::snprintf(line, sizeof line, "DEB cup: %s - %s %d:%d%s", save_.teams[size_t(t.home)].name.c_str(),
+                          save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away,
+                          t.result.shootout ? " (shoot-out)" : "");
+            log_.push_back(line);
+            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "%s marker %d\n", line, t.result.decision_marker);
+            if (!forfeited && own_side == 0 && !gate_before[size_t(m)])
+                home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
+                          team_rank(t.away), false, m);
         }
-        record_head_to_head(t.home, t.away, t.result.home, t.result.away);
-        if (!forfeited) book_club_match(t.home == mgr_[0].team ? t.result.home : t.result.away,
-                        t.home == mgr_[0].team ? t.result.away : t.result.home, 1, false,
-                        t.result.shootout_goals[t.home == mgr_[0].team ? 0 : 1], !live);
-        char line[160];
-        std::snprintf(line, sizeof line, "DEB cup: %s - %s %d:%d%s", save_.teams[size_t(t.home)].name.c_str(),
-                      save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away,
-                      t.result.shootout ? " (shoot-out)" : "");
-        log_.push_back(line);
-        if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "%s marker %d\n", line, t.result.decision_marker);
-        if (!forfeited && t.home == mgr_[0].team && !gate_before)
-            home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
-                      team_rank(t.away));
     }
     if (live && (!draw.empty() || std::getenv("EM_OLD_EMPTYCUP"))) {  // (no game on the day: nothing of this, REAL-CODE period 49) after a cup display game (REAL-CODE): clubs outside the round are rested to 90; everybody in the round keeps the state of the minutes and of the overtime breaks (+19 at minute 61 and 66)
-        bool human_in = false;
-        for (const Tie& t : ties)
-            if (t.home == mgr_[0].team || t.away == mgr_[0].team) human_in = true;
         for (int team = 0; team < 64; team++) {
-            if (team == mgr_[0].team) continue;
+            if (manager_team(team)) continue;
             bool in_round = false;
             for (const Tie& t : ties) in_round |= t.home == team || t.away == team;
             if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);  // energy 90, no mode bits, shifts 0
         }
+        int pair_home = -1;  // DS:A88D: the home team of the first manager game of the round (manager index order)
+        for (int m = 0; m < managers_; m++) {
+        const int own_team = mgr_[size_t(m)].team;
+        auto& own_squad = save_.squad_of(m);
+        const size_t own_block = squad_block(m);
+        bool human_in = false;
+        for (const Tie& t : ties)
+            if (t.home == own_team || t.away == own_team) human_in = true;
         if (human_in) {
             // REAL-CODE: on the twice-weekly squad day the managed match recovers 2 x 19 after the game, less the overtime breaks (61, 66)
             int played = 0;
-            for (int line = 0; line < 4; line++) played += stats.line_minutes[0][line];
             int opponent = -1;
+            const MatchStats* own_stats = &stats;
             for (const Tie& t : ties)
-                if (t.home == mgr_[0].team || t.away == mgr_[0].team) opponent = t.home == mgr_[0].team ? t.away : t.home;
+                if (t.home == own_team || t.away == own_team) {
+                    opponent = t.home == own_team ? t.away : t.home;
+                    if (const MatchStats* s = side.match_stats(t.home, t.away)) own_stats = s;
+                }
+            for (int line = 0; line < 4; line++) played += own_stats->line_minutes[0][line];
             // the rest of the managed match comes on the twice-weekly squad day, and also when the opponent is team 0 (the
             // original treats index 0 as an empty marker, as with the running penalties; REAL-CODE period 63 against
             // periods 6 and 34, same day and game index)
@@ -829,36 +895,37 @@ void Game::play_cup_day() {
             const int recover = squad_day ? 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0) : 0;
             if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d day %d game %d round %d next-event %d prev-event %d weekday-mod7 %d year %d\n", played, recover, day_, cup_game_, cup_round_, int(calendar_.event(day_ + 1)), int(calendar_.event(day_ - 1)), day_ % 7, save_.year);
             if (recover > 0) {
-                for (int team : {opponent, mgr_[0].team})
+                for (int team : {opponent, own_team})
                     if (team >= 0)
                         for (auto& kind : save_.teams[size_t(team)].energy)
                             for (auto& e : kind) e = uint8_t(std::min(90, e + recover));
-                for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-                    uint8_t& f = save_.state.at(kSquad + slot * kSquadRecord + 0x1B);
+                for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                    uint8_t& f = save_.state.at(own_block + slot * kSquadRecord + 0x1B);
                     f = uint8_t(std::min(90, int(f) + recover));
-                    save_.squad[slot].fitness = f;
+                    own_squad[slot].fitness = f;
                 }
             }
+            if (pair_home < 0)
+                pair_home = draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == own_team || p.away == own_team) return p.home; return 0; }();
         }
         if (!human_in) {  // a round without the human club rests it like every club outside the round, squad fitness included (REAL-CODE period 7)
-            HokTeam& own = save_.teams[size_t(mgr_[0].team)];
+            HokTeam& own = save_.teams[size_t(own_team)];
             const int mode = own.flags & 0x07;  // the managed club keeps its line mode
             prepare_match_energy(own, nullptr);
             own.flags |= mode;
-            for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-                if (save_.state.at(kSquad + slot * kSquadRecord + 0x0F) == 0) continue;
-                save_.state.at(kSquad + slot * kSquadRecord + 0x1B) = 90;
-                save_.squad[slot].fitness = 90;
+            for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                if (save_.state.at(own_block + slot * kSquadRecord + 0x0F) == 0) continue;
+                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = 90;
+                own_squad[slot].fitness = 90;
             }
-            save_.state.at(0x784) = 0xFF;
             // the head-to-head booking still runs for the human club's (decided) pair of the round, with the pair turned for
             // the game that is not played and a 0:0 (REAL-CODE period 7)
             for (size_t pair = 0; pair < cup_series_.size() && pair < cup_draw_.size(); pair++)
-                if (cup_draw_[pair].home == mgr_[0].team || cup_draw_[pair].away == mgr_[0].team)
-                    record_head_to_head(cup_draw_[pair].home, cup_draw_[pair].away, 0, 0);
+                if (cup_draw_[pair].home == own_team || cup_draw_[pair].away == own_team)
+                    record_head_to_head(cup_draw_[pair].home, cup_draw_[pair].away, 0, 0, m);
         }
-        if (human_in)
-            save_.state.at(0x784) = uint8_t(draw.empty() ? 0 : [&] { for (const HokPairing& p : draw) if (p.home == mgr_[0].team || p.away == mgr_[0].team) return p.home; return 0; }());
+        }
+        save_.state.at(0x784) = pair_home >= 0 ? uint8_t(pair_home) : uint8_t(0xFF);
     }
     cup_game_++;
     bool open = false;
@@ -912,8 +979,9 @@ void Game::play_cup_day() {
         std::vector<int> winners;
         for (const Series& s : cup_series_) winners.push_back(s.winner());
         // ovl05_5646: remember the next round reached (6 denotes the cup winner).
-        if (std::find(winners.begin(), winners.end(), mgr_[0].team) != winners.end())
-            save_.state.at(kManagerBlock + 0xE6) = uint8_t(cup_round_ + 1);
+        for (int m = 0; m < managers_; m++)
+            if (std::find(winners.begin(), winners.end(), mgr_[size_t(m)].team) != winners.end())
+                save_.state.at(manager_block(m) + 0xE6) = uint8_t(cup_round_ + 1);
         if (winners.size() == 1) {
             if (!old_close) {  // game 3 of the final: sub_42756 closes in the same call (see close_cup_final)
                 cup_game_ = 2;
@@ -996,12 +1064,12 @@ void Game::heal_squad(bool weekly, int m) {
 // 146e:0c89 runs on season_day % 7 == 0 or (season_day + 3) % 7 == 0.
 // Phase A (transfer-list entries of manager 0) and the per-slot player mood loop (injury roll, wish to leave, mood decay,
 // contract wish) of the original daily manager routine, with the messages of these events (src/game/messages.cpp;
-// player byte +0x1E holds the entry index). Phase A walks the shared transfer list (block 4), not manager m's squad: with
-// several managers its place in the original's manager loop is still open (docs/MEHRSPIELER_PLAN.md step 7).
+// player byte +0x1E holds the entry index). Phase A walks the shared transfer list (block 4), not manager m's squad: the
+// original runs it only in the call of manager 0 (146e:0caf: DS:A70E != 0 jumps past it, docs/MEHRSPIELER_PLAN.md step 7).
 void Game::squad_injuries(bool weekly, bool no_match_today, int m) {
     uint8_t* st = save_.state.data();
     // phase A: the entries of the transfer list: exhaustion decay, ownership toggle, interest expiry
-    for (int slot = 0; slot < kTransferListSlots; slot++) {
+    for (int slot = 0; m == 0 && slot < kTransferListSlots; slot++) {
         uint8_t* r = st + squad_block(4) + size_t(slot) * kSquadRecord;
         if (!r[0x0F]) break;  // sub_24D56(4, 0): the occupied prefix
         if (r[0x13] > 0x38) r[0x13] = uint8_t(r[0x13] - 10);
@@ -1119,12 +1187,12 @@ void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
         injure(slot, 1, m);
         if (slot < mgr_[m].hurt_in_match.size()) mgr_[m].hurt_in_match[slot] = true;
         // the original opens the line-up screen; leaving it runs sub_55DD2: the active line quotas DS:CC73 follow the
-        // raw ones DS:CC43 of manager 0 (normalised to a sum of 8; REAL-CODE period 28)
+        // raw ones DS:CC43 of the manager (normalised to a sum of 8; REAL-CODE period 28; 8 bytes per manager as in tactics.cpp)
         for (size_t kind = 0; kind < 2; kind++) {
             std::array<uint8_t, 4> raw{};
-            for (size_t i = 0; i < 4; i++) raw[i] = save_.state.at(0x028B + kind * 4 + i);
+            for (size_t i = 0; i < 4; i++) raw[i] = save_.state.at(0x028B + size_t(m) * 8 + kind * 4 + i);
             const auto active = normalize_tactics_quotas(raw);
-            for (size_t i = 0; i < 4; i++) save_.state.at(0x025B + kind * 4 + i) = active[i];
+            for (size_t i = 0; i < 4; i++) save_.state.at(0x025B + size_t(m) * 8 + kind * 4 + i) = active[i];
         }
         break;
     }
@@ -1637,7 +1705,7 @@ void Game::train_squad(int m) {
 // ovl14_2e0f restores the saved automatic-lineup mode before entering the next
 // manager menu. Recompute after loading as well: a HOK can contain an older lineup.
 void Game::prepare_human_lineup(bool restore_saved_mode, int m) {
-    if(restore_saved_mode)save_.state.at(0x078A) = save_.state.at(0x078B);
+    if(restore_saved_mode)save_.state.at(0x078A + 2 * size_t(m)) = save_.state.at(0x078B + 2 * size_t(m));  // DS:0375/0376 + 2 * manager
     auto_lineup(save_, m);
     if (!skip_refresh_once_) refresh_human_team(m);
     skip_refresh_once_ = false;
@@ -1786,9 +1854,9 @@ bool Game::finish_advert_renewal(const AdvertRenewalDraft& draft,bool accept) {
     return stays;
 }
 
-void Game::expire_advert_options() {
-    // ovl10_1cd2: options left unresolved when leaving the day's menu expire.
-    for (AdvertContract& contract : mgr_[0].budget.adverts)
+void Game::expire_advert_options(int m) {
+    // ovl10_1cd2: options left unresolved when leaving the day's menu expire (the menu runs once per manager, ovr038:3022).
+    for (AdvertContract& contract : mgr_[size_t(m)].budget.adverts)
         if (contract.months_left == 0 && contract.flags != 0) {
             contract.amount = 0;
             contract.flags = 0;
@@ -1849,7 +1917,7 @@ void Game::play_euro_day() {
     auto game = [&](GroupTable& table, int home, int away, int group, int pairing) {
         MatchStats stats;
         MatchResult res;
-        if (minute_path) {  // every manager's club plays with his squad (the statistics are booked for manager 0 only so far)
+        if (minute_path) {  // every manager's club plays with his squad (one statistics object per game, booked per manager below)
             res = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0,
                                manager_squad(home), manager_squad(away), &stats);
         } else {
@@ -1871,22 +1939,29 @@ void Game::play_euro_day() {
                          size_t(r % 6) * 6 + size_t(pairing) * 2;
         save_.state.at(o) = uint8_t(res.home);
         save_.state.at(o + 1) = uint8_t(res.away);
-        if (home != mgr_[0].team && away != mgr_[0].team) return;
-        const bool forfeited = book_forfeit(stats);
-        if (!forfeited) {
-            book_match_condition(stats, home == mgr_[0].team ? 0 : 1, 0);
-            book_special_teams(stats, home == mgr_[0].team ? 0 : 1);
-            book_club_match(home == mgr_[0].team ? res.home : res.away,
-                            home == mgr_[0].team ? res.away : res.home, 2, false);
-            mgr_[0].played = true;
+        // every manager of the game in index order; the goals are credited here (draws): with several managers the picks
+        // follow the games of the day, within a game the manager index (assumption, docs/MEHRSPIELER_PLAN.md step 7)
+        for (int m = 0; m < managers_; m++) {
+            const int own_team = mgr_[size_t(m)].team;
+            if (home != own_team && away != own_team) continue;
+            const int own_side = home == own_team ? 0 : 1;
+            const bool forfeited = stats.forfeit_side != 0;
+            if (forfeited && stats.forfeit_side == own_side + 1) book_forfeit(stats, m);
+            if (!forfeited) {
+                book_match_condition(stats, own_side, m);
+                book_special_teams(stats, own_side, m);
+                book_club_match(own_side == 0 ? res.home : res.away,
+                                own_side == 0 ? res.away : res.home, 2, false, 0, true, m);
+                mgr_[size_t(m)].played = true;
+            }
+            record_head_to_head(home, away, res.home, res.away, m);
+            char line[160];
+            std::snprintf(line, sizeof line, "European cup: %s - %s %d:%d", save_.teams[size_t(home)].name.c_str(),
+                          save_.teams[size_t(away)].name.c_str(), res.home, res.away);
+            log_.push_back(line);
+            if (!forfeited && own_side == 0)  // DS:D0C2 = 3 in the groups, 5 in the final round
+                home_game(away, r < 6 ? 2 : 3, team_class(finance_, home), team_class(finance_, away), team_rank(home), 5, false, m);
         }
-        record_head_to_head(home, away, res.home, res.away);
-        char line[160];
-        std::snprintf(line, sizeof line, "European cup: %s - %s %d:%d", save_.teams[size_t(home)].name.c_str(),
-                      save_.teams[size_t(away)].name.c_str(), res.home, res.away);
-        log_.push_back(line);
-        if (!forfeited && home == mgr_[0].team)  // DS:D0C2 = 3 in the groups, 5 in the final round
-            home_game(away, r < 6 ? 2 : 3, team_class(finance_, home), team_class(finance_, away), team_rank(home), 5);
     };
     if (r < 6) {
         for (size_t g = 0; g < 2; g++)
@@ -1950,17 +2025,22 @@ void Game::play_euro_day() {
         // human squad's fitness 90 and match load, DS:A88D = FF (REAL-CODE period 13)
         for (int team = 0; team < 64; team++) {
             HokTeam& t = save_.teams[size_t(team)];
-            const int mode = team == mgr_[0].team ? (t.flags & 0x07) : 0;
+            const int mode = manager_team(team) ? (t.flags & 0x07) : 0;
             prepare_match_energy(t, nullptr);
             t.flags |= mode;
         }
-        for (size_t slot = 0; slot < save_.squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-            if (save_.state.at(kSquad + slot * kSquadRecord + 0x0F) == 0) continue;
-            save_.state.at(kSquad + slot * kSquadRecord + 0x1B) = 90;
-            save_.squad[slot].fitness = 90;
+        for (int m = 0; m < managers_; m++) {
+            auto& own_squad = save_.squad_of(m);
+            const size_t own_block = squad_block(m);
+            for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                if (save_.state.at(own_block + slot * kSquadRecord + 0x0F) == 0) continue;
+                save_.state.at(own_block + slot * kSquadRecord + 0x1B) = 90;
+                own_squad[slot].fitness = 90;
+            }
+            const ManagerState& mg = mgr_[size_t(m)];
+            if (mg.team >= 0 && mg.team < kHokTeams)
+                save_.state.at(manager_block(m) + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mg.team)], mg.squad));
         }
-        if (mgr_[0].team >= 0 && mgr_[0].team < kHokTeams)
-            save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mgr_[0].team)], mgr_[0].squad));
         save_.state.at(0x784) = 0xFF;
     }
     save_.state.at(kEuroRound) = uint8_t(euro_round_);
@@ -1990,7 +2070,7 @@ void Game::play_playoff_day() {
     const int day = playoff_day_++;
     const int stage = day / 5;  // five days per best-of-five round
     MatchStats stats;
-    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1.. (booked from step 7 on)
+    std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1..
     const HumanSide side = human_sides(&stats, other_stats);
     const League& first = leagues_[0];
     auto position = [&](int team) { return first.rows[size_t(team - first.first_team)].position; };
@@ -2117,22 +2197,31 @@ void Game::play_playoff_day() {
             s.wins_higher++;
         else
             s.wins_lower++;
-        if (home != mgr_[0].team && away != mgr_[0].team) continue;
-        const bool forfeited = book_forfeit(stats);
-        if (!forfeited) {
-            book_match_condition(stats, home == mgr_[0].team ? 0 : 1, 0);
-            book_special_teams(stats, home == mgr_[0].team ? 0 : 1);
-            book_club_match(home == mgr_[0].team ? r.home : r.away,
-                            home == mgr_[0].team ? r.away : r.home, 0, false,
-                            r.shootout_goals[home == mgr_[0].team ? 0 : 1]);
-            mgr_[0].played = true;
+        // every manager of the game in index order, the games in series order (the goals are credited here: assumption,
+        // docs/MEHRSPIELER_PLAN.md step 7)
+        MatchStats* game_stats = side.match_stats(home, away);
+        for (int m = 0; m < managers_; m++) {
+            const int own_team = mgr_[size_t(m)].team;
+            if (home != own_team && away != own_team) continue;
+            const int own_side = home == own_team ? 0 : 1;
+            const MatchStats& st = game_stats ? *game_stats : stats;
+            const bool forfeited = st.forfeit_side != 0;
+            if (forfeited && st.forfeit_side == own_side + 1) book_forfeit(st, m);
+            if (!forfeited) {
+                book_match_condition(st, own_side, m);
+                book_special_teams(st, own_side, m);
+                book_club_match(own_side == 0 ? r.home : r.away,
+                                own_side == 0 ? r.away : r.home, 0, false,
+                                r.shootout_goals[own_side], true, m);
+                mgr_[size_t(m)].played = true;
+            }
+            record_head_to_head(home, away, r.home, r.away, m);
+            char line[160];
+            std::snprintf(line, sizeof line, "play-offs: %s - %s %d:%d (series %d:%d)", save_.teams[size_t(home)].name.c_str(),
+                          save_.teams[size_t(away)].name.c_str(), r.home, r.away, s.wins_higher, s.wins_lower);
+            log_.push_back(line);
+            if (!forfeited && own_side == 0) home_game(away, 1, 0, 0, position(home), position(away), false, m);
         }
-        record_head_to_head(home, away, r.home, r.away);
-        char line[160];
-        std::snprintf(line, sizeof line, "play-offs: %s - %s %d:%d (series %d:%d)", save_.teams[size_t(home)].name.c_str(),
-                      save_.teams[size_t(away)].name.c_str(), r.home, r.away, s.wins_higher, s.wins_lower);
-        log_.push_back(line);
-        if (!forfeited && home == mgr_[0].team) home_game(away, 1, 0, 0, position(home), position(away));
     }
     // relegation rounds on the first and third day of each play-off round (round index =
     // DS:07B0 * 2 + [DS:CCA3 = 2]): a double round robin of four, letter table DS:0474
@@ -2151,35 +2240,43 @@ void Game::play_playoff_day() {
                 const Pairing& p = pairs[pair];
                 const int home = t.teams[size_t(p.home)], away = t.teams[size_t(p.away)];
                 MatchResult r;
+                MatchStats* game_stats = &stats;
                 if (!manager_team(home) && !manager_team(away)) {  // without a human club a quick result (REAL-CODE period 28)
                     HokTeam h, a;
                     quick_setup(home, away, h, a);  // same quick path as the play-offs
                     r = quick_competition_match(h, a, true, true, rng_, 0, false, true);
                 } else {
-                    // a game of manager 0 books into `stats`; one of another manager only into its own (step 7)
+                    // a game of manager 0 books into `stats`, one of another manager into his own
                     const int owner = manager_of_team(home) == 0 || manager_of_team(away) == 0 ? 0 : std::max(manager_of_team(home), manager_of_team(away));
+                    game_stats = owner == 0 ? &stats : &other_stats[size_t(owner)];
                     r = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0, manager_squad(home),
-                                     manager_squad(away), owner == 0 ? &stats : &other_stats[size_t(owner)]);
+                                     manager_squad(away), game_stats);
                 }
                 t.book(home, away, r);
                 const size_t o = kGroupResults + 0x48 + g * 0x24 + size_t(round) * 6 + pair * 2;
                 save_.state.at(o) = uint8_t(r.home);
                 save_.state.at(o + 1) = uint8_t(r.away);
-                if (home != mgr_[0].team && away != mgr_[0].team) continue;
-                const bool forfeited = book_forfeit(stats);
-                if (!forfeited) {
-                    book_match_condition(stats, home == mgr_[0].team ? 0 : 1, 0);
-                    book_special_teams(stats, home == mgr_[0].team ? 0 : 1);
-                    book_club_match(home == mgr_[0].team ? r.home : r.away,
-                                    home == mgr_[0].team ? r.away : r.home, 0, false);
-                    mgr_[0].played = true;
+                for (int m = 0; m < managers_; m++) {  // every manager of the game in index order (see above)
+                    const int own_team = mgr_[size_t(m)].team;
+                    if (home != own_team && away != own_team) continue;
+                    const int own_side = home == own_team ? 0 : 1;
+                    const MatchStats& st = *game_stats;
+                    const bool forfeited = st.forfeit_side != 0;
+                    if (forfeited && st.forfeit_side == own_side + 1) book_forfeit(st, m);
+                    if (!forfeited) {
+                        book_match_condition(st, own_side, m);
+                        book_special_teams(st, own_side, m);
+                        book_club_match(own_side == 0 ? r.home : r.away,
+                                        own_side == 0 ? r.away : r.home, 0, false, 0, true, m);
+                        mgr_[size_t(m)].played = true;
+                    }
+                    record_head_to_head(home, away, r.home, r.away, m);
+                    char line[160];
+                    std::snprintf(line, sizeof line, "relegation round %d: %s - %s %d:%d", round + 1,
+                                  save_.teams[size_t(home)].name.c_str(), save_.teams[size_t(away)].name.c_str(), r.home, r.away);
+                    log_.push_back(line);
+                    if (!forfeited && own_side == 0) home_game(away, 1, team_class(finance_, home), team_class(finance_, away), 5, 5, false, m);
                 }
-                record_head_to_head(home, away, r.home, r.away);
-                char line[160];
-                std::snprintf(line, sizeof line, "relegation round %d: %s - %s %d:%d", round + 1,
-                              save_.teams[size_t(home)].name.c_str(), save_.teams[size_t(away)].name.c_str(), r.home, r.away);
-                log_.push_back(line);
-                if (!forfeited && home == mgr_[0].team) home_game(away, 1, team_class(finance_, home), team_class(finance_, away), 5, 5);
             }
             t.finish_round();
             if (round == 5) {
@@ -2387,9 +2484,11 @@ void Game::refresh_national_team() {
 // whose club is the scorer. Unused manager blocks carry club 0, so a goal of team record 0 lands in manager 1's empty
 // squad: without players no pick is drawn, the slot of the last scorer pick (byte_33277) gets the goal counters and the
 // player record of that slot (index 0 = record 0) its +0x1B league goals (REAL-CODE period 7).
+// With N managers the first unused block is N (blocks N..3 carry club 0); a manager club 0 is found first and picks for
+// itself (its own on_chance). With four managers no manager block is unused: the pool party 4 is not treated (assumption).
 void Game::credit_opponent_goal(int competition, bool goal, const HokTeam& scorer) {
-    if (!goal || competition < 0 || competition > 2 || scorer.name != save_.teams[0].name || mgr_[0].team == 0) return;
-    const size_t block = kSquad + 0x618;  // manager 1
+    if (!goal || competition < 0 || competition > 2 || scorer.name != save_.teams[0].name || manager_team(0) || managers_ >= kMaxManagers) return;
+    const size_t block = squad_block(managers_);  // the first unused manager block
     for (int s = 0; s < kHokSquadSlots; s++)
         if (save_.state.at(block + size_t(s) * kSquadRecord + 0x0F) != 0) return;  // a used block would draw a real pick
     const size_t rec = block + size_t(last_scorer_slot_) * kSquadRecord;
@@ -3668,9 +3767,8 @@ Bytes Game::save_bytes() const {
     }
     h.cup_draw = cup_draw_;
     h.cup_round = cup_round_;
-    // Until the day loop runs per manager (docs/MEHRSPIELER_PLAN.md step 7) the squads of managers 1..3 change only in
-    // `state` (team refresh, lineup, youth): do not write the decoded copies of the load back over them.
-    for (auto& other : h.other_squads) other.clear();
+    // Since step 7 the day loop keeps the decoded squads of managers 1..3 like manager 0's (lineup, training, games, goals,
+    // injuries): store_hok writes them back like `squad` (an unused block was not decoded and keeps its bytes).
     store_hok(h);
     // manager block of manager 0 (raw money)
     Bytes& s = h.state;
@@ -3765,14 +3863,91 @@ Bytes Game::native_save_bytes() {
     return result;
 }
 
+// ovl08_0376 (ovr032:0376), the stadium week of manager m, with its wear message ovr032:0000
+void Game::manager_stadium_week(int m) {
+    g_draw_scope = "stadium-week";
+    const GameDate wear_date = date_of_season_day(day_ + 1, save_.year);
+    stadium_week(finance_, mgr_[size_t(m)].budget, save_.state, m, brng_, [&](const std::string& a, const std::string& b) {
+        native_add_message(save_.state, brng_, {wear_date.day, wear_date.month, wear_date.year, day_ + 1}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, m, true);
+    });
+}
+
+// One iteration of the finance loop ovr038:3332..335F (Amiga 17743): the daily finance ovl08_1d61 (sub_4C221) and then the
+// image ovl08_2893 of manager m, both with DS:A70E = DS:A70D = m; the day loop runs it for 0..N-1 in index order.
+// sub_4C221 draws its own refusal reset and calls the share market (sub_24EFF = ovl39_03ca at ovr032:1DAA) without a manager
+// check: with N managers the market moves N times a day (from the disassembly; no recording with N > 1 yet). The WM branch
+// (ovr038:3770..3803) books the stadium week (day % 7 == 0) and the healing 146e:1732 inside the same manager iteration.
+void Game::manager_finance_day(int m, const GameDate& finance_date, int finance_month_days, bool world_phase) {
+    ManagerState& mg = mgr_[size_t(m)];
+    refresh_budget_roster(m);
+    const long before = mg.budget.balance;
+g_draw_scope = "refusal-reset";
+    stadium_daily_refusal_reset(stadium_refusals_,m,brng_);
+    if (finance_date.day == finance_month_days) clear_insurance_locks(m);
+    // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
+    // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
+g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d md %d,%d,%d\n", day_, matchday_[0], matchday_[1], matchday_[2]);
+    market_day(save_.state, brng_);
+    for (int c = 0; c < kHokShares; c++) {
+        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    }
+    if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days) {  // after the share market (whole-program test)
+        update_sponsors(m);
+        // ovr032:1F0B..1FAE: a coin flip; on heads the per-manager value DS:020D + 4 * manager (state 0x18) is set to 60000 +
+        // 10000 * rand(0,10) stored raw (x3); it is the talent scout price (REAL-CODE after the emulator cache fix: 0x6DDD0 = 3 * (60000 + 10000 * 9))
+        if (brng_.range(0, 1) != 0) {
+            const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
+            for (int n = 0; n < 4; n++) save_.state.at(0x18 + 4 * size_t(m) + size_t(n)) = uint8_t(price >> (8 * n));
+        }
+    }
+g_draw_scope = "finance";
+    // ovr032:16B7 reads skill1 + skill2 of the club record itself: a weekly drift of the record on this day counts before the
+    // next 146c refresh (REAL-CODE period 49: drift to 230 on the training day, booked at the month end, then refreshed to 228)
+    if (finance_date.day == finance_month_days && mg.team >= 0 && !std::getenv("EM_OLD_INCOMESTRENGTH")) {
+        const HokTeam& own = save_.teams[size_t(mg.team)];
+        mg.budget.team_strength = own.skill1[0] + own.skill1[1] + own.skill2[0] + own.skill2[1];
+        if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "month end day %d (%d.%d.): strength %d at %zu\n", day_, finance_date.day, finance_date.month, mg.budget.team_strength, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
+    }
+    finance_day(finance_, mg.budget, finance_date.day, finance_month_days);
+    if (finance_date.day == finance_month_days) {
+        char line[128];
+        std::snprintf(line, sizeof line, "month end %02d.%02d.: balance %ld DM (%+ld DM)", finance_date.day, finance_date.month,
+                      mg.budget.balance / 3, (mg.budget.balance - before) / 3);
+        log_.push_back(line);
+    }
+g_draw_scope = "image";
+    mg.image = current_club_image(m);  // ovl08_2893, after each daily finance booking
+    if (world_phase) {
+        if ((day_ + 1) % 7 == 0) manager_stadium_week(m);
+        heal_squad((day_ + 1) % 7 == 0, m);
+    }
+}
+
+// The menu pass of the original (ovr038:2FAF..3064, Amiga 17631..17658): every manager 0..N-1 in index order draws the
+// transfer-list roll rand(0, N + 2) (a zero refreshes the list, ovl11_34ef) and, when the coming day has a menu (league
+// games or a game of any manager, var_1A), opens his menu ovl10_1cd2 with the daily valuation factor rand(85, 115): roll(0),
+// factor(0), roll(1), factor(1), ... The factor DS:E1A4 is one value: after the pass it holds that of manager N-1.
+// Assumption (docs/MEHRSPIELER_PLAN.md step 7): OpenEM draws the whole pass at the end of the step, before the hot-seat
+// menus; random draws of a menu action of manager m < N-1 therefore come after the whole pass here, in the original
+// between factor(m) and roll(m + 1).
+void Game::menu_pass(bool menu) {
+    for (int m = 0; m < managers_; m++) {
+        if (brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) (asm 170773)
+        if (menu) daily_luck_ = brng_.range(85, 115);
+    }
+}
+
 void Game::advance_day() {
     g_goal_scenes = save_.state.at(0xA525);  // DS:0226 goal scenes (docs/logic/TORSZENEN_HOOK.md)
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     // leaving the club calendar's last day (13.04., "Saisonende") clears the season flags of a manager without WM appointment
     // (DOS sub_6153F asm 171379, Amiga 17802; REAL-CODE period 57: on 13.04. the licence mark 0x04 of the last season end is still set)
-    if (!std::getenv("EM_OLD_WMBEGIN") && calendar_.event(day_) == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship && national_coach_ < 0)
-        save_.state.at(kManagerBlock + 0xF3) = 0;
+    // (the loop clears +0xF3 of every manager 0..N-1 and sets 0x40 again for the appointed one, DOS LAB_6af8_3509)
+    if (!std::getenv("EM_OLD_WMBEGIN") && calendar_.event(day_) == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
+        for (int m = 0; m < managers_; m++)
+            if (national_coach_ != m) save_.state.at(manager_block(m) + 0xF3) = 0;
     const bool step_start = message_step_pending_;  // this day leaves the menu (a loaded game stands in the menu)
     // The day loop sub_6153F (ovr038:2E5E..3067) passes the manager block and the count-down before every day with a calendar
     // event (byte not 0, 9 or 0xFF), also a cup / EuroCup / playoff day without a manager inside a play step; the WM branch
@@ -3792,7 +3967,7 @@ void Game::advance_day() {
         message_step_pending_ = false;
     }
     interactive_played_ = false;
-    expire_advert_options();
+    for (int m = 0; m < managers_; m++) expire_advert_options(m);
     // The closing section end of the calendar (29.04.) is not played as a day: after the evening finances of the WM final
     // the original goes straight into the season change, then 132 summer days (REAL-CODE period 30: 15 finance days after
     // the first WM day, then the season change).
@@ -3809,9 +3984,8 @@ void Game::advance_day() {
         if (!std::getenv("EM_OLD_SEASONEND")) {
             // The original stops in the menu "Vor dem ersten Spieltag" (September 10) before the first matchday, with the
             // usual end of a play step: transfer-list roll and the daily factor (REAL-CODE period 30). Day 1 is the next step.
-            prepare_human_lineup();
-            if (brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) (asm 170773)
-            daily_luck_ = brng_.range(85, 115);
+            for (int m = 0; m < managers_; m++) prepare_human_lineup(true, m);
+            menu_pass(true);
             if (national_coach_ < 0) save_.state.at(0x0788) = 0;
             write_table_copies(save_.state, table_rows());
             table_copies_frozen_ = league_since_refresh_ = false;
@@ -3820,29 +3994,33 @@ void Game::advance_day() {
         }
     }
     // 162c:146c runs in the event block of the day loop (ovr038:2F1A): days without a calendar event skip it (REAL-CODE period 49)
-    if (std::getenv("EM_OLD_DAYREFRESH") || (calendar_.event(day_ + 1) != 0 && calendar_.event(day_ + 1) != 0xFF)) refresh_human_team();  // 162c:146c (not in the WM branch without a national coach, see there)
+    // every manager 0..N-1 in index order (the loop of ovr038:2EDD..2F2A; 146c draws nothing)
+    if (std::getenv("EM_OLD_DAYREFRESH") || (calendar_.event(day_ + 1) != 0 && calendar_.event(day_ + 1) != 0xFF))
+        for (int m = 0; m < managers_; m++) refresh_human_team(m);  // 162c:146c (not in the WM branch without a national coach, see there)
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
     // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
     // at the start of a seven-day step; periods 13 and 23: a later match day of the same step does not copy again, or the
     // saved mode would be lost). A loaded save keeps the 0 of DS:0375, so its first step saves 0.
-    if (step_start) {
-        save_.state.at(0x078B) = save_.state.at(0x078A);
-        save_.state.at(0x078A) = 0;
-    }
+    if (step_start)
+        for (int m = 0; m < managers_; m++) {  // DS:0375/0376 + 2 * manager (ovr038:3111..3171)
+            save_.state.at(0x078B + 2 * size_t(m)) = save_.state.at(0x078A + 2 * size_t(m));
+            save_.state.at(0x078A + 2 * size_t(m)) = 0;
+        }
     for (ManagerState& mg : mgr_) mg.hurt_in_match.fill(false);  // only a match of this day can count its injured starters
     day_++;
     const uint8_t event = calendar_.event(day_);
-    mgr_[0].played = false;
+    for (ManagerState& mg : mgr_) mg.played = false;
     if (calendar_.league_day(day_)) {
-        //6AF8:3178..3198 updates every club manager before the league games.
-        //Game currently simulates manager0; all clubs use first-league DS07A9.
+        //6AF8:3178..3198 updates every club manager before the league games (sub_24AAF for 0..N-1 in index order).
+        //All clubs use first-league DS07A9.
 g_draw_scope = "youth";
-        youth_fixture_day(save_.state,finance_,std::min(44, matchday_[0]),0,[&](int lo,int hi){return brng_.range(lo,hi);});
+        for (int m = 0; m < managers_; m++)
+            youth_fixture_day(save_.state,finance_,std::min(44, matchday_[0]),m,[&](int lo,int hi){return brng_.range(lo,hi);});
 g_draw_scope = "league-day";
         play_league_day();
         league_since_refresh_ = true;
-        mgr_[0].played = mgr_[0].team >= 0 && mgr_[0].team < 3 * kHokLeagueSize;
+        for (int m = 0; m < managers_; m++) mgr_[size_t(m)].played = mgr_[size_t(m)].team >= 0 && mgr_[size_t(m)].team < 3 * kHokLeagueSize;
     }
 g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d at %zu\n", day_, int(event), int(calendar_.league_day(day_)), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     if (event == kEventCup) play_cup_day();
@@ -3860,7 +4038,10 @@ g_draw_scope = "match-injuries";
     for (HokTeam& team : save_.teams)
         for (int kind = 0; kind < 2; kind++)
             for (int line = 0; line < 4; line++) team.energy[kind][line] = 90;
-    if (mgr_[0].played && !injuries_in_minutes_) match_injuries();
+    // managers in index order (assumption: the per-manager checks after a match without minute loop follow the manager
+    // loop of the day, docs/MEHRSPIELER_PLAN.md step 7)
+    for (int m = 0; m < managers_; m++)
+        if (mgr_[size_t(m)].played && !injuries_in_minutes_) match_injuries(m);
     injuries_in_minutes_ = false;
     const bool world_phase = wm_round_ > 0 || event == kEventWorldChampionship;
     // The WM branch selects manager 5 on a match date; 146e:0c89's
@@ -3869,6 +4050,8 @@ g_draw_scope = "match-injuries";
     // Without a human national coach manager 5 has no club (0xFD), so the guard excludes nothing: the WM branch
     // (ovr038:37CC) runs sub_15369 on match dates too, without the team drift, and the calendar byte of the day is the
     // no-match flag (REAL-CODE period 30).
+    // The branch calls 146e:0c89 once with DS:A70E = 5 (not in a manager loop); which squads it reaches with N > 1 is open,
+    // the call stays with manager 0 (docs/MEHRSPIELER_PLAN.md step 7).
     if (world_phase && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
         if (national_coach_ >= 0) weekly_team_drift();
         squad_injuries(false, event == 0);  // today's healing was already prepared
@@ -3880,88 +4063,56 @@ g_draw_scope = "match-injuries";
     // played day again duplicates its interest on import and exports month-start contracts late.
     const GameDate finance_date = date_of_season_day(day_ + 1, save_.year);
     const int finance_month_days = kMonthDays[size_t(finance_date.month - 1)];
-    refresh_budget_roster();
-    const long before = mgr_[0].budget.balance;
-g_draw_scope = "refusal-reset";
-    stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
-    if (finance_date.day == finance_month_days) clear_insurance_locks();
     // the routines of the new month (ovr038:2EAB / 36E3 / 4645) copy the month counter DS:5A1C to DS:A8A0 (state 0xB965, REAL-CODE period 7)
     if (finance_date.day == finance_month_days) save_.state.at(0xB965) = uint8_t(finance_date.month % 12);
-    // ovl08_1d61 (daily finance of the manager): its 11 draws (0,10) are the stadium refusal reset above, then the share
-    // market (ovl39_03ca; REAL-CODE test realcode_market); the finance view mirrors the state.
-g_draw_scope = "market"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: market at day %d md %d,%d,%d\n", day_, matchday_[0], matchday_[1], matchday_[2]);
-    market_day(save_.state, brng_);
-    for (int c = 0; c < kHokShares; c++) {
-        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
-        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
-    }
-    if (finance_date.day == finance_month_days / 2 || finance_date.day == finance_month_days) {  // after the share market (whole-program test)
-        update_sponsors();
-        // ovr032:1F0B..1FAE: a coin flip; on heads the per-manager value DS:020D (state 0x18) is set to 60000 + 10000 * rand(0,10)
-        // stored raw (x3); it is the talent scout price (REAL-CODE after the emulator cache fix: 0x6DDD0 = 3 * (60000 + 10000 * 9))
-        if (brng_.range(0, 1) != 0) {
-            const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
-            for (int n = 0; n < 4; n++) save_.state.at(0x18 + size_t(n)) = uint8_t(price >> (8 * n));
-        }
-    }
-g_draw_scope = "finance";
-    // ovr032:16B7 reads skill1 + skill2 of the club record itself: a weekly drift of the record on this day counts before the
-    // next 146c refresh (REAL-CODE period 49: drift to 230 on the training day, booked at the month end, then refreshed to 228)
-    if (finance_date.day == finance_month_days && mgr_[0].team >= 0 && !std::getenv("EM_OLD_INCOMESTRENGTH")) {
-        const HokTeam& own = save_.teams[size_t(mgr_[0].team)];
-        mgr_[0].budget.team_strength = own.skill1[0] + own.skill1[1] + own.skill2[0] + own.skill2[1];
-        if (std::getenv("EM_DEBUG_STRENGTH")) std::fprintf(stderr, "month end day %d (%d.%d.): strength %d at %zu\n", day_, finance_date.day, finance_date.month, mgr_[0].budget.team_strength, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
-    }
-    finance_day(finance_, mgr_[0].budget, finance_date.day, finance_month_days);
-    if (finance_date.day == finance_month_days) {
-        char line[128];
-        std::snprintf(line, sizeof line, "month end %02d.%02d.: balance %ld DM (%+ld DM)", finance_date.day, finance_date.month,
-                      mgr_[0].budget.balance / 3, (mgr_[0].budget.balance - before) / 3);
-        log_.push_back(line);
-    }
-g_draw_scope = "image";
-    mgr_[0].image = current_club_image();  // ovl08_2893, after each daily finance booking
+    // ovr038:3332..335F (Amiga 17743): for every manager 0..N-1 in index order the daily finance and the image
+    for (int m = 0; m < managers_; m++) manager_finance_day(m, finance_date, finance_month_days, world_phase);
     // Club branch 6af8:3374..3443: advance date, finance, then the
     // twice-weekly training and finally stadium. The WM preparation branch
     // instead advances the stadium and healing without normal club training.
+    // The talent search (once, it loops over the managers itself) and the team drift (once) come first, then per manager
+    // 0..N-1 146e:0c89 (injuries, offers, training) and on day % 7 == 0 the stadium week ovl08_0376 in the same iteration
+    // (ovr038:33FA..3443, Amiga 17752..17764).
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
         talent_search_week();  // ovr038:33FA, before 162c:1c5b and 146e:0c89
         weekly_team_drift();
         if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: weekly at day %d event(today) %d event(next) %d league_day(next) %d\n", day_, int(calendar_.event(day_)), int(calendar_.event(day_ + 1)), int(calendar_.league_day(day_ + 1)));
-        squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_) == 0);  // the flag is the calendar byte of the current day (146e:0f5a)
-        make_offers();
-        train_squad();
+        for (int m = 0; m < managers_; m++) {
+            g_draw_scope = "weekly-injuries-offers-training";
+            squad_injuries((day_ + 1) % 7 == 0, calendar_.event(day_) == 0, m);  // the flag is the calendar byte of the current day (146e:0f5a)
+            make_offers(m);
+            train_squad(m);
+            if ((day_ + 1) % 7 == 0) manager_stadium_week(m);
+        }
     }
-g_draw_scope = "stadium-week";
-    if ((day_ + 1) % 7 == 0) {
-        const GameDate wear_date = date_of_season_day(day_ + 1, save_.year);
-        stadium_week(finance_, mgr_[0].budget, save_.state, 0, brng_, [&](const std::string& a, const std::string& b) {  // ovr032:0000 wear message
-            native_add_message(save_.state, brng_, {wear_date.day, wear_date.month, wear_date.year, day_ + 1}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, 0, true);
-        });
-    }
-    if (world_phase) heal_squad((day_ + 1) % 7 == 0);
     // The evening restores the saved selection mode (DS:0376 -> DS:0375) and runs its automatic lineup. The original does
     // this at the menu only and leaves DS:0375 at 0 within a step (docs/DEVIATIONS.md); the saved mode DS:0376 is the same
     // in both, as the copy runs once per step (above), so the lineups agree (REAL-CODE periods 2-29).
     // after a cup day without a game the evening lineup runs, but the club record is not refreshed (REAL-CODE period 49)
-    skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_;
-    prepare_human_lineup();
-    empty_cup_day_ = idle_cup_day_ = false;
+    // Every manager 0..N-1 (the loop head of the next day, ovr038:2EDD..2F2A); the lineup draws nothing.
+    for (int m = 0; m < managers_; m++) {
+        skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_[size_t(m)];
+        prepare_human_lineup(true, m);
+    }
+    empty_cup_day_ = false;
+    idle_cup_day_.fill(false);
     // The original plays on until the next day with a game and only then returns to the menu; the loop head of that day draws the
-    // transfer-list roll rand(0, managers + 2) (here one human manager: (0,3)) and the daily valuation factor rand(85,115)
-    // (DS:E1A4, ovr034:1CD2). REAL-CODE: both draws end every period of the original.
+    // transfer-list roll rand(0, managers + 2) (one human manager: (0,3)) and the daily valuation factor rand(85,115)
+    // (DS:E1A4, ovr034:1CD2), once per manager (menu_pass). REAL-CODE: both draws end every period of the original.
     const uint8_t next_event = calendar_.event(day_ + 1);
     if (calendar_.league_day(day_ + 1) || next_event == kEventCup || next_event == kEventEuroCup || next_event == kEventPlayoff ||
         next_event == kEventWorldChampionship) {
         g_draw_scope = "play-step-end"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: play step end, next event %d (day %d)\n", int(next_event), day_ + 1);
-        // before a WM day the club menu loop is not entered: no transfer-list roll, only the factor (REAL-CODE period 29)
-        if (next_event != kEventWorldChampionship && brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) in the menu pass (asm 170773)
         // A cup day without the human club is played in the same step: the original only returns to the menu (factor,
         // news timer) before a day on which the human club plays (REAL-CODE period 7: (0,3), then the cup day's (100,300)).
-        if (!calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
+        const bool no_menu = !calendar_.league_day(day_ + 1) && ((next_event == kEventCup && !human_in_next_cup()) || (next_event == kEventEuroCup && !human_in_next_euro()) ||
                                               (next_event == kEventPlayoff && !human_in_next_playoff()) ||
-                                              (next_event == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0))) {  // REAL-CODE periods 7, 13, 28 and 30
+                                              (next_event == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0));  // REAL-CODE periods 7, 13, 28 and 30
+        // before a WM day the club menu loop is not entered: no transfer-list roll, only the factor (REAL-CODE period 29)
+        if (next_event != kEventWorldChampionship) menu_pass(!no_menu);
+        else if (!no_menu) daily_luck_ = brng_.range(85, 115);
+        if (no_menu) {
             if (league_since_refresh_) table_copies_frozen_ = true;  // no menu after a league day: the copies of the table stay (REAL-CODE period 28)
             if (next_event == kEventCup && cup_game_ == 0 && cup_winner_ < 0)
                 for (int t = 36; t < 64; t++)
@@ -3969,7 +4120,6 @@ g_draw_scope = "stadium-week";
                         for (auto& e : kind) e = 90;
             return;
         }
-        daily_luck_ = brng_.range(85, 115);
         // DS:A70E is the manager loop index of the original; the menu loop leaves it at 0 (ovr037 376d3, REAL-CODE period 29)
         if (national_coach_ < 0) save_.state.at(0x0788) = 0;
         // the club menu refreshes the copies of the table (REAL-CODE period 28); before a WM day it is not entered (period 29)
