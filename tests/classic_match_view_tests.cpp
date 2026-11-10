@@ -481,6 +481,20 @@ int main(int argc, char** argv) {
                             classic_goal_scene_script(7, 1, false, false, false) == "7.av",
                         "scene file names");
                 require(classic_board_messages(human, 70, false, data).size() == human.size(), "no scenes when switched off");
+
+                // The scenes the simulation drew (MatchProgress::scenes) decide the files; the shots of a shoot-out
+                // follow the chances with variant e at minute 120 and run the score on.
+                std::vector<ClassicMatchFrame> drawn = human;
+                drawn[1].boards[0].scenes = {{1, false, 9, 0, false}, {0, true, 2, 'j', false}, {0, true, 2, 'e', true}, {1, false, 2, 'e', true}};
+                const auto with_drawn = classic_board_messages(drawn, 70, true, data);
+                std::vector<const ClassicGoalScene*> drawn_finals;
+                for (const auto& f : with_drawn) if (f.scene && f.hold_ms == units(6)) drawn_finals.push_back(&*f.scene);
+                require(drawn_finals.size() == 4 && drawn_finals[0]->script == "2.htj" && drawn_finals[1]->script == "9.av" &&
+                            drawn_finals[2]->script == "2.hte" && drawn_finals[3]->script == "2.ave",
+                        "drawn scenes: home goal, away chance, then the shoot-out shots");
+                require(drawn_finals[2]->minute == 120 && drawn_finals[2]->goals[0] == 2 && drawn_finals[3]->goals[0] == 2 &&
+                            drawn_finals[3]->goals[1] == 0,
+                        "shoot-out scenes at minute 120 with the running score");
             }
         }
         {

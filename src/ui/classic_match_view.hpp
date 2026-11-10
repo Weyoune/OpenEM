@@ -51,6 +51,10 @@ struct ClassicBoard {
     long attendance = 0;        // home game of a manager, 0 = "(ausw.)"
     bool sold_out = false;      // attendance equals the capacity: colour 0x10
     int arena = 2;              // goal scene rink: 4 * attendance / capacity at the manager's home (ovl14_2630), else 2
+    // The goal scenes the simulation drew in this minute (MatchProgress::scenes, ovl15_0143), in chance order: home before
+    // away, the shots of a shoot-out last. Empty without goal scenes; the view then picks the scenes itself.
+    struct Scene { int side = 0; bool goal = false; int number = 2; char variant = 0; bool penalty = false; };
+    std::vector<Scene> scenes;
 };
 
 // Live result of one pair of a cup round for the table after minute 60 / 65 / 70 (ovl07_0eba).
