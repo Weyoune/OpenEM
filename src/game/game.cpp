@@ -816,7 +816,8 @@ void Game::play_cup_day() {
             sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working, m); };
             sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
         }
-    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr) : play_cup_round(save_.teams, draw, rng_, side);
+    int loop_minutes = 60;
+    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &loop_minutes) : play_cup_round(save_.teams, draw, rng_, side);
     if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
     for (int m = 0; m < managers_; m++) {
         HumanSquad& sq = mgr_[size_t(m)].squad;
@@ -885,7 +886,6 @@ void Game::play_cup_day() {
         for (const Tie& t : ties)
             if (t.home == own_team || t.away == own_team) human_in = true;
         if (human_in) {
-            // REAL-CODE: on the twice-weekly squad day the managed match recovers 2 x 19 after the game, less the overtime breaks (61, 66)
             int played = 0;
             int opponent = -1;
             const MatchStats* own_stats = &stats;
@@ -895,17 +895,14 @@ void Game::play_cup_day() {
                     if (const MatchStats* s = side.match_stats(t.home, t.away)) own_stats = s;
                 }
             for (int line = 0; line < 4; line++) played += own_stats->line_minutes[0][line];
-            // the rest of the managed match comes on the twice-weekly squad day, and also when the opponent is team 0 (the
-            // original treats index 0 as an empty marker, as with the running penalties; REAL-CODE period 63 against
-            // periods 6 and 34, same day and game index)
-            const bool squad_day = (day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0 || (opponent == 0 && !std::getenv("EM_OLD_CUPREC"));
-            const int full_recover = 38 - 19 * (played >= 66 ? 2 : played >= 61 ? 1 : 0);
-            const int recover = squad_day ? full_recover : 0;
-            // EXPERIMENT (off): Köln period 4 recovers on the next squad day, Mannheim periods 6, 34 and 96 in the same
-            // calendar position do not; the condition is open (docs/DEVIATIONS.md)
-            if (!squad_day && full_recover > 0 && std::getenv("EM_TRY_CUPRECDEFER"))
-                pending_cup_recovery_[size_t(m)] = {full_recover, {opponent, own_team}};
-            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: played %d recover %d day %d game %d round %d next-event %d prev-event %d weekday-mod7 %d year %d\n", played, recover, day_, cup_game_, cup_round_, int(calendar_.event(day_ + 1)), int(calendar_.event(day_ - 1)), day_ % 7, save_.year);
+            // The round's minute loop (ovl06_2522) runs on while any pair is in overtime, and then plays the whole overtime to
+            // minute 70 (cup table after 65 and 70). Its breaks before minute 61 and 66 rest every pair with +19, the managed one
+            // too after its own game has ended; the breaks its own game played already came in the minutes (MatchRun::step).
+            // REAL-CODE Köln periods 3, 4, 11, 21, 23 and Mannheim 6, 34, 63, 96: the former squad-day rule only matched by chance.
+            const int loop_breaks = loop_minutes > 60 ? 2 : 0;
+            const int own_breaks = played >= 66 ? 2 : played >= 61 ? 1 : 0;
+            const int recover = 19 * std::max(0, loop_breaks - own_breaks);
+            if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "post-cup: loop %d played %d recover %d day %d game %d round %d next-event %d prev-event %d weekday-mod7 %d year %d\n", loop_minutes, played, recover, day_, cup_game_, cup_round_, int(calendar_.event(day_ + 1)), int(calendar_.event(day_ - 1)), day_ % 7, save_.year);
             if (recover > 0) {
                 for (int team : {opponent, own_team})
                     if (team >= 0)
@@ -4148,21 +4145,6 @@ g_draw_scope = "match-injuries";
     // (ovr038:33FA..3443, Amiga 17752..17764).
     if (!world_phase && ((day_ + 1) % 7 == 0 || (day_ + 4) % 7 == 0)) {
 g_draw_scope = "weekly-injuries-offers-training";
-        for (int m = 0; m < managers_; m++) {
-            PendingCupRecovery& p = pending_cup_recovery_[size_t(m)];
-            if (p.amount <= 0) continue;
-            for (int team : p.teams)
-                if (team >= 0)
-                    for (auto& kind : save_.teams[size_t(team)].energy)
-                        for (auto& e : kind) e = uint8_t(std::min(90, e + p.amount));
-            auto& squad = save_.squad_of(m);
-            for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-                uint8_t& f = save_.state.at(squad_block(m) + slot * kSquadRecord + 0x1B);
-                f = uint8_t(std::min(90, int(f) + p.amount));
-                squad[slot].fitness = f;
-            }
-            p = {};
-        }
         talent_search_week();  // ovr038:33FA, before 162c:1c5b and 146e:0c89
         weekly_team_drift();
         if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: weekly at day %d event(today) %d event(next) %d league_day(next) %d\n", day_, int(calendar_.event(day_)), int(calendar_.event(day_ + 1)), int(calendar_.league_day(day_ + 1)));

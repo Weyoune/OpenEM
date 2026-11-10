@@ -207,7 +207,8 @@ namespace em {
 // exactly like a league day, with the knock-out rules (overtime, shoot-out); the stream reseeding after the periods and the
 // watched list after a home game of the human club are the same (REAL-CODE whole-program test).
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
-                                     const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer) {
+                                     const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer,
+                                     int* loop_minutes) {
     struct Entry {
         int home, away;
         std::unique_ptr<MatchRun> run;
@@ -239,6 +240,7 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             for (int i = 0; i < spin; i++) rng.range(0, 1);
         }
     }
+    if (loop_minutes) *loop_minutes = minute_number;
     std::vector<Tie> out;
     for (auto& e : entries) {
         Tie t{e.home, e.away, e.run->finish()};
