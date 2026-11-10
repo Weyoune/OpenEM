@@ -336,6 +336,7 @@ void ClassicApplication::click(int x,int y,bool right){
         if(live_day_&&!match_frames_[match_frame_].waits()&&live_click(x,y,right))return;
         // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
         size_t next=match_frame_+1;
+        if(match_frames_[match_frame_].league_page&&!right)return;  // Amiga FUN_0010e62e mode 2 ends with the right button
         if(!match_frames_[match_frame_].waits()){
             if(!right)return;
             while(next<match_frames_.size()&&!match_frames_[next].waits())next++;
