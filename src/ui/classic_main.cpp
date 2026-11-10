@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/classic_app.hpp"
 #include "ui/classic_keyboard.hpp"
+#include "ui/classic_script.hpp"
 #include "ui/classic_sound.hpp"
 #include <SDL.h>
 #ifdef _WIN32
@@ -50,15 +51,17 @@ int main(int argc,char**argv){
     try{
         char* base=SDL_GetBasePath();const fs::path exe_dir=base?path_from_text(base):fs::current_path();SDL_free(base);
         const fs::path root=project_root(exe_dir);
-        fs::path data,saves,save,render,input_log;
+        fs::path data,saves,save,render,input_log,script;
         std::string render_screen="main";int cursor_x=-1,cursor_y=-1;bool new_game=false;
         for(int n=1;n<argc;n++){
             const std::string option=argv[n];
             if(option=="--new-game"){new_game=true;continue;}
-            if(n+1>=argc)throw std::runtime_error("openem [--data folder] [--save file] [--new-game] [--render new.bmp] [--screen name]");
+            if(n+1>=argc)throw std::runtime_error("openem [--data folder] [--save file] [--new-game] [--render new.bmp] [--screen name] [--saves folder] [--input-log file] [--script file]");
             const std::string value=argv[++n];
             if(option=="--data")data=path_from_text(value);else if(option=="--save")save=path_from_text(value);
             else if(option=="--input-log")input_log=path_from_text(value);
+            else if(option=="--script"){script=path_from_text(value);headless=true;}  // headless scripted run (classic_script.hpp)
+            else if(option=="--saves")saves=fs::absolute(path_from_text(value));
             else if(option=="--cursor"){const auto comma=value.find(',');if(comma==std::string::npos)throw std::runtime_error("--cursor x,y");cursor_x=std::stoi(value.substr(0,comma));cursor_y=std::stoi(value.substr(comma+1));}
             else if(option=="--render"){render=path_from_text(value);headless=true;}else if(option=="--screen")render_screen=value;else throw std::runtime_error("Unknown option");
         }
@@ -68,7 +71,8 @@ int main(int argc,char**argv){
                                      "Start with --data <folder>, set OPENEM_DATA, or put the folder next to openem as EM.");
         // saves: the development layout keeps work/saves; otherwise the user's application data folder
         std::error_code same_ec;
-        if(fs::equivalent(data,root/"work"/"EM",same_ec)||fs::exists(root/"work"/"saves"))saves=root/"work"/"saves";
+        if(!saves.empty()){}
+        else if(fs::equivalent(data,root/"work"/"EM",same_ec)||fs::exists(root/"work"/"saves"))saves=root/"work"/"saves";
         else{char* pref=SDL_GetPrefPath("OpenEM","OpenEM");saves=pref?path_from_text(pref)/"saves":data/"saves";SDL_free(pref);}
         fs::create_directories(saves);
         // --new-game opens the start menu of a new game (game/new_game.hpp) instead of the default START.HOK
@@ -76,6 +80,14 @@ int main(int argc,char**argv){
         ClassicApplication app(data,saves,save);
         if(cursor_x>=0&&cursor_y>=0)app.motion(cursor_x,cursor_y);
         if(!render.empty()){app.render_screen(render_screen);write_new_save(render,app.canvas().bmp_bytes());return 0;}
+        if(!script.empty()){
+            std::ifstream in(script);if(!in)throw std::runtime_error("Script not found");
+            std::ofstream log(saves/"script.log");
+            const ClassicRestart restart=[&](const std::string& file){return std::make_unique<ClassicApplication>(data,saves,file.empty()?fs::path():data/path_from_text(file));};
+            const auto report=run_classic_script(app,in,saves,&log,restart);
+            for(const auto& gap:report.gaps)log<<"Luecke: "<<gap<<'\n';
+            return report.ok?0:2;
+        }
         if(render_screen!="main")app.render_screen(render_screen);
         if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)!=0)throw std::runtime_error(SDL_GetError());
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"0");

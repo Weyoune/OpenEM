@@ -13,6 +13,18 @@
 namespace em::ui {
 enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
 
+// Milliseconds of the UI clock: SDL_GetTicks64, or the clock of a scripted headless run (classic_script.hpp).
+uint64_t classic_ticks();
+void set_classic_clock(uint64_t (*clock)());
+
+// What the screen shows right now, for scripted runs (classic_script.cpp); read-only (classic_probe.cpp).
+struct ClassicUiProbe {
+    std::string modal;      // "" (plain screen), "notice", "timed-notice", "match", "cup-table", "banner", "advancing", ...
+    std::string text;       // the notice text
+    int category = -1;      // selected main-menu category
+    std::optional<uint64_t> deadline;  // classic_ticks() at which the screen moves on by itself
+};
+
 struct ClassicMiscState;  // classic_misc_input.cpp
 struct ClassicCareerState;  // classic_career.cpp
 class ClassicApplication {
@@ -32,6 +44,7 @@ public:
     ClassicScreen screen() const { return screen_; }
     void render_screen(std::string_view name);
     Bytes native_ui_bytes(); // read-only diagnostic of the native modal working image
+    ClassicUiProbe probe() const;
 
 private:
     struct FileEntry { std::filesystem::path path; std::string name; bool directory=false; bool save=false; };
@@ -111,6 +124,7 @@ private:
     void career_release();
     bool career_key(int key);
     void draw_career();
+    std::string career_modal() const;  // "messages", "review-overview", "review" or ""
     std::shared_ptr<ClassicCareerState> career_;
     void draw_dialog();
     void draw_contract_editor();

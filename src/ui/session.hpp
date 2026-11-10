@@ -28,7 +28,7 @@ struct ContractQuestion {
     int player = -1;
     std::string name;
     int age = 0;
-    long monthly_salary = 0;  // raw actual bid (demand + 10%) for the two-year review offer
+    long monthly_salary = 0;  // raw one-year proposal of the season review (ovl02_0000)
 };
 
 // UI-independent controller. Each action is staged from a full checkpoint, so
