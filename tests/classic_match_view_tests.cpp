@@ -639,6 +639,28 @@ int main(int argc, char** argv) {
             app.tick(); app.draw();
             require(!same(4, 2) || !same(150, 210), "after the replay the menu returns");
         }
+        {
+            // ovl06_161d: with the switch Tabelle of the Bundesliga (DS:021F, state 0xA51E) its table follows the match day
+            // and waits for a right click; then the menu returns
+            HokFile start = decode_hok(read_file(references / "START.HOK"));
+            start.state.at(0xA51C + 2) = 1;
+            fs::create_directories(output / "app-table");
+            const fs::path save = output / "app-table" / "TABSTART.HOK";
+            fs::remove(save);
+            write_new_save(save, encode_hok(start));
+            ClassicApplication app(data, output / "app-table", save);
+            app.motion(292, 49); app.click(292, 49, false);
+            app.tick();
+            SDL_Delay(1000); app.tick();
+            app.click(10, 10, true);  // ends the minutes
+            app.tick(); app.tick();
+            require(app.screen() == ClassicScreen::Table, "the table follows the match day");
+            app.tick();
+            require(app.screen() == ClassicScreen::Table, "the table waits");
+            app.click(10, 10, true);
+            app.tick();
+            require(app.screen() == ClassicScreen::Main, "a right click returns to the menu (screen " + std::to_string(int(app.screen())) + ")");
+        }
         if (failures) throw std::runtime_error(std::to_string(failures) + " raster comparisons failed");
         std::printf("classic match view: ok\n");
         return 0;

@@ -199,6 +199,14 @@ void ClassicApplication::tick(){
     if(!advancing_)update_roster_hover();
     if(!advancing_)tick_stats_hold(classic_ticks());
     if(tick_match_view())return;
+    if(post_table_open_&&screen_==ClassicScreen::Table)return;  // the table after the match day waits for a right click
+    post_table_open_=false;
+    if(post_tables_){
+        int l=0;while(!(post_tables_>>l&1))l++;
+        post_tables_&=~(1<<l);
+        division_=l;table_view_=1;table_order_=session_.game().league(l).ranking;screen_=ClassicScreen::Table;post_table_open_=true;
+        return;
+    }
     if(!advancing_)check_new_messages();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
     if(match_banner_until_){
@@ -216,6 +224,13 @@ void ClassicApplication::tick(){
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
         prepare_match_view(match_day);
+        // ovl06_161d end: the leagues of the day whose switch Tabelle (DS:021F + 3 * league) is on show their table
+        post_tables_=0;
+        if(pending_league_day_){
+            const uint8_t leagues=calendar_.event(session_.game().season_day()+1)&kEventLeagueMask;
+            const GameSettings s=session_.game().settings();
+            for(int l=0;l<3;l++)if((leagues>>l&1)&&s.flags[size_t(l*3+2)])post_tables_|=1<<l;
+        }
         // with the frontend's pump the minutes are shown while the day is played (clicks reach the minute loop)
         live_skip_=false;live_fast_=false;live_base_=0;live_out_=0;live_orders_.clear();
         live_day_=pump_&&classic_match_display_wanted(session_.game(),match_day,!pending_league_day_);
@@ -224,7 +239,8 @@ void ClassicApplication::tick(){
         try{advanced=session_.advance_day();}catch(...){live_day_=false;throw;}
         const bool live=live_day_||live_skip_;live_day_=false;
         if(advanced){
-            advance_first_=false;invalidate();show_manager_news();
+            advance_first_=false;invalidate();
+            if(post_tables_)news_after_tables_=true;else show_manager_news();  // the tables belong to the match day
             if(!live)begin_match_view();
             else{pending_match_frames_.clear();if(live_skip_)match_frames_.clear();else if(!match_frames_.empty())match_frame_until_=classic_ticks()+1000;}
             live_skip_=false;
@@ -353,6 +369,11 @@ void ClassicApplication::click(int x,int y,bool right){
             match_frames_.clear();return;
         }
         match_frame_=next;match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[next],session_.game().settings().speed));
+        return;
+    }
+    if(post_table_open_&&screen_==ClassicScreen::Table&&right){  // the table of ovl06_161d ends the match day
+        screen_=ClassicScreen::Main;post_table_open_=false;
+        if(!post_tables_&&news_after_tables_){news_after_tables_=false;show_manager_news();}
         return;
     }
     if(native_notice_until_)return;
@@ -545,7 +566,7 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(screen_==ClassicScreen::Table){
-        if(right){screen_=ClassicScreen::Main;return;}
+        if(right){screen_=ClassicScreen::Main;post_table_open_=false;if(!post_tables_&&news_after_tables_){news_after_tables_=false;show_manager_news();}return;}
         for(int v=0;v<3;v++)if(inside(x,y,31+102*v,165,86+102*v,175)){table_view_=v;return;}
         return;
     }

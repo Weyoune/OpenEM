@@ -245,6 +245,8 @@ private:
     bool live_wait_=false;    // the display reached the end of the observed minutes
     bool live_fast_=false;    // DS:878A: the quick switch bottom left (speed 70, no goal scenes)
     bool live_skip_=false;    // right click: the rest of the day is played without display
+    int post_tables_=0;       // leagues whose table follows the match day (switch Tabelle, ovl13_249d)
+    bool post_table_open_=false, news_after_tables_=false;
     int live_scenes_=0;       // DS:878C: the goal scene setting of the day
     size_t live_base_=0, live_out_=0;  // raw frame the processing starts at, output frames of it already shown
     std::vector<ClassicBoardOrder> live_orders_;  // clicks of this minute, applied before the next one
