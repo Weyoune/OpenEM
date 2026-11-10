@@ -27,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "editor/map_doc.hpp"
 #include "editor/palette_doc.hpp"
 #include "editor/pixel_editor.hpp"
 #include "editor/team_doc.hpp"
@@ -39,6 +40,7 @@
 #pragma comment(lib, "uxtheme.lib")
 
 namespace fs = std::filesystem;
+using em::editor::MapDoc;
 using em::editor::PaletteDoc;
 using em::editor::PixelEditor;
 using em::editor::TeamDoc;
@@ -53,11 +55,12 @@ enum Cmd : UINT {
     ID_HELP_ABOUT = 140,
     IDC_TOOLBAR = 201, IDC_LIST, IDC_STATUS, IDC_TAB,
     IDC_TRACK_R = 210, IDC_TRACK_G, IDC_TRACK_B,
+    IDC_MIRROR = 430,
     IDC_PALSEL = 400, IDC_CREST_PEN = 420, IDC_CREST_FILL, IDC_CREST_UNDO, IDC_CREST_SAVE, IDC_CREST_ZOUT, IDC_CREST_ZIN,
     IDC_CLUB = 300, IDC_NAME0 = 310, IDC_FOR0 = 340, IDC_CREST = 370, IDC_PLACE, IDC_STR0 = 372, IDC_JER0 = 380, IDC_SWAP_BTN = 390, IDC_SWAP_COMBO,
 };
 
-const wchar_t kCrestClass[] = L"OpenEMEditorCrest";
+const wchar_t kCrestClass[] = L"OpenEMEditorCrest", kMapClass[] = L"OpenEMEditorMap", kTilesClass[] = L"OpenEMEditorTiles";
 const wchar_t kMainClass[] = L"OpenEMEditorMain", kCanvasClass[] = L"OpenEMEditorCanvas", kPaletteClass[] = L"OpenEMEditorPalette", kPalGridClass[] = L"OpenEMEditorPalGrid";
 
 std::wstring widen(const std::string& s) {
@@ -69,6 +72,10 @@ std::wstring widen(const std::string& s) {
 }
 
 int floordiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+struct MapUi {
+    HWND view = nullptr, tiles = nullptr, mirror = nullptr, lbl = nullptr;
+};
 
 struct TeamUi {
     HWND club = nullptr, name[25] = {}, foreign[25] = {}, crest = nullptr, crest_ud = nullptr, place = nullptr, place_ud = nullptr;
@@ -88,6 +95,13 @@ struct App {
     std::unique_ptr<PixelEditor> ed;
     std::unique_ptr<PixelEditor> crest_ed;  // the crest of the selected team (team page)
     std::unique_ptr<PaletteDoc> pal;
+    std::unique_ptr<MapDoc> map;
+    MapUi mu;
+    int map_tile = 0, map_zoom = 1, mscroll_x = 0, mscroll_y = 0, tscroll_y = 0, map_hc = -1, map_hr = -1;
+    bool map_mirror = false;
+    std::wstring map_hover;
+    std::vector<uint32_t> map_bits;
+    unsigned map_bits_rev = ~0u;
     int tab_index = 0;        // 0 Bilder, 1 Torszenen, 2 Paletten
     int pal_sel = 0;          // selected colour in the palette editor
     bool setting_sliders = false;
@@ -166,34 +180,36 @@ void sync_sliders(App& a);
 
 bool pal_tab(const App& a) { return a.tab_index == 2; }
 bool team_tab(const App& a) { return a.tab_index == 3; }
+bool map_tab(const App& a) { return a.tab_index == 4; }
 
 void refresh(App& a) {
     PixelEditor& e = *a.ed;
-    const bool tt = team_tab(a), pt = pal_tab(a) || tt;  // pt: a page without the pixel tools
-    const int cur = tt ? 23 : pt ? a.pal->current() : e.current();
-    const bool dirty = tt ? a.team->dirty() || a.crest_ed->dirty() : pt ? a.pal->dirty() : e.dirty();
+    const bool tt = team_tab(a), mt = map_tab(a), pt = pal_tab(a) || tt || mt;  // pt: a page without the pixel tools
+    const int cur = mt ? a.map->current() : tt ? 23 : pt ? a.pal->current() : e.current();
+    const bool dirty = mt ? a.map->dirty() : tt ? a.team->dirty() || a.crest_ed->dirty() : pt ? a.pal->dirty() : e.dirty();
     std::wstring title = cur < 0 ? L"OpenEM Editor" : L"KB" + std::to_wstring(cur) + (dirty ? L" *" : L"") + L" – OpenEM Editor";
     SetWindowTextW(a.main, title.c_str());
     // toolbar
     SendMessage(a.toolbar, TB_CHECKBUTTON, ID_TOOL_PENCIL + int(e.tool()), TRUE);
     SendMessage(a.toolbar, TB_CHECKBUTTON, ID_VIEW_GRID, a.grid);
-    for (int id = ID_TOOL_PENCIL; id <= ID_TOOL_PICKER; id++) SendMessage(a.toolbar, TB_ENABLEBUTTON, id, !pt);
-    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_EDIT_UNDO, pt ? dirty : e.can_undo());
-    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_EDIT_REDO, !pt && e.can_redo());
+    for (int id = ID_TOOL_PENCIL; id <= ID_TOOL_PICKER; id++)  // hall maps: paint, fill and pick only
+        SendMessage(a.toolbar, TB_ENABLEBUTTON, id, !pt || (mt && (id == ID_TOOL_PENCIL || id == ID_TOOL_FILL || id == ID_TOOL_PICKER)));
+    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_EDIT_UNDO, mt ? a.map->can_undo() : pt ? dirty : e.can_undo());
+    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_EDIT_REDO, mt ? a.map->can_redo() : !pt && e.can_redo());
     SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_FILE_SAVE, cur >= 0 && dirty);
-    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_VIEW_GRID, !pt);
+    SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_VIEW_GRID, !pt || mt);
     SendMessage(a.toolbar, TB_ENABLEBUTTON, ID_VIEW_FIT, !pt);
     // menu
     HMENU m = GetMenu(a.main);
     EnableMenuItem(m, ID_FILE_SAVE, MF_BYCOMMAND | (cur >= 0 && dirty ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_FILE_EXPORT, MF_BYCOMMAND | (!pt && e.current() >= 0 ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(m, ID_EDIT_UNDO, MF_BYCOMMAND | ((pt ? dirty : e.can_undo()) ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(m, ID_EDIT_REDO, MF_BYCOMMAND | (!pt && e.can_redo() ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, ID_EDIT_UNDO, MF_BYCOMMAND | ((mt ? a.map->can_undo() : pt ? dirty : e.can_undo()) ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, ID_EDIT_REDO, MF_BYCOMMAND | ((mt ? a.map->can_redo() : !pt && e.can_redo()) ? MF_ENABLED : MF_GRAYED));
     CheckMenuItem(m, ID_VIEW_GRID, MF_BYCOMMAND | (a.grid ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuRadioItem(m, ID_TOOL_PENCIL, ID_TOOL_PICKER, ID_TOOL_PENCIL + int(e.tool()), MF_BYCOMMAND);
     // status bar
-    SendMessage(a.status, SB_SETTEXT, 0, (LPARAM)widen(tt ? a.team->status() : pt ? a.pal->status() : e.status()).c_str());
-    std::wstring right;
+    SendMessage(a.status, SB_SETTEXT, 0, (LPARAM)widen(mt ? a.map->status() : tt ? a.team->status() : pt ? a.pal->status() : e.status()).c_str());
+    std::wstring right = mt ? a.map_hover + L"   Zoom " + std::to_wstring(a.map_zoom) + L"×" : L"";
     if (!pt) {
         if (a.hover_x >= 0) {
             right = L"x " + std::to_wstring(a.hover_x) + L"   y " + std::to_wstring(a.hover_y) + L"   Farbe " + std::to_wstring(a.hover_color);
@@ -207,6 +223,7 @@ void refresh(App& a) {
     EnableWindow(a.psel, e.current() >= 0 && !e.has_own_palette());
     InvalidateRect(a.palette, nullptr, FALSE);
     InvalidateRect(a.pgrid, nullptr, FALSE);
+    if (mt) InvalidateRect(a.mu.view, nullptr, FALSE);
     if (a.shown_revision != e.revision()) {
         a.shown_revision = e.revision();
         InvalidateRect(a.canvas, nullptr, FALSE);
@@ -220,13 +237,17 @@ void crest_autofit(App& a);
 void load_team_controls(App& a);
 void layout_team(App& a, int x, int y, int w, int h, int rx, int rw);
 void show_team(App& a, bool on);
+void layout_map(App& a, int x, int y, int w, int h, int rx, int rw);
+void show_map(App& a, bool on);
+void open_map(App& a, int number);
+void sync_map_controls(App& a);
 
 bool confirm_discard(App& a) {
-    const bool pt = pal_tab(a), tt = team_tab(a);
+    const bool pt = pal_tab(a), tt = team_tab(a), mt = map_tab(a);
     if (tt && !crest_confirm(a)) return false;
-    const bool dirty = tt ? a.team->dirty() : pt ? a.pal->dirty() : a.ed->dirty();
+    const bool dirty = mt ? a.map->dirty() : tt ? a.team->dirty() : pt ? a.pal->dirty() : a.ed->dirty();
     if (!dirty) return true;
-    const int cur = tt ? 23 : pt ? a.pal->current() : a.ed->current();
+    const int cur = mt ? a.map->current() : tt ? 23 : pt ? a.pal->current() : a.ed->current();
     std::wstring head = L"KB" + std::to_wstring(cur) + L" wurde geändert.";
     TASKDIALOG_BUTTON buttons[] = {{101, L"Speichern"}, {102, L"Verwerfen"}};
     TASKDIALOGCONFIG cfg{sizeof cfg};
@@ -242,8 +263,9 @@ bool confirm_discard(App& a) {
     cfg.nDefaultButton = 101;
     int pressed = 0;
     if (FAILED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr))) return false;
-    if (pressed == 101) return tt ? team_save(a) : pt ? a.pal->save() : a.ed->save();
-    if (pressed == 102 && tt) a.team->revert();
+    if (pressed == 101) return mt ? a.map->save() : tt ? team_save(a) : pt ? a.pal->save() : a.ed->save();
+    if (pressed == 102 && mt) a.map->load(a.map->current());
+    else if (pressed == 102 && tt) a.team->revert();
     else if (pressed == 102 && pt) a.pal->revert();
     return pressed == 102;
 }
@@ -304,6 +326,9 @@ void fill_list(App& a) {
             const int place = a.team->data(t).place;
             add(t, team_label(a, t), place >= 0 ? std::to_wstring(place) : L"–", team_group(t));
         }
+    } else if (map_tab(a)) {
+        const wchar_t* names[] = {L"KB236  Standardhalle", L"KB242  Halle 1", L"KB243  Halle 2", L"KB244  Halle 3", L"KB245  Halle 4"};
+        for (size_t i = 0; i < MapDoc::numbers().size(); i++) add(MapDoc::numbers()[i], names[i], L"42 × 72");
     } else if (pal_tab(a)) {
         add(21, L"KB21  Spielpalette", L"255 Farben");
         add(247, L"KB247  Torszenen", L"255 Farben");
@@ -329,6 +354,17 @@ void fit_zoom(App& a) {
 }
 
 void open_image(App& a, int number) {
+    if (map_tab(a)) {
+        if (number == a.map->current()) return;
+        if (!confirm_discard(a)) {
+            select_in_list(a, a.map->current());
+            return;
+        }
+        open_map(a, number);
+        select_in_list(a, a.map->current());
+        refresh(a);
+        return;
+    }
     if (team_tab(a)) {  // the number is a team index; edits are applied live, nothing to confirm
         if (number != a.team_sel && !crest_confirm(a)) {
             select_in_list(a, a.team_sel);
@@ -389,11 +425,12 @@ void sync_sliders(App& a) {
 }
 
 void show_tab_controls(App& a) {
-    const bool pt = pal_tab(a), tt = team_tab(a);
-    ShowWindow(a.canvas, pt || tt ? SW_HIDE : SW_SHOW);
-    ShowWindow(a.palette, pt || tt ? SW_HIDE : SW_SHOW);
-    ShowWindow(a.psel, pt || tt ? SW_HIDE : SW_SHOW);
+    const bool pt = pal_tab(a), tt = team_tab(a), mt = map_tab(a);
+    ShowWindow(a.canvas, pt || tt || mt ? SW_HIDE : SW_SHOW);
+    ShowWindow(a.palette, pt || tt || mt ? SW_HIDE : SW_SHOW);
+    ShowWindow(a.psel, pt || tt || mt ? SW_HIDE : SW_SHOW);
     show_team(a, tt);
+    show_map(a, mt);
     ShowWindow(a.pgrid, pt ? SW_SHOW : SW_HIDE);
     ShowWindow(a.pinfo, pt ? SW_SHOW : SW_HIDE);
     for (int i = 0; i < 3; i++) {
@@ -430,6 +467,7 @@ void layout(App& a) {
         MoveWindow(a.track[i], cx, y + a.px(20), cw, a.px(32), TRUE);
         y += a.px(64);
     }
+    layout_map(a, lw, top, std::max(10, int(r.right) - lw - pw), bottom - top, r.right - pw, pw);
     layout_team(a, lw, top, std::max(10, int(r.right) - lw - pw), bottom - top, r.right - pw, pw);
     const int w1 = a.px(260);
     int parts[2] = {std::max(w1, int(r.right) - w1), -1};
@@ -441,7 +479,11 @@ void switch_tab(App& a, int index) {
     a.tab_index = index;
     a.hover_x = -1;
     fill_list(a);
-    if (team_tab(a)) {
+    if (map_tab(a)) {
+        if (a.map->current() < 0) open_map(a, MapDoc::numbers().front());
+        select_in_list(a, a.map->current());
+        sync_map_controls(a);
+    } else if (team_tab(a)) {
         select_in_list(a, a.team_sel);
         load_team_controls(a);
     } else if (pal_tab(a)) {
@@ -1316,6 +1358,388 @@ bool crest_confirm(App& a) {
     return false;
 }
 
+// ---------------------------------------------------------------------------------------------- hall maps
+// Tab "Hallenkarten": the tile map of a goal scene rink (KB236, KB242..245) with a tile picker (KB231/232 tiles).
+
+constexpr int kTileCell = 36;  // tile picker: 16 px tile at 2x plus a gap, in 96 dpi pixels
+
+struct MapGeo {
+    int ox, oy, iw, ih, tw, th, cw, ch, zoom;
+};
+
+MapGeo map_geo(App& a) {
+    RECT r;
+    GetClientRect(a.mu.view, &r);
+    MapGeo g{};
+    g.zoom = a.map_zoom;
+    g.cw = r.right;
+    g.ch = r.bottom;
+    g.iw = MapDoc::kCols * MapDoc::kTile * g.zoom;
+    g.ih = MapDoc::kRows * MapDoc::kTile * g.zoom;
+    const int m = a.px(12);
+    g.tw = g.iw + 2 * m;
+    g.th = g.ih + 2 * m;
+    g.ox = g.tw <= g.cw ? (g.cw - g.iw) / 2 : m - a.mscroll_x;
+    g.oy = g.th <= g.ch ? (g.ch - g.ih) / 2 : m - a.mscroll_y;
+    return g;
+}
+
+void update_map_scroll(App& a) {
+    HWND h = a.mu.view;
+    if (!h) return;
+    if (a.map->current() < 0) {
+        ShowScrollBar(h, SB_BOTH, FALSE);
+        return;
+    }
+    for (int pass = 0; pass < 2; pass++) {
+        MapGeo g = map_geo(a);
+        a.mscroll_x = std::clamp(a.mscroll_x, 0, std::max(0, g.tw - g.cw));
+        a.mscroll_y = std::clamp(a.mscroll_y, 0, std::max(0, g.th - g.ch));
+        SCROLLINFO si{sizeof si, SIF_RANGE | SIF_PAGE | SIF_POS};
+        si.nMin = 0;
+        si.nMax = g.tw - 1;
+        si.nPage = UINT(g.cw);
+        si.nPos = a.mscroll_x;
+        SetScrollInfo(h, SB_HORZ, &si, TRUE);
+        si.nMax = g.th - 1;
+        si.nPage = UINT(g.ch);
+        si.nPos = a.mscroll_y;
+        SetScrollInfo(h, SB_VERT, &si, TRUE);
+    }
+}
+
+void set_map_zoom(App& a, int z) {
+    a.map_zoom = std::clamp(z, 1, 4);
+    update_map_scroll(a);
+    InvalidateRect(a.mu.view, nullptr, FALSE);
+    refresh(a);
+}
+
+uint32_t rgb32(const em::Palette& p, uint8_t i) {
+    const auto& c = p.rgb[i];
+    return uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
+}
+
+void paint_map(App& a, HWND h) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    RECT cr;
+    GetClientRect(h, &cr);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, cr.right, cr.bottom);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    HBRUSH bg = CreateSolidBrush(RGB(58, 60, 64));
+    FillRect(mem, &cr, bg);
+    DeleteObject(bg);
+    MapDoc& m = *a.map;
+    if (m.current() >= 0) {
+        const auto& img = m.rink();
+        if (a.map_bits_rev != m.revision() || a.map_bits.size() != img.pixels.size()) {
+            a.map_bits.resize(img.pixels.size());
+            for (size_t i = 0; i < a.map_bits.size(); i++) a.map_bits[i] = rgb32(m.palette(), img.pixels[i]);
+            a.map_bits_rev = m.revision();
+        }
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+        bi.bmiHeader.biWidth = img.width;
+        bi.bmiHeader.biHeight = -img.height;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        const MapGeo g = map_geo(a);
+        SetStretchBltMode(mem, COLORONCOLOR);
+        StretchDIBits(mem, g.ox, g.oy, g.iw, g.ih, 0, 0, img.width, img.height, a.map_bits.data(), &bi, DIB_RGB_COLORS, SRCCOPY);
+        if (a.grid) {
+            const int cell = MapDoc::kTile * g.zoom;
+            HPEN pen = CreatePen(PS_SOLID, 1, RGB(232, 160, 40));
+            HGDIOBJ op = SelectObject(mem, pen);
+            const int c0 = std::max(0, floordiv(-g.ox, cell)), c1 = std::min(MapDoc::kCols, floordiv(g.cw - g.ox, cell) + 1);
+            const int r0 = std::max(0, floordiv(-g.oy, cell)), r1 = std::min(MapDoc::kRows, floordiv(g.ch - g.oy, cell) + 1);
+            if (g.zoom >= 2) {
+                for (int c = c0; c <= c1; c++) { MoveToEx(mem, g.ox + c * cell, g.oy, nullptr); LineTo(mem, g.ox + c * cell, g.oy + g.ih); }
+                for (int r = r0; r <= r1; r++) { MoveToEx(mem, g.ox, g.oy + r * cell, nullptr); LineTo(mem, g.ox + g.iw, g.oy + r * cell); }
+            }
+            SelectObject(mem, op);
+            DeleteObject(pen);
+        }
+        RECT fr{g.ox - 1, g.oy - 1, g.ox + g.iw + 1, g.oy + g.ih + 1};
+        FrameRect(mem, &fr, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        if (a.map_hc >= 0) {  // hovered cell
+            const int cell = MapDoc::kTile * g.zoom;
+            RECT hr{g.ox + a.map_hc * cell, g.oy + a.map_hr * cell, g.ox + (a.map_hc + 1) * cell, g.oy + (a.map_hr + 1) * cell};
+            FrameRect(mem, &hr, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        }
+    } else {
+        SelectObject(mem, a.font);
+        SetBkMode(mem, TRANSPARENT);
+        SetTextColor(mem, RGB(190, 190, 195));
+        DrawTextW(mem, L"Links eine Hallenkarte wählen", -1, &cr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    BitBlt(dc, 0, 0, cr.right, cr.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    EndPaint(h, &ps);
+}
+
+bool map_cell_at(App& a, int mx, int my, int& c, int& r) {
+    const MapGeo g = map_geo(a);
+    const int cell = MapDoc::kTile * g.zoom;
+    c = floordiv(mx - g.ox, cell);
+    r = floordiv(my - g.oy, cell);
+    return a.map->current() >= 0 && c >= 0 && r >= 0 && c < MapDoc::kCols && r < MapDoc::kRows;
+}
+
+void sync_map_controls(App& a) {
+    SendMessage(a.mu.mirror, BM_SETCHECK, a.map_mirror ? BST_CHECKED : BST_UNCHECKED, 0);
+    const std::wstring t = L"Kachel " + std::to_wstring(a.map_tile) + (a.map_mirror ? L" (gespiegelt)" : L"");
+    SetWindowTextW(a.mu.lbl, t.c_str());
+    InvalidateRect(a.mu.tiles, nullptr, FALSE);
+}
+
+LRESULT CALLBACK map_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    App& a = *g_app;
+    MapDoc& m = *a.map;
+    auto paint_at = [&](int c, int r) { m.set(c, r, a.map_tile, a.map_mirror); };
+    switch (msg) {
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT: paint_map(a, h); return 0;
+        case WM_SIZE: update_map_scroll(a); return 0;
+        case WM_SETCURSOR:
+            if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursor(nullptr, IDC_CROSS)); return TRUE; }
+            break;
+        case WM_LBUTTONDOWN: {
+            SetFocus(h);
+            int c, r;
+            if (!map_cell_at(a, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), c, r)) return 0;
+            const auto tool = a.ed->tool();
+            if (tool == PixelEditor::Tool::Picker) {
+                a.map_tile = m.tile(c, r);
+                a.map_mirror = m.mirrored(c, r);
+                sync_map_controls(a);
+            } else if (tool == PixelEditor::Tool::Fill) {
+                m.fill(c, r, a.map_tile, a.map_mirror);
+            } else {
+                SetCapture(h);
+                m.stroke_begin();
+                paint_at(c, r);
+            }
+            InvalidateRect(h, nullptr, FALSE);
+            refresh(a);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            int c, r;
+            const bool in = map_cell_at(a, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), c, r);
+            const int oc = a.map_hc, orow = a.map_hr;
+            a.map_hc = in ? c : -1;
+            a.map_hr = in ? r : -1;
+            if (in) a.map_hover = L"Spalte " + std::to_wstring(c) + L"   Zeile " + std::to_wstring(r) + L"   Kachel " + std::to_wstring(m.tile(c, r)) + (m.mirrored(c, r) ? L" (gespiegelt)" : L"");
+            else a.map_hover.clear();
+            if (GetCapture() == h && (wp & MK_LBUTTON) && in) paint_at(c, r);
+            if (oc != a.map_hc || orow != a.map_hr || GetCapture() == h) InvalidateRect(h, nullptr, FALSE);
+            refresh(a);
+            return 0;
+        }
+        case WM_LBUTTONUP:
+            if (GetCapture() == h) ReleaseCapture();
+            m.stroke_end();
+            refresh(a);
+            return 0;
+        case WM_RBUTTONDOWN: {
+            int c, r;
+            if (map_cell_at(a, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), c, r)) {
+                a.map_tile = m.tile(c, r);
+                a.map_mirror = m.mirrored(c, r);
+                sync_map_controls(a);
+            }
+            return 0;
+        }
+        case WM_MOUSEWHEEL: {
+            const int d = GET_WHEEL_DELTA_WPARAM(wp);
+            if (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) set_map_zoom(a, a.map_zoom + (d > 0 ? 1 : -1));
+            else {
+                (GET_KEYSTATE_WPARAM(wp) & MK_SHIFT ? a.mscroll_x : a.mscroll_y) -= d / 2;
+                update_map_scroll(a);
+                InvalidateRect(h, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_HSCROLL:
+        case WM_VSCROLL: {
+            const bool horz = msg == WM_HSCROLL;
+            SCROLLINFO si{sizeof si, SIF_ALL};
+            GetScrollInfo(h, horz ? SB_HORZ : SB_VERT, &si);
+            int pos = si.nPos;
+            switch (LOWORD(wp)) {
+                case SB_LINEUP: pos -= a.px(32); break;
+                case SB_LINEDOWN: pos += a.px(32); break;
+                case SB_PAGEUP: pos -= int(si.nPage); break;
+                case SB_PAGEDOWN: pos += int(si.nPage); break;
+                case SB_THUMBTRACK: pos = si.nTrackPos; break;
+                default: break;
+            }
+            (horz ? a.mscroll_x : a.mscroll_y) = pos;
+            update_map_scroll(a);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
+        default: break;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+// Tile picker --------------------------------------------------------------------------------------------
+
+struct TileGeo {
+    int cell, cols, rows;
+};
+
+TileGeo tile_geo(App& a, HWND h) {
+    RECT r;
+    GetClientRect(h, &r);
+    TileGeo g{};
+    g.cell = a.px(kTileCell);
+    g.cols = std::max(1, int(r.right) / g.cell);
+    g.rows = (a.map->tile_count() + g.cols - 1) / g.cols;
+    return g;
+}
+
+void update_tile_scroll(App& a) {
+    HWND h = a.mu.tiles;
+    if (!h) return;
+    for (int pass = 0; pass < 2; pass++) {
+        const TileGeo g = tile_geo(a, h);
+        RECT r;
+        GetClientRect(h, &r);
+        const int total = g.rows * g.cell;
+        a.tscroll_y = std::clamp(a.tscroll_y, 0, std::max(0, total - int(r.bottom)));
+        SCROLLINFO si{sizeof si, SIF_RANGE | SIF_PAGE | SIF_POS};
+        si.nMin = 0;
+        si.nMax = total - 1;
+        si.nPage = UINT(r.bottom);
+        si.nPos = a.tscroll_y;
+        SetScrollInfo(h, SB_VERT, &si, TRUE);
+    }
+}
+
+void paint_tiles(App& a, HWND h) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    RECT cr;
+    GetClientRect(h, &cr);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, cr.right, cr.bottom);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    FillRect(mem, &cr, GetSysColorBrush(COLOR_WINDOW));
+    MapDoc& m = *a.map;
+    if (m.current() >= 0) {
+        const TileGeo g = tile_geo(a, h);
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+        bi.bmiHeader.biWidth = MapDoc::kTile;
+        bi.bmiHeader.biHeight = -MapDoc::kTile;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        SetStretchBltMode(mem, COLORONCOLOR);
+        const int first = std::max(0, a.tscroll_y / g.cell) * g.cols;
+        const int last = std::min(m.tile_count(), (a.tscroll_y + int(cr.bottom)) / g.cell * g.cols + g.cols + g.cols);
+        const int px2 = (g.cell - a.px(4)) / MapDoc::kTile * MapDoc::kTile;  // whole-number scale of the 16 px tile
+        std::vector<uint32_t> bits(size_t(MapDoc::kTile) * MapDoc::kTile);
+        for (int t = first; t < last; t++) {
+            const int x = (t % g.cols) * g.cell + a.px(2), y = (t / g.cols) * g.cell - a.tscroll_y + a.px(2);
+            const em::Image& ti = m.tile_image(t);
+            for (size_t i = 0; i < bits.size(); i++) bits[i] = rgb32(m.palette(), ti.pixels[i]);
+            StretchDIBits(mem, x, y, px2, px2, 0, 0, MapDoc::kTile, MapDoc::kTile, bits.data(), &bi, DIB_RGB_COLORS, SRCCOPY);
+            if (t == a.map_tile) {
+                RECT sr{x - a.px(2), y - a.px(2), x + px2 + a.px(2), y + px2 + a.px(2)};
+                FrameRect(mem, &sr, (HBRUSH)GetStockObject(BLACK_BRUSH));
+                InflateRect(&sr, -1, -1);
+                FrameRect(mem, &sr, (HBRUSH)GetStockObject(WHITE_BRUSH));
+            }
+        }
+    }
+    BitBlt(dc, 0, 0, cr.right, cr.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    EndPaint(h, &ps);
+}
+
+LRESULT CALLBACK tiles_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    App& a = *g_app;
+    switch (msg) {
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT: paint_tiles(a, h); return 0;
+        case WM_SIZE: update_tile_scroll(a); return 0;
+        case WM_LBUTTONDOWN:
+        case WM_MOUSEMOVE: {
+            if (a.map->current() < 0) return 0;
+            const TileGeo g = tile_geo(a, h);
+            const int cx = GET_X_LPARAM(lp) / g.cell, cy = (GET_Y_LPARAM(lp) + a.tscroll_y) / g.cell;
+            const int t = cy * g.cols + cx;
+            if (cx >= g.cols || t < 0 || t >= a.map->tile_count()) return 0;
+            if (msg == WM_LBUTTONDOWN) {
+                a.map_tile = t;
+                sync_map_controls(a);
+            } else {
+                SendMessage(a.status, SB_SETTEXT, 0, (LPARAM)(L"Kachel " + std::to_wstring(t)).c_str());
+            }
+            return 0;
+        }
+        case WM_MOUSEWHEEL:
+            a.tscroll_y -= GET_WHEEL_DELTA_WPARAM(wp) / 2;
+            update_tile_scroll(a);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        case WM_VSCROLL: {
+            SCROLLINFO si{sizeof si, SIF_ALL};
+            GetScrollInfo(h, SB_VERT, &si);
+            int pos = si.nPos;
+            switch (LOWORD(wp)) {
+                case SB_LINEUP: pos -= a.px(36); break;
+                case SB_LINEDOWN: pos += a.px(36); break;
+                case SB_PAGEUP: pos -= int(si.nPage); break;
+                case SB_PAGEDOWN: pos += int(si.nPage); break;
+                case SB_THUMBTRACK: pos = si.nTrackPos; break;
+                default: break;
+            }
+            a.tscroll_y = pos;
+            update_tile_scroll(a);
+            InvalidateRect(h, nullptr, FALSE);
+            return 0;
+        }
+        default: break;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+void show_map(App& a, bool on) {
+    for (HWND w : {a.mu.view, a.mu.tiles, a.mu.mirror, a.mu.lbl}) ShowWindow(w, on ? SW_SHOW : SW_HIDE);
+}
+
+void layout_map(App& a, int x, int y, int w, int h, int rx, int rw) {
+    if (!a.mu.view) return;
+    MoveWindow(a.mu.view, x, y, w, h, TRUE);
+    const int m = a.px(10);
+    MoveWindow(a.mu.lbl, rx + m, y + m + a.px(3), rw - 2 * m - a.px(110), a.px(22), TRUE);
+    MoveWindow(a.mu.mirror, rx + rw - m - a.px(104), y + m, a.px(104), a.px(24), TRUE);
+    MoveWindow(a.mu.tiles, rx + a.px(4), y + m + a.px(34), rw - a.px(8), std::max(a.px(60), h - m - a.px(40)), TRUE);
+    update_map_scroll(a);
+    update_tile_scroll(a);
+}
+
+// Opens a map; the old one has been confirmed by the caller
+void open_map(App& a, int number) {
+    if (a.map->load(number)) {
+        a.mscroll_x = a.mscroll_y = 0;
+        a.map_zoom = 1;
+        update_map_scroll(a);
+        update_tile_scroll(a);
+    }
+    InvalidateRect(a.mu.view, nullptr, FALSE);
+    InvalidateRect(a.mu.tiles, nullptr, FALSE);
+}
+
 // ------------------------------------------------------------------------------------------ palette editor
 
 struct GridGeo {
@@ -1489,7 +1913,8 @@ void command(App& a, UINT id) {
     PixelEditor& e = *a.ed;
     switch (id) {
         case ID_FILE_SAVE:
-            if (team_tab(a)) team_save(a);
+            if (map_tab(a)) a.map->save();
+            else if (team_tab(a)) team_save(a);
             else if (pal_tab(a)) a.pal->save();
             else e.save();
             break;
@@ -1501,18 +1926,22 @@ void command(App& a, UINT id) {
         }
         case ID_FILE_EXIT: SendMessage(a.main, WM_CLOSE, 0, 0); return;
         case ID_EDIT_UNDO:
-            if (team_tab(a)) { a.team->revert(); fill_list(a); select_in_list(a, a.team_sel); load_team_controls(a); }  // teams: discard all changes
+            if (map_tab(a)) a.map->undo();
+            else if (team_tab(a)) { a.team->revert(); fill_list(a); select_in_list(a, a.team_sel); load_team_controls(a); }  // teams: discard all changes
             else if (pal_tab(a)) { a.pal->revert(); sync_sliders(a); }  // palettes: discard all changes
             else e.undo();
             break;
-        case ID_EDIT_REDO: e.redo(); break;
+        case ID_EDIT_REDO:
+            if (map_tab(a)) a.map->redo();
+            else e.redo();
+            break;
         case ID_TOOL_PENCIL: case ID_TOOL_LINE: case ID_TOOL_RECT: case ID_TOOL_FILLRECT: case ID_TOOL_FILL: case ID_TOOL_PICKER:
             e.set_tool(PixelEditor::Tool(id - ID_TOOL_PENCIL));
             break;
         case ID_VIEW_GRID: a.grid = !a.grid; InvalidateRect(a.canvas, nullptr, FALSE); break;
         case ID_VIEW_FIT: fit_zoom(a); InvalidateRect(a.canvas, nullptr, FALSE); break;
-        case ID_VIEW_ZOOMIN: set_zoom(a, a.zoom + 1); return;
-        case ID_VIEW_ZOOMOUT: set_zoom(a, a.zoom - 1); return;
+        case ID_VIEW_ZOOMIN: if (map_tab(a)) set_map_zoom(a, a.map_zoom + 1); else set_zoom(a, a.zoom + 1); return;
+        case ID_VIEW_ZOOMOUT: if (map_tab(a)) set_map_zoom(a, a.map_zoom - 1); else set_zoom(a, a.zoom - 1); return;
         case ID_HELP_ABOUT:
             MessageBoxW(a.main, L"OpenEM Editor\nBilder des Eishockey Manager (1993) bearbeiten.\n\nTeil von OpenEM (GPL-3.0).", L"Info", MB_OK | MB_ICONINFORMATION);
             break;
@@ -1543,8 +1972,8 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessage(a.psel, CB_SETITEMDATA, WPARAM(i), n);
             }
             a.tab = CreateWindowExW(0, WC_TABCONTROLW, nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FIXEDWIDTH, 0, 0, 0, 0, h, (HMENU)IDC_TAB, a.inst, nullptr);
-            const wchar_t* tabs[] = {L"Bilder", L"Torszenen", L"Paletten", L"Mannschaften"};
-            for (int i = 0; i < 4; i++) {
+            const wchar_t* tabs[] = {L"Bilder", L"Torszenen", L"Paletten", L"Mannschaften", L"Hallenkarten"};
+            for (int i = 0; i < 5; i++) {
                 TCITEMW ti{TCIF_TEXT};
                 ti.pszText = const_cast<wchar_t*>(tabs[i]);
                 TabCtrl_InsertItem(a.tab, i, &ti);
@@ -1561,6 +1990,12 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             }
             for (HWND c : {a.toolbar, a.status, a.list, a.tab, a.pinfo, a.psel, a.tlabel[0], a.tlabel[1], a.tlabel[2]}) SendMessage(c, WM_SETFONT, (WPARAM)a.font, TRUE);
             create_team_controls(a);
+            a.mu.view = CreateWindowExW(WS_EX_CLIENTEDGE, kMapClass, nullptr, WS_CHILD | WS_HSCROLL | WS_VSCROLL, 0, 0, 0, 0, h, nullptr, a.inst, nullptr);
+            a.mu.tiles = CreateWindowExW(WS_EX_CLIENTEDGE, kTilesClass, nullptr, WS_CHILD | WS_VSCROLL, 0, 0, 0, 0, h, nullptr, a.inst, nullptr);
+            a.mu.mirror = CreateWindowExW(0, L"BUTTON", L"Gespiegelt", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0, h, (HMENU)IDC_MIRROR, a.inst, nullptr);
+            a.mu.lbl = CreateWindowExW(0, L"STATIC", L"", WS_CHILD, 0, 0, 0, 0, h, nullptr, a.inst, nullptr);
+            SendMessage(a.mu.mirror, WM_SETFONT, (WPARAM)a.font, TRUE);
+            SendMessage(a.mu.lbl, WM_SETFONT, (WPARAM)a.font, TRUE);
             init_list(a);
             return 0;
         }
@@ -1592,6 +2027,13 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (code == BN_CLICKED && !a.loading_team) {
                     a.team->set_foreign(a.team_sel, int(id) - IDC_FOR0, SendMessage(a.tu.foreign[id - IDC_FOR0], BM_GETCHECK, 0, 0) == BST_CHECKED);
                     refresh(a);
+                }
+                return 0;
+            }
+            if (id == IDC_MIRROR) {
+                if (code == BN_CLICKED) {
+                    a.map_mirror = SendMessage(a.mu.mirror, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    sync_map_controls(a);
                 }
                 return 0;
             }
@@ -1640,7 +2082,7 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 if (HWND(lp) == a.tu.jer[i]) team_jersey_changed(a);
             }
             return 0;
-        case WM_SETFOCUS: SetFocus(pal_tab(a) ? a.pgrid : a.canvas); return 0;
+        case WM_SETFOCUS: SetFocus(map_tab(a) ? a.mu.view : pal_tab(a) ? a.pgrid : a.canvas); return 0;
         case WM_CLOSE:
             if (confirm_discard(a)) DestroyWindow(h);
             return 0;
@@ -1735,6 +2177,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
         app.ed = std::make_unique<PixelEditor>(data);
         app.pal = std::make_unique<PaletteDoc>(data);
         app.crest_ed = std::make_unique<PixelEditor>(data);
+        app.map = std::make_unique<MapDoc>(data);
         app.team = std::make_unique<TeamDoc>(data);
         app.team->load();
         app.data = data;
@@ -1765,6 +2208,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     RegisterClassExW(&wc);
     wc.lpszClassName = kCrestClass;
     wc.lpfnWndProc = crest_proc;
+    RegisterClassExW(&wc);
+    wc.lpszClassName = kMapClass;
+    wc.lpfnWndProc = map_proc;
+    RegisterClassExW(&wc);
+    wc.lpszClassName = kTilesClass;
+    wc.lpfnWndProc = tiles_proc;
     RegisterClassExW(&wc);
 
     HWND hwnd = CreateWindowExW(0, kMainClass, L"OpenEM Editor", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr, nullptr, inst, nullptr);

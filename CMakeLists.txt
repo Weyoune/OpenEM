@@ -620,7 +620,7 @@ if(TARGET em_realcode)
     endforeach()
     # second chain from START.HOK (Kölner EC, 1. Bundesliga): the Mannheim chain ends in the Oberliga, where the DOS
     # pair-table error breaks every match day (DEVIATIONS.md 39)
-    foreach(periodk "0;1;7;1000" "1;2;5;1001" "2;3;2;1002" "4;5;4;1004" "5;6;7;1005" "6;7;3;1006" "7;8;7;1007" "8;9;2;1008" "11;12;4;1011" "12;13;3;1012" "13;14;11;1013" "14;15;3;1014" "15;16;4;1015" "16;17;14;1016" "17;18;5;1017" "18;19;5;1018" "19;20;2;1019")
+    foreach(periodk "0;1;7;1000" "1;2;5;1001" "2;3;2;1002" "4;5;4;1004" "5;6;7;1005" "6;7;3;1006" "7;8;7;1007" "8;9;2;1008" "11;12;4;1011" "12;13;3;1012" "13;14;11;1013" "14;15;3;1014" "15;16;4;1015" "16;17;14;1016" "17;18;5;1017" "18;19;5;1018" "19;20;2;1019" "21;22;3;1021")
         list(GET periodk 0 from)
         list(GET periodk 1 to)
         list(GET periodk 2 days)
@@ -647,7 +647,7 @@ endif()
 # em_editor: asset editor for the original data (pixel editor for KB images); ships with the OpenEM release.
 # Windows only for now: native Win32 front end (menu, toolbar, list view, status bar, system dialogs).
 # The document logic (em_editor_lib) has no UI dependency and is built and tested everywhere.
-add_library(em_editor_lib STATIC src/editor/pixel_editor.cpp src/editor/palette_doc.cpp src/editor/team_doc.cpp)
+add_library(em_editor_lib STATIC src/editor/pixel_editor.cpp src/editor/palette_doc.cpp src/editor/team_doc.cpp src/editor/map_doc.cpp)
 target_link_libraries(em_editor_lib PUBLIC em_formats)
 add_executable(em_editor_tests tests/editor_tests.cpp)
 target_link_libraries(em_editor_tests PRIVATE em_editor_lib)

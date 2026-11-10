@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "editor/palette_doc.hpp"
+#include "editor/map_doc.hpp"
 #include "editor/pixel_editor.hpp"
 #include "editor/team_doc.hpp"
 #include "formats/tore.hpp"
@@ -29,7 +30,7 @@ int main(int argc, char** argv) {
     const fs::path src = argv[1], tmp = fs::temp_directory_path() / "openem_editor_test";
     fs::remove_all(tmp);
     fs::create_directories(tmp / "KB");
-    for (const char* n : {"21.vga", "80.vga", "5.vga", "231.vga", "233.vga", "235.vga", "246.vga", "247.vga", "23.vga", "8.vga", "14.vga"}) fs::copy_file(src / "KB" / n, tmp / "KB" / n);
+    for (const char* n : {"21.vga", "80.vga", "5.vga", "231.vga", "233.vga", "235.vga", "246.vga", "247.vga", "23.vga", "8.vga", "14.vga", "232.vga", "236.vga", "242.vga"}) fs::copy_file(src / "KB" / n, tmp / "KB" / n);
 
     PixelEditor ed(tmp);
     CHECK(ed.load(80));
@@ -141,6 +142,46 @@ int main(int argc, char** argv) {
         CHECK(ed.load(80) && ed.palette_source() == 21);
         CHECK(ed.load(14) && ed.has_own_palette() && !ed.set_palette_source(21));
         CHECK(ed.load(231) && ed.palette_source() == 247);
+    }
+
+    // hall map editor
+    {
+        MapDoc md(tmp);
+        CHECK(md.load(236) && md.current() == 236 && md.tile_count() == 500);
+        const Image ref = decode_rink(read_file(tmp / "KB" / "231.vga"), read_file(tmp / "KB" / "232.vga"), read_file(tmp / "KB" / "236.vga"));
+        CHECK(md.rink().width == ref.width && md.rink().height == ref.height && md.rink().pixels == ref.pixels);
+        const Bytes before = read_file(tmp / "KB" / "236.vga");
+
+        md.stroke_begin();
+        md.set(3, 5, 7, false);
+        md.set(4, 5, 7, true);
+        md.stroke_end();
+        CHECK(md.dirty() && md.tile(3, 5) == 7 && !md.mirrored(3, 5) && md.mirrored(4, 5));
+        CHECK(md.rink().pixels[size_t(5 * 16) * md.rink().width + size_t(3 * 16)] == md.tile_image(7).pixels[0]);
+        // mirrored cell shows the tile flipped top to bottom
+        CHECK(md.rink().pixels[size_t(5 * 16) * md.rink().width + size_t(4 * 16)] == md.tile_image(7).pixels[size_t(15) * 16]);
+        md.undo();
+        CHECK(md.rink().pixels == ref.pixels && md.can_redo());
+        md.redo();
+        CHECK(md.tile(3, 5) == 7);
+
+        md.fill(0, 0, 9, false);  // the whole connected region of the corner cell
+        CHECK(md.tile(0, 0) == 9);
+        md.undo();
+        CHECK(md.save() && !md.dirty() && fs::exists(tmp / "KB" / "236.vga.bak"));
+        const Bytes after = read_file(tmp / "KB" / "236.vga");
+        CHECK(after.size() == before.size());
+        size_t diff = 0;
+        for (size_t i = 0; i < after.size(); i++) diff += after[i] != before[i];
+        CHECK(diff > 0 && diff <= 4);  // two cells of two bytes
+        MapDoc re(tmp);
+        CHECK(re.load(236) && re.tile(3, 5) == 7 && re.mirrored(4, 5));
+        CHECK(re.load(242) && re.current() == 242);
+        md.stroke_begin();
+        md.stroke_end();  // empty stroke leaves no undo step
+        const bool had = md.can_undo();
+        md.undo();
+        (void)had;
     }
 
     // team editor
