@@ -72,6 +72,8 @@ std::string native_message_text(BorlandRandom& rng, const MessageDate& date, Mes
 std::string native_message_text(int days_back, const MessageDate& date, MessageKind kind, const std::vector<MessageArg>& args);
 // ovr036:0180: delete the entry whose 1-based index is stored in `handle`, then zero the handle.
 void native_delete_message(Bytes& state, uint8_t& handle);
+// A message shown at once and deleted again (season review): its text stays in the first free entry (flag 0).
+void native_flash_message(Bytes& state, const std::string& text);
 // ovr036:0037: newest first; player back references (+0x1E) follow the moved entries.
 void native_sort_messages(Bytes& state);
 // ovr038:3067..30FB: general entries lose one display step; at zero they are deleted.

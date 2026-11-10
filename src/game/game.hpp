@@ -152,6 +152,9 @@ public:
     void set_game_rng_state(uint32_t s) { rng_ = GameRandom(s); rng_.borland = &brng_; }  // differential tests
     // The name database KB/23.vga; without it the season change keeps the player names.
     void set_database(const Database& db) { db_ = db; }
+    // The three cursors of the annual distribution live only in the original's process (not in a HOK); the REAL-CODE
+    // harness sets the values its recordings start with.
+    void set_distribution_cursors(const std::array<uint8_t, 3>& c) { annual_distribution_cursors_ = c; }
     // The game as a savegame (HOK): date and matchdays (the next day is the one to play), tables,
     // next pairings, cup draw, manager 0's money, attendance and image, squad and player records.
     // Includes sponsor offers, advertising contracts, accrued interest, European cup and WM

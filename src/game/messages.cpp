@@ -91,6 +91,19 @@ int native_add_message(Bytes& state, BorlandRandom& rng, const MessageDate& date
     return slot + 1;
 }
 
+void native_flash_message(Bytes& state, const std::string& text) {
+    check(state);
+    // ovr026:07F7..09F3: the message goes into the first free entry, is shown at once and deleted again; the text stays
+    for (int i = 0; i < kMessageSlots; i++) {
+        uint8_t* e = entry(state, i);
+        if (e[0] != 0) continue;
+        std::fill_n(e + 3, kMessageText, uint8_t(0));
+        std::copy_n(text.begin(), std::min(text.size(), size_t(kMessageText)), e + 3);
+        e[1] = e[2] = 0;
+        return;
+    }
+}
+
 void native_delete_message(Bytes& state, uint8_t& handle) {
     check(state);
     if (handle > 0 && handle < 25) {

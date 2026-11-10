@@ -25,6 +25,9 @@ constexpr size_t kManagerBlock = manager_block(0);  // manager 0, see finances.h
 // the match set-up (prepare_match_energy: min(90, 100 - load / 8)), not a flat 90 (REAL-CODE Köln periods 14 and 15:
 // load 113 -> 86, 98 -> 88; the Mannheim squads had loads up to 80 there). A cup day without the own club rests to a flat 90
 // (Köln periods 5 and 12 break with the formula there).
+void debug_pclub(const Bytes& s, const char* tag) {  // EM_DEBUG_PCLUB=<player id>: its club byte at points of the season change
+    if (const char* pc = std::getenv("EM_DEBUG_PCLUB")) std::fprintf(stderr, "pclub %s %d\n", tag, s.at(0x4FC6 + size_t(std::atoi(pc) - 1) * 33 + 0x1D));
+}
 uint8_t rested_fitness(uint8_t load) { return std::getenv("EM_OLD_RESTFIT") ? uint8_t(90) : uint8_t(std::min(90, 100 - load / 8)); }
 constexpr size_t kSeries = 0x9988, kSeriesRecord = 0x9EC8, kSpecialTeams = 0x0F44;
 constexpr int kSeriesTeams = 64;  // DS:B57B .. DS:BAB7
@@ -2871,6 +2874,21 @@ void Game::play_wm_day() {
     if (wm_round_ >= 8) return;
     if (wm_round_ == 0) begin_world_championship();
     if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: WM round %d, national coach %d\n", wm_round_, national_coach_);
+    // a WM day rests the squads of the managers who are not national coach like a EuroCup day without them: fitness from
+    // the load; the squad routine of the WM branch trains afterwards (REAL-CODE Köln period 37: after the last WM day the
+    // fitness stands one load step higher than the formula of the final load)
+    if (!std::getenv("EM_OLD_WMREST"))
+        for (int m = 0; m < managers_; m++) {
+            if (m == national_coach_) continue;
+            auto& squad = save_.squad_of(m);
+            for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                const size_t at = squad_block(m) + slot * kSquadRecord;
+                if (save_.state.at(at + 0x0F) == 0) continue;
+                const uint8_t f = rested_fitness(save_.state.at(at + 0x13));
+                save_.state.at(at + 0x1B) = f;
+                squad[slot].fitness = f;
+            }
+        }
     // ovr038:3649: without a human national coach (manager 5 club 0xFD) the first WM day rolls the strengths of the own
     // nation (DS:06AC): per kind skill1 rand(84,94), skill2 rand(79,89), form rand(45,55); the manager index DS:A70E/A70D
     // becomes 5 (REAL-CODE period 30)
@@ -3250,6 +3268,7 @@ void Game::update_records(int home, int away, int home_goals, int away_goals) {
 }
 
 void Game::swap_teams(int a, int b) {
+    if (std::getenv("EM_DEBUG_SWAP")) std::fprintf(stderr, "swap %d %d\n", a, b);
     HokTeam& ta = save_.teams[size_t(a)];
     HokTeam& tb = save_.teams[size_t(b)];
     // the raw 61-byte records change places too (unparsed bytes such as the manager slot +0x16
@@ -3282,13 +3301,18 @@ void Game::swap_teams(int a, int b) {
         std::swap_ranges(sa, sa + 0x15, sb);
     }
     for (HokPlayer& p : save_.players) {
-        if (p.team == a)
-            p.team = b;
-        else if (p.team == b)
-            p.team = a;
+        // ovr030:0C29 (sub_43AB9) reads and writes the native byte +0x1D: other routines (the annual redistribution) change
+        // it directly, so the decoded team may be stale (REAL-CODE Köln period 37: player 13 ended in the wrong club)
+        uint8_t& native = save_.state.at(size_t(p.raw - save_.state.data()) + 0x1D);
+        int team = std::getenv("EM_OLD_SWAPTEAM") ? p.team : (native == 255 ? -1 : native);
+        if (team == a)
+            team = b;
+        else if (team == b)
+            team = a;
+        p.team = team;
         // Contract renewal and player redistribution read the native byte
         // before the next export, just as ovl06_0c29 updates it immediately.
-        save_.state.at(size_t(p.raw - save_.state.data()) + 0x1D) = uint8_t(p.team);
+        native = uint8_t(team);
     }
     if (a >= kFirstNationalTeam && a < kFirstNationalTeam + 12 && b >= kFirstNationalTeam && b < kFirstNationalTeam + 12) {
         // sub_4382D also swaps the u32 per nation at DS:026C (state 0x658, REAL-CODE period 30)
@@ -3681,7 +3705,8 @@ void Game::new_season() {
         const auto review=annual_owned_player(save_,uint8_t(id),0,annual_draw);
         if(review.status==AnnualPlayerStatus::Retired||review.status==AnnualPlayerStatus::Disabled){
             // ovr026:07F7..09F3: shown at once in the message field and deleted again (src/game/messages.cpp)
-            const GameDate d=date_of_season_day(day_,save_.year);
+            // the review is dated with the next day (REAL-CODE Köln period 37: "27. April 1994" on season day 216 + summer)
+            const GameDate d=date_of_season_day(std::getenv("EM_OLD_FLASHMSG")?day_:day_+1,save_.year);
             const MessageDate md{d.day,d.month,d.year,day_+1};
             if(review.status==AnnualPlayerStatus::Retired)
                 immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::Retirement,{MessageArg::str(native_name),MessageArg::num(age_before)}));
@@ -3690,6 +3715,8 @@ void Game::new_season() {
             else
                 immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::TwoLines,{MessageArg::str(native_name+" ist invalide."),
                     MessageArg::str("Ein Fall f]r die Versicherung: Sie zahlt Ihnen "+std::to_string(review.insurance_payment/3)+" DM")}));
+            // the text stays in the first free message entry (REAL-CODE Köln period 37: LUPZIG ist Sportinvalide)
+            if(!std::getenv("EM_OLD_FLASHMSG"))native_flash_message(save_.state,"%%%"+immediate_messages_.back());  // "%%%": the message field's marker
             mgr_[0].budget.balance+=review.insurance_payment;
             if(review.insurance_payment)
                 log_.push_back(pl.name+" disability insurance payment "+std::to_string(review.insurance_payment/3)+" DM");
@@ -3730,9 +3757,11 @@ void Game::new_season() {
     // the season change sorts the messages once before the contract talks (REAL-CODE period 92: the injury of 13.04. stands
     // first, the two contract wishes behind it are deleted by the talks; the exact call site in ovr026 is not located)
     if (!std::getenv("EM_OLD_WMEXIT")) native_sort_messages(save_.state);
+    debug_pclub(save_.state, "before-expire");
     expire_contracts();
     redistribute_players(0);
     redistribute_players(1);
+    debug_pclub(save_.state, "redistribute");
     mgr_[0].budget.league = team_class(finance_, mgr_[0].team);
     mgr_[0].budget.team = mgr_[0].team;
     refresh_budget_roster();
@@ -3901,6 +3930,7 @@ void Game::new_season() {
     day_ = 0;
     // REAL-CODE period 30: after the distribution the original computes the club image and renews the sponsor offers,
     // then books September 10 like a playable evening (refusal reset, share market, finances, image).
+    debug_pclub(save_.state, "after-distribution");
     mgr_[0].image = current_club_image();
     update_sponsors();
     // The first playable menu already includes September 10's booking.

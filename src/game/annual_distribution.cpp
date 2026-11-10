@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/annual_distribution.hpp"
 #include <bit>
+#include <cstdio>
 #include <cstdlib>
 
 namespace em {
@@ -75,6 +76,7 @@ void annual_random_club_changes(Bytes& state,const ContractRandomDraw& draw){
             break;
         }
         const int target=annual_cpu_target(state,uint8_t(id),draw);
+        if(const char* pc=std::getenv("EM_DEBUG_PCLUB");pc&&std::atoi(pc)==id)std::fprintf(stderr,"pclub random-change %d\n",target);
         state.at(player_at(id)+29)=uint8_t(target);
     }
 }
@@ -99,6 +101,7 @@ void annual_rebalance_clubs(Bytes& state,std::array<int,4> need,DistributionCurs
                     do{index=draw(0,int(pool[donor].size())-1);if(pool[donor][size_t(index)]!=255)break;}while(retries++<1000);
                     const uint8_t id=pool[donor][size_t(index)];pool[donor][size_t(index)]=255;
                     if(id<180)state.at(player_at(id)+29)=uint8_t(annual_cyclic_target(state,int(dest),cursors,draw));
+                    if(const char* pc=std::getenv("EM_DEBUG_PCLUB");pc&&std::atoi(pc)==id)std::fprintf(stderr,"pclub rebalance %d\n",state.at(player_at(id)+29));
                     --remaining[donor];--need[dest];
                 }
             }
