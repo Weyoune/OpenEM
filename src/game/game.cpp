@@ -2023,6 +2023,10 @@ void Game::play_euro_day() {
             auto& h = save_.teams[size_t(home)]; auto& a = save_.teams[size_t(away)];
             prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
             setup_computer_team(h, a); setup_computer_team(a, h);
+            // the set-up 162c:02A5 (sub_16565) writes the record itself: +0x32 = 5 skaters, +0x33 = 0, the running penalties
+            // of the club's last league game end here (REAL-CODE Köln period 51: team 1 at its EuroCup game against 90)
+            if (!std::getenv("EM_OLD_EUROPEN"))
+                for (HokTeam* t : {&h, &a}) { t->penalty_code = 0; t->skaters = 5; }
             res = quick_competition_match(h, a, home < 64, away < 64, rng_, 0, false);
         }
         table.book(home, away, res);
@@ -2273,10 +2277,23 @@ void Game::play_playoff_day(bool setup_only) {
         open_today.push_back(i);
         human_today |= manager_team(s.higher) || manager_team(s.lower);
     }
+    // a manager's club in today's relegation games makes the day live as well (REAL-CODE Köln period 103: Köln in the
+    // promotion group, gate rand(641,825).. of its home game and the minute loop of all pairs)
+    if ((day % 5 == 0 || day % 5 == 2) && !std::getenv("EM_OLD_RELLIVE"))
+        for (const GroupTable& g : relegation_)
+            for (int team : g.teams) human_today |= manager_team(team);
     if (!human_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28),
         // without a sort (REAL-CODE period 91: no swap on any of the play-off days without the human club)
         if (std::getenv("EM_OLD_POSORT")) native_sort_messages(save_.state);
         native_message_step(save_.state);
+        // and sets the match load of the human squads like the cup day without them (REAL-CODE Köln period 103: write watch on
+        // DS:974B, 7 -> 8 on the second play-off day without Köln)
+        if (!std::getenv("EM_OLD_POLOAD"))
+            for (int m = 0; m < managers_; m++) {
+                const ManagerState& mg = mgr_[size_t(m)];
+                if (mg.team >= 0 && mg.team < kHokTeams)
+                    save_.state.at(manager_block(m) + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mg.team)], mg.squad));
+            }
     }
     std::vector<std::array<int, 2>> grid(series_.size(), {0, 0});
     auto quick_playoff = [&](size_t index, int home, int away) {
@@ -2334,14 +2351,20 @@ void Game::play_playoff_day(bool setup_only) {
             for (size_t g = 0; g < 2; g++)
                 for (const Pairing& p : pairs) draw.push_back({relegation_[g].teams[size_t(p.home)], relegation_[g].teams[size_t(p.away)]});
         }
-        for (const HokPairing& p : draw)
+        // a relegation game passes the class of both clubs and their places in the league tables (REAL-CODE Köln period 103:
+        // Köln champion of the second division, the extension draws with y = 110)
+        for (size_t pi = 0; pi < draw.size(); pi++)
             for (int m = 0; m < managers_; m++) {
+                const HokPairing& p = draw[pi];
                 ManagerState& mg = mgr_[size_t(m)];
                 if (p.home != mg.team && p.away != mg.team) continue;
                 if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;
                 if (p.home == mg.team) {
                     g_draw_scope = "gate";
-                    home_game(p.away, 1, 0, 0, position(p.home), position(p.away), false, m);
+                    if (pi >= knockout_pairs && !std::getenv("EM_OLD_RELGATE"))
+                        home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
+                    else
+                        home_game(p.away, 1, 0, 0, position(p.home), position(p.away), false, m);
                     gate_before[size_t(m)] = true;
                 }
                 manager_day(gate_before[size_t(m)], m);
@@ -2483,7 +2506,7 @@ void Game::play_playoff_day(bool setup_only) {
                         book_match_condition(st, own_side, m);
                         book_special_teams(st, own_side, m);
                         book_club_match(own_side == 0 ? r.home : r.away,
-                                        own_side == 0 ? r.away : r.home, 0, false, 0, true, m);
+                                        own_side == 0 ? r.away : r.home, 0, false, r.shootout_goals[own_side], !live_round, m);
                         mgr_[size_t(m)].played = true;
                     }
                     record_head_to_head(home, away, r.home, r.away, m);
@@ -2491,7 +2514,7 @@ void Game::play_playoff_day(bool setup_only) {
                     std::snprintf(line, sizeof line, "relegation round %d: %s - %s %d:%d", round + 1,
                                   save_.teams[size_t(home)].name.c_str(), save_.teams[size_t(away)].name.c_str(), r.home, r.away);
                     log_.push_back(line);
-                    if (!forfeited && own_side == 0) home_game(away, 1, team_class(finance_, home), team_class(finance_, away), 5, 5, false, m);
+                    if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, 1, team_class(finance_, home), team_class(finance_, away), 5, 5, false, m);
                 }
             }
             t.finish_round();
