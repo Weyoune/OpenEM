@@ -184,6 +184,7 @@ int main(int argc, char** argv) {
         re2.revert();
         CHECK(!re2.dirty() && re2.duplicate_names().size() == dups);
     }
+// European clubs (teams 64..149): name, jersey and strengths        TeamDoc eu(tmp);        CHECK(eu.load() && eu.club_name(64) == "KLAGENFURTER AC" && !TeamDoc::has_players(64) && TeamDoc::editable(149));        CHECK(eu.set_club_name(64, "hc test") && eu.club_name(64) == "HC TEST");        CHECK(!eu.set_club_name(64, "EIN VIEL ZU LANGER EUROPAEISCHER NAME"));        eu.set_strength(64, 0, 55);        eu.set_jersey(64, 1, 2, 3);        CHECK(eu.save());        TeamDoc eu2(tmp);        CHECK(eu2.load() && eu2.club_name(64) == "HC TEST" && eu2.club_name(65) == eu.club_name(65) && eu2.data(64).strength[0] == 55 && eu2.data(64).jersey == 0x0123);        eu2.swap_teams(64, 65);        CHECK(eu2.club_name(65) == "HC TEST" && eu2.data(65).strength[0] == 55);        eu2.swap_teams(0, 64);  // different groups: ignored        CHECK(eu2.club_name(64) != "EISBÄREN BERLIN");
 
     fs::remove_all(tmp);
     if (failures) {

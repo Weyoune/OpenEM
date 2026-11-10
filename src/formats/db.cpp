@@ -79,6 +79,15 @@ Bytes encode_db(const Bytes& original, const Database& db) {
                 put_text(out, o + 1, kPlayerRecord - 1, nc.players[p].name, true);
         }
     }
+    if (db.europe_clubs.size() == old.europe_clubs.size()) {  // fixed table of 23-byte records: 22 characters + NUL
+        for (size_t i = 0; i < db.europe_clubs.size(); i++) {
+            if (db.europe_clubs[i] == old.europe_clubs[i]) continue;
+            if (db.europe_clubs[i].empty()) throw FormatError("DB: European club name must not be empty");
+            const std::string iso = utf8_to_iso646de(db.europe_clubs[i]);
+            if (iso.size() > 22) throw FormatError("DB: European club name too long: " + db.europe_clubs[i]);
+            put_text(out, kEurope + i * kEuropeRecord, kEuropeRecord, db.europe_clubs[i], false);
+        }
+    }
     return out;
 }
 

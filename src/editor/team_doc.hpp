@@ -16,6 +16,7 @@ namespace em::editor {
 class TeamDoc {
 public:
     static constexpr int kTeams = 64, kSquad = 25;
+    static constexpr int kEuropeFirst = 64, kAllTeams = 150;  // teams 64..149: European club names, with jersey and strengths only
     static constexpr int kNameLimit = 19, kClubLimit = 22;
     explicit TeamDoc(const std::filesystem::path& data) : file_(data / "KB" / "23.vga") {}
 
@@ -27,7 +28,8 @@ public:
     const std::string& status() const { return status_; }
 
     // Teams 48..51 are the empty LEER1..LEER4 entries; the editor does not offer them
-    static bool editable(int team) { return team >= 0 && team < kTeams && (team < 48 || team > 51); }
+    static bool editable(int team) { return team >= 0 && team < kAllTeams && (team < 48 || team > 51); }
+    static bool has_players(int team) { return team >= 0 && team < kTeams; }
 
     const std::string& club_name(int t) const { return clubs_[size_t(t)]; }
     const std::string& player_name(int t, int p) const { return names_[size_t(t)][size_t(p)]; }
@@ -55,7 +57,7 @@ private:
     Bytes raw_;
     Database db_;
     std::vector<TeamData> td_;
-    std::array<std::string, kTeams> clubs_;
+    std::array<std::string, kAllTeams> clubs_;
     std::array<std::array<std::string, kSquad>, kTeams> names_;
     std::array<std::array<uint8_t, kSquad>, kTeams> foreign_{};
     bool dirty_ = false;

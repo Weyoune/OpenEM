@@ -34,6 +34,7 @@ bool TeamDoc::load() {
         raw_ = read_file(file_);
         db_ = decode_db(raw_);
         td_ = decode_team_data(raw_);
+        for (int t = kEuropeFirst; t < kAllTeams; t++) clubs_[size_t(t)] = db_.europe_clubs.at(size_t(t - kEuropeFirst));
         for (int t = 0; t < kTeams; t++) {
             clubs_[size_t(t)] = db_.clubs[size_t(t)].name;
             for (int p = 0; p < kSquad; p++) {
@@ -60,6 +61,7 @@ bool TeamDoc::save() {
             db.clubs[size_t(t)].name = clubs_[size_t(t)];
             for (int p = 0; p < kSquad; p++) db.clubs[size_t(t)].players[size_t(p)].name = names_[size_t(t)][size_t(p)];
         }
+        for (int t = kEuropeFirst; t < kAllTeams; t++) db.europe_clubs[size_t(t - kEuropeFirst)] = clubs_[size_t(t)];
         Bytes out = encode_db(raw_, db);
         out = encode_team_data(out, td_);
         for (int t = 0; t < kTeams; t++)
@@ -103,6 +105,7 @@ bool TeamDoc::set_club_name(int t, const std::string& utf8) {
 }
 
 bool TeamDoc::set_player_name(int t, int p, const std::string& utf8) {
+    if (!has_players(t)) return false;
     const std::string s = upper(utf8);
     try {
         if (chars(s) > size_t(kNameLimit)) throw FormatError("Spielername: höchstens 19 Zeichen");
@@ -123,6 +126,7 @@ bool TeamDoc::set_player_name(int t, int p, const std::string& utf8) {
 }
 
 void TeamDoc::set_foreign(int t, int p, bool on) {
+    if (!has_players(t)) return;
     uint8_t& f = foreign_[size_t(t)][size_t(p)];
     if ((f != 0) == on) return;
     f = on ? 1 : 0;
@@ -159,7 +163,13 @@ void TeamDoc::set_strength(int t, int k, int value) {
 }
 
 void TeamDoc::swap_teams(int a, int b) {
-    if (a == b || !editable(a) || !editable(b)) return;
+    if (a == b || !editable(a) || !editable(b) || has_players(a) != has_players(b)) return;
+    if (!has_players(a)) {  // European clubs: name, jersey and strengths
+        std::swap(clubs_[size_t(a)], clubs_[size_t(b)]);
+        std::swap(td_[size_t(a)], td_[size_t(b)]);
+        touch();
+        return;
+    }
     std::swap(clubs_[size_t(a)], clubs_[size_t(b)]);
     std::swap(names_[size_t(a)], names_[size_t(b)]);
     std::swap(foreign_[size_t(a)], foreign_[size_t(b)]);

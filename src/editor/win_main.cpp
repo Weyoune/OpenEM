@@ -53,10 +53,11 @@ enum Cmd : UINT {
     ID_HELP_ABOUT = 140,
     IDC_TOOLBAR = 201, IDC_LIST, IDC_STATUS, IDC_TAB,
     IDC_TRACK_R = 210, IDC_TRACK_G, IDC_TRACK_B,
-    IDC_PALSEL = 400,
+    IDC_PALSEL = 400, IDC_CREST_PEN = 420, IDC_CREST_FILL, IDC_CREST_UNDO, IDC_CREST_SAVE,
     IDC_CLUB = 300, IDC_NAME0 = 310, IDC_FOR0 = 340, IDC_CREST = 370, IDC_PLACE, IDC_STR0 = 372, IDC_JER0 = 380, IDC_SWAP_BTN = 390, IDC_SWAP_COMBO,
 };
 
+const wchar_t kCrestClass[] = L"OpenEMEditorCrest";
 const wchar_t kMainClass[] = L"OpenEMEditorMain", kCanvasClass[] = L"OpenEMEditorCanvas", kPaletteClass[] = L"OpenEMEditorPalette", kPalGridClass[] = L"OpenEMEditorPalGrid";
 
 std::wstring widen(const std::string& s) {
@@ -72,6 +73,7 @@ int floordiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 struct TeamUi {
     HWND club = nullptr, name[25] = {}, foreign[25] = {}, crest = nullptr, crest_ud = nullptr, place = nullptr, place_ud = nullptr;
     HWND str[3] = {}, str_ud[3] = {}, jer[3] = {}, jer_lbl[3] = {}, preview = nullptr, swap_combo = nullptr, swap_btn = nullptr;
+    HWND crest_view = nullptr, cr_pen = nullptr, cr_fill = nullptr, cr_undo = nullptr, cr_save = nullptr;
     HWND lbl_club = nullptr, lbl_crest = nullptr, lbl_place = nullptr, lbl_str[3] = {}, lbl_jersey = nullptr, lbl_swap = nullptr, lbl_players = nullptr;
     std::vector<HWND> all;  // every control of the page, for show/hide and fonts
 };
@@ -84,6 +86,7 @@ struct App {
     HFONT font = nullptr;
     UINT dpi = 96;
     std::unique_ptr<PixelEditor> ed;
+    std::unique_ptr<PixelEditor> crest_ed;  // the crest of the selected team (team page)
     std::unique_ptr<PaletteDoc> pal;
     int tab_index = 0;        // 0 Bilder, 1 Torszenen, 2 Paletten
     int pal_sel = 0;          // selected colour in the palette editor
@@ -166,7 +169,7 @@ void refresh(App& a) {
     PixelEditor& e = *a.ed;
     const bool tt = team_tab(a), pt = pal_tab(a) || tt;  // pt: a page without the pixel tools
     const int cur = tt ? 23 : pt ? a.pal->current() : e.current();
-    const bool dirty = tt ? a.team->dirty() : pt ? a.pal->dirty() : e.dirty();
+    const bool dirty = tt ? a.team->dirty() || a.crest_ed->dirty() : pt ? a.pal->dirty() : e.dirty();
     std::wstring title = cur < 0 ? L"OpenEM Editor" : L"KB" + std::to_wstring(cur) + (dirty ? L" *" : L"") + L" – OpenEM Editor";
     SetWindowTextW(a.main, title.c_str());
     // toolbar
@@ -209,12 +212,15 @@ void refresh(App& a) {
 }
 
 bool team_save(App& a);
+bool crest_confirm(App& a);
+void load_crest(App& a);
 void load_team_controls(App& a);
 void layout_team(App& a, int x, int y, int w, int h, int rx, int rw);
 void show_team(App& a, bool on);
 
 bool confirm_discard(App& a) {
     const bool pt = pal_tab(a), tt = team_tab(a);
+    if (tt && !crest_confirm(a)) return false;
     const bool dirty = tt ? a.team->dirty() : pt ? a.pal->dirty() : a.ed->dirty();
     if (!dirty) return true;
     const int cur = tt ? 23 : pt ? a.pal->current() : a.ed->current();
@@ -254,13 +260,22 @@ void select_in_list(App& a, int number) {
     a.selecting = false;
 }
 
+std::wstring team_label(const App& a, int t) {
+    return std::to_wstring(t < 64 ? t + 1 : t - 63) + L"  " + widen(a.team->club_name(t));
+}
+
+int team_group(int t) { return t < 12 ? 0 : t < 24 ? 1 : t < 36 ? 2 : t < 48 ? 3 : t < 64 ? 4 : 5; }
+
 void fill_list(App& a) {
     a.selecting = true;
     ListView_DeleteAllItems(a.list);
+    ListView_RemoveAllGroups(a.list);
+    ListView_EnableGroupView(a.list, team_tab(a));
     a.list_numbers.clear();
-    auto add = [&](int number, const std::wstring& label, const std::wstring& size) {
+    auto add = [&](int number, const std::wstring& label, const std::wstring& size, int group = -1) {
         const int i = int(a.list_numbers.size());
-        LVITEMW it{LVIF_TEXT};
+        LVITEMW it{LVIF_TEXT | (group >= 0 ? LVIF_GROUPID : 0u)};
+        it.iGroupId = group;
         it.iItem = i;
         it.pszText = const_cast<wchar_t*>(label.c_str());
         ListView_InsertItem(a.list, &it);
@@ -273,10 +288,18 @@ void fill_list(App& a) {
     hc.pszText = const_cast<wchar_t*>(team_tab(a) ? L"Platz" : L"Größe");
     ListView_SetColumn(a.list, 1, &hc);
     if (team_tab(a)) {
-        for (int t = 0; t < TeamDoc::kTeams; t++) {
+        const wchar_t* heads[] = {L"Liga 1 (Teams 1–12)", L"Liga 2 (Teams 13–24)", L"Liga 3 (Teams 25–36)", L"Weitere Vereine (Teams 37–48)",
+                                  L"Nationalmannschaften (Teams 53–64)", L"Europapokal-Vereine"};
+        for (int g = 0; g < 6; g++) {
+            LVGROUP lg{sizeof lg, LVGF_HEADER | LVGF_GROUPID};
+            lg.pszHeader = const_cast<wchar_t*>(heads[g]);
+            lg.iGroupId = g;
+            ListView_InsertGroup(a.list, -1, &lg);
+        }
+        for (int t = 0; t < TeamDoc::kAllTeams; t++) {
             if (!TeamDoc::editable(t)) continue;
             const int place = a.team->data(t).place;
-            add(t, std::to_wstring(t + 1) + L"  " + widen(a.team->club_name(t)), place >= 0 ? std::to_wstring(place) : L"–");
+            add(t, team_label(a, t), place >= 0 ? std::to_wstring(place) : L"–", team_group(t));
         }
     } else if (pal_tab(a)) {
         add(21, L"KB21  Spielpalette", L"255 Farben");
@@ -304,6 +327,10 @@ void fit_zoom(App& a) {
 
 void open_image(App& a, int number) {
     if (team_tab(a)) {  // the number is a team index; edits are applied live, nothing to confirm
+        if (number != a.team_sel && !crest_confirm(a)) {
+            select_in_list(a, a.team_sel);
+            return;
+        }
         a.team_sel = number;
         load_team_controls(a);
         refresh(a);
@@ -792,6 +819,12 @@ void create_team_controls(App& a) {
     u.lbl_swap = make(L"STATIC", L"Mannschaft tauschen mit", 0, 0, 0);
     u.swap_combo = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, 0, IDC_SWAP_COMBO);
     u.swap_btn = make(L"BUTTON", L"Tauschen", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_SWAP_BTN);
+    u.crest_view = CreateWindowExW(WS_EX_CLIENTEDGE, kCrestClass, nullptr, WS_CHILD, 0, 0, 0, 0, a.main, nullptr, a.inst, nullptr);
+    u.all.push_back(u.crest_view);
+    u.cr_pen = make(L"BUTTON", L"Stift", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_PEN);
+    u.cr_fill = make(L"BUTTON", L"Füllen", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_FILL);
+    u.cr_undo = make(L"BUTTON", L"Rückgängig", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_UNDO);
+    u.cr_save = make(L"BUTTON", L"Wappen speichern", BS_PUSHBUTTON | WS_TABSTOP, 0, IDC_CREST_SAVE);
     for (HWND w : u.all) SendMessage(w, WM_SETFONT, (WPARAM)a.font, TRUE);
 }
 
@@ -814,11 +847,20 @@ void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
         MoveWindow(u.name[i], cx, cy, colw - a.px(64), eh, TRUE);
         MoveWindow(u.foreign[i], cx + colw - a.px(58), cy, a.px(58), eh, TRUE);
     }
+    {   // crest editor under the players
+        const int ch = a.px(176), cy0 = top + 13 * rowh + a.px(10);
+        MoveWindow(u.crest_view, x + m, cy0, a.px(330), ch, TRUE);
+        const int bx = x + m + a.px(344), bw = a.px(150);
+        MoveWindow(u.cr_pen, bx, cy0, bw, eh, TRUE);
+        MoveWindow(u.cr_fill, bx, cy0 + rowh, bw, eh, TRUE);
+        MoveWindow(u.cr_undo, bx, cy0 + 2 * rowh, bw, eh, TRUE);
+        MoveWindow(u.cr_save, bx, cy0 + 3 * rowh + a.px(8), bw, eh + 2, TRUE);
+    }
     // right column
     const int cx = rx + a.px(12), cw = rw - a.px(24), nw = a.px(70);
     int cy = y + m;
-    MoveWindow(u.preview, cx, cy, cw, a.px(130), TRUE);
-    cy += a.px(142);
+    MoveWindow(u.preview, cx, cy, cw, a.px(70), TRUE);
+    cy += a.px(82);
     auto row = [&](HWND lbl, HWND e, HWND ud) {
         MoveWindow(lbl, cx, cy + a.px(3), cw - nw - a.px(8), eh, TRUE);
         MoveWindow(e, cx + cw - nw, cy, nw, eh, TRUE);
@@ -847,8 +889,8 @@ void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
 void fill_swap_combo(App& a) {
     HWND c = a.tu.swap_combo;
     SendMessage(c, CB_RESETCONTENT, 0, 0);
-    for (int t = 0; t < TeamDoc::kTeams; t++) {
-        if (!TeamDoc::editable(t) || t == a.team_sel) continue;
+    for (int t = 0; t < TeamDoc::kAllTeams; t++) {
+        if (!TeamDoc::editable(t) || t == a.team_sel || TeamDoc::has_players(t) != TeamDoc::has_players(a.team_sel)) continue;
         const std::wstring s = std::to_wstring(t + 1) + L"  " + widen(a.team->club_name(t));
         const LRESULT i = SendMessage(c, CB_ADDSTRING, 0, (LPARAM)s.c_str());
         SendMessage(c, CB_SETITEMDATA, WPARAM(i), t);
@@ -871,15 +913,21 @@ void load_team_controls(App& a) {
     const int t = a.team_sel;
     const em::TeamData& d = a.team->data(t);
     a.loading_team = true;
+    const bool players = TeamDoc::has_players(t);
     SetWindowTextW(u.club, widen(a.team->club_name(t)).c_str());
     for (int i = 0; i < 25; i++) {
-        SetWindowTextW(u.name[i], widen(a.team->player_name(t, i)).c_str());
-        SendMessage(u.foreign[i], BM_SETCHECK, a.team->foreign(t, i) ? BST_CHECKED : BST_UNCHECKED, 0);
+        SetWindowTextW(u.name[i], players ? widen(a.team->player_name(t, i)).c_str() : L"");
+        SendMessage(u.foreign[i], BM_SETCHECK, players && a.team->foreign(t, i) ? BST_CHECKED : BST_UNCHECKED, 0);
+        EnableWindow(u.name[i], players);
+        EnableWindow(u.foreign[i], players);
     }
+    EnableWindow(u.crest, players);
+    EnableWindow(u.crest_ud, players);
     SetWindowTextW(u.crest, std::to_wstring(std::max(0, d.crest)).c_str());
     SetWindowTextW(u.place, std::to_wstring(std::max(0, d.place)).c_str());
     EnableWindow(u.place, d.place >= 0);
     EnableWindow(u.place_ud, d.place >= 0);
+    load_crest(a);
     for (int i = 0; i < 3; i++) SetWindowTextW(u.str[i], std::to_wstring(d.strength[size_t(i)]).c_str());
     const auto rgb = TeamDoc::jersey_rgb(d);
     for (int i = 0; i < 3; i++) SendMessage(u.jer[i], TBM_SETPOS, TRUE, rgb[size_t(i)]);
@@ -889,6 +937,8 @@ void load_team_controls(App& a) {
 }
 
 bool team_save(App& a) {
+    if (a.crest_ed->dirty() && !a.crest_ed->save()) return false;
+    if (!a.team->dirty()) return true;
     const auto dups = a.team->duplicate_names();
     if (!dups.empty()) {
         std::wstring list;
@@ -914,14 +964,21 @@ void team_edit_changed(App& a, int id) {
     };
     if (id == IDC_CLUB) {
         if (a.team->set_club_name(t, narrow(window_text(u.club).c_str()))) {
-            const std::wstring label = std::to_wstring(t + 1) + L"  " + widen(a.team->club_name(t));
+            const std::wstring label = team_label(a, t);
             ListView_SetItemText(a.list, list_row_of(a, t), 0, const_cast<wchar_t*>(label.c_str()));
         }
     } else if (id >= IDC_NAME0 && id < IDC_NAME0 + 25) {
         a.team->set_player_name(t, id - IDC_NAME0, narrow(window_text(u.name[id - IDC_NAME0]).c_str()));
     } else if (id == IDC_CREST) {
-        a.team->set_crest(t, number(u.crest, a.team->data(t).crest));
-        InvalidateRect(u.preview, nullptr, FALSE);
+        const int nc = std::clamp(number(u.crest, a.team->data(t).crest), 0, 63);
+        if (nc != a.team->data(t).crest && !crest_confirm(a)) {  // cancelled: back to the old crest number
+            a.loading_team = true;
+            SetWindowTextW(u.crest, std::to_wstring(a.team->data(t).crest).c_str());
+            a.loading_team = false;
+            return;
+        }
+        a.team->set_crest(t, nc);
+        load_crest(a);
     } else if (id == IDC_PLACE) {
         a.team->set_place(t, number(u.place, 0));
         const int p = a.team->data(t).place;
@@ -959,39 +1016,6 @@ void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {
     FillRect(dc, &r, GetSysColorBrush(COLOR_WINDOW));
     if (!a.team) return;
     const em::TeamData& d = a.team->data(a.team_sel);
-    if (!a.crest_pal_ok) {
-        try {
-            a.crest_pal = em::decode_palette(em::read_file(a.data / "KB" / "21.vga"));
-            a.crest_pal_ok = true;
-        } catch (const std::exception&) {
-        }
-    }
-    if (d.crest >= 0 && a.crest_pal_ok && a.crest_no != d.crest) {
-        try {
-            a.crest_img = em::decode_vga(em::read_file(a.data / "KB" / (std::to_string(80 + d.crest) + ".vga")));
-            a.crest_no = d.crest;
-        } catch (const std::exception&) {
-            a.crest_no = -1;
-            a.crest_img = em::Image();
-        }
-    }
-    if (a.crest_no >= 0 && a.crest_pal_ok && a.crest_no == d.crest) {
-        const int s = std::max(1, std::min(int(r.bottom - r.top - a.px(16)) / std::max(1, a.crest_img.height), 4));
-        std::vector<uint32_t> bits(a.crest_img.pixels.size());
-        for (size_t i = 0; i < bits.size(); i++) {
-            const auto& c = a.crest_pal.rgb[a.crest_img.pixels[i]];
-            bits[i] = uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
-        }
-        BITMAPINFO bi{};
-        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
-        bi.bmiHeader.biWidth = a.crest_img.width;
-        bi.bmiHeader.biHeight = -a.crest_img.height;
-        bi.bmiHeader.biPlanes = 1;
-        bi.bmiHeader.biBitCount = 32;
-        SetStretchBltMode(dc, COLORONCOLOR);
-        StretchDIBits(dc, r.left + a.px(10), r.top + a.px(8), a.crest_img.width * s, a.crest_img.height * s, 0, 0, a.crest_img.width,
-                      a.crest_img.height, bits.data(), &bi, DIB_RGB_COLORS, SRCCOPY);
-    }
     // jersey colour as the goal scenes show it
     const auto rgb = TeamDoc::jersey_rgb(d);
     HBRUSH b = CreateSolidBrush(jersey_color(rgb[0], rgb[1], rgb[2]));
@@ -1003,6 +1027,191 @@ void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, GetSysColor(COLOR_GRAYTEXT));
     TextOutW(dc, sw.left, sw.bottom + a.px(4), L"Trikot", 6);
+}
+
+// ------------------------------------------------------------------------------------------ crest editor
+// A small pixel editor for the crest of the selected team (KB80 + crest), embedded in the team page.
+
+struct CrestGeo {
+    int x, y, zoom, pal_x, pal_y, cell;
+};
+
+CrestGeo crest_geo(App& a) {
+    const auto& img = a.crest_ed->image();
+    CrestGeo g{};
+    g.x = a.px(6);
+    g.y = a.px(6);
+    g.zoom = a.px(4);
+    g.cell = a.px(8);
+    g.pal_x = g.x + std::max(1, img.width) * g.zoom + a.px(14);
+    g.pal_y = g.y;
+    return g;
+}
+
+void paint_crest(App& a, HWND h) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    RECT cr;
+    GetClientRect(h, &cr);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, cr.right, cr.bottom);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    FillRect(mem, &cr, GetSysColorBrush(COLOR_WINDOW));
+    SelectObject(mem, a.font);
+    SetBkMode(mem, TRANSPARENT);
+    PixelEditor& e = *a.crest_ed;
+    if (e.current() >= 0) {
+        const CrestGeo g = crest_geo(a);
+        const auto& img = e.image();
+        const auto& pal = e.palette();
+        std::vector<uint32_t> bits(img.pixels.size());
+        for (size_t i = 0; i < bits.size(); i++) {
+            const auto& c = pal.rgb[img.pixels[i]];
+            bits[i] = uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
+        }
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+        bi.bmiHeader.biWidth = img.width;
+        bi.bmiHeader.biHeight = -img.height;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        SetStretchBltMode(mem, COLORONCOLOR);
+        StretchDIBits(mem, g.x, g.y, img.width * g.zoom, img.height * g.zoom, 0, 0, img.width, img.height, bits.data(), &bi,
+                      DIB_RGB_COLORS, SRCCOPY);
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(150, 150, 158));
+        HGDIOBJ op = SelectObject(mem, pen);
+        for (int x = 0; x <= img.width; x++) {
+            MoveToEx(mem, g.x + x * g.zoom, g.y, nullptr);
+            LineTo(mem, g.x + x * g.zoom, g.y + img.height * g.zoom);
+        }
+        for (int y = 0; y <= img.height; y++) {
+            MoveToEx(mem, g.x, g.y + y * g.zoom, nullptr);
+            LineTo(mem, g.x + img.width * g.zoom, g.y + y * g.zoom);
+        }
+        SelectObject(mem, op);
+        DeleteObject(pen);
+        for (int i = 0; i < 256; i++) {
+            const auto& c = pal.rgb[size_t(i)];
+            HBRUSH b = CreateSolidBrush(RGB(c[0], c[1], c[2]));
+            RECT r{g.pal_x + (i % 16) * g.cell, g.pal_y + (i / 16) * g.cell, g.pal_x + (i % 16 + 1) * g.cell, g.pal_y + (i / 16 + 1) * g.cell};
+            FillRect(mem, &r, b);
+            DeleteObject(b);
+        }
+        const int s = e.color();
+        RECT sr{g.pal_x + (s % 16) * g.cell, g.pal_y + (s / 16) * g.cell, g.pal_x + (s % 16 + 1) * g.cell, g.pal_y + (s / 16 + 1) * g.cell};
+        FrameRect(mem, &sr, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        InflateRect(&sr, 1, 1);
+        FrameRect(mem, &sr, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        SetTextColor(mem, GetSysColor(COLOR_GRAYTEXT));
+        std::wstring t = L"Wappen " + std::to_wstring(e.current() - 80) + L" (KB" + std::to_wstring(e.current()) + L")" + (e.dirty() ? L" – geändert" : L"");
+        TextOutW(mem, g.pal_x, g.pal_y + 16 * g.cell + a.px(6), t.c_str(), int(t.size()));
+    } else {
+        SetTextColor(mem, GetSysColor(COLOR_GRAYTEXT));
+        DrawTextW(mem, L"Europapokal-Vereine haben kein Wappen", -1, &cr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    BitBlt(dc, 0, 0, cr.right, cr.bottom, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    EndPaint(h, &ps);
+}
+
+bool crest_hit_image(App& a, int mx, int my, int& ix, int& iy) {
+    const CrestGeo g = crest_geo(a);
+    const auto& img = a.crest_ed->image();
+    ix = floordiv(mx - g.x, g.zoom);
+    iy = floordiv(my - g.y, g.zoom);
+    return a.crest_ed->current() >= 0 && ix >= 0 && iy >= 0 && ix < img.width && iy < img.height;
+}
+
+LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+    App& a = *g_app;
+    PixelEditor& e = *a.crest_ed;
+    auto changed = [&] {
+        InvalidateRect(h, nullptr, FALSE);
+        refresh(a);
+    };
+    switch (msg) {
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT: paint_crest(a, h); return 0;
+        case WM_SETCURSOR:
+            if (LOWORD(lp) == HTCLIENT) { SetCursor(LoadCursor(nullptr, IDC_CROSS)); return TRUE; }
+            break;
+        case WM_LBUTTONDOWN: {
+            if (e.current() < 0) return 0;
+            const int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
+            int ix, iy;
+            if (crest_hit_image(a, mx, my, ix, iy)) {
+                SetCapture(h);
+                e.stroke_begin(ix, iy);
+            } else {
+                const CrestGeo g = crest_geo(a);
+                const int cx = floordiv(mx - g.pal_x, g.cell), cy = floordiv(my - g.pal_y, g.cell);
+                if (cx >= 0 && cy >= 0 && cx < 16 && cy < 16) e.set_color(cy * 16 + cx);
+            }
+            changed();
+            return 0;
+        }
+        case WM_MOUSEMOVE:
+            if (e.drawing() && (wp & MK_LBUTTON)) {
+                const CrestGeo g = crest_geo(a);
+                e.stroke_move(floordiv(GET_X_LPARAM(lp) - g.x, g.zoom), floordiv(GET_Y_LPARAM(lp) - g.y, g.zoom));
+                changed();
+            }
+            return 0;
+        case WM_LBUTTONUP:
+            if (GetCapture() == h) ReleaseCapture();
+            e.stroke_end();
+            changed();
+            return 0;
+        case WM_RBUTTONDOWN: {
+            int ix, iy;
+            if (crest_hit_image(a, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), ix, iy)) {
+                e.set_color(e.pick(ix, iy));
+                changed();
+            }
+            return 0;
+        }
+        default: break;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+}
+
+void load_crest(App& a) {
+    if (!a.team || !a.crest_ed) return;
+    const int t = a.team_sel;
+    if (TeamDoc::has_players(t) && a.team->data(t).crest >= 0) a.crest_ed->load(80 + a.team->data(t).crest);
+    else a.crest_ed->close();
+    const BOOL on = a.crest_ed->current() >= 0;
+    for (HWND w : {a.tu.cr_pen, a.tu.cr_fill, a.tu.cr_undo, a.tu.cr_save}) EnableWindow(w, on);
+    InvalidateRect(a.tu.crest_view, nullptr, FALSE);
+}
+
+// Asks what to do with unsaved crest changes; false = cancel
+bool crest_confirm(App& a) {
+    PixelEditor& e = *a.crest_ed;
+    if (!e.dirty()) return true;
+    std::wstring head = L"Wappen " + std::to_wstring(e.current() - 80) + L" wurde geändert.";
+    TASKDIALOG_BUTTON buttons[] = {{101, L"Speichern"}, {102, L"Verwerfen"}};
+    TASKDIALOGCONFIG cfg{sizeof cfg};
+    cfg.hwndParent = a.main;
+    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+    cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+    cfg.pszWindowTitle = L"OpenEM Editor";
+    cfg.pszMainIcon = TD_WARNING_ICON;
+    cfg.pszMainInstruction = head.c_str();
+    cfg.pszContent = L"Das Wappen gilt für alle Vereine, die es benutzen. Änderungen speichern?";
+    cfg.pButtons = buttons;
+    cfg.cButtons = 2;
+    cfg.nDefaultButton = 101;
+    int pressed = 0;
+    if (FAILED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr))) return false;
+    if (pressed == 101) return e.save();
+    if (pressed == 102) {
+        e.load(e.current());  // discard
+        return true;
+    }
+    return false;
 }
 
 // ------------------------------------------------------------------------------------------ palette editor
@@ -1267,7 +1476,7 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_GETMINMAXINFO: {
             auto* mm = reinterpret_cast<MINMAXINFO*>(lp);
-            mm->ptMinTrackSize = {a.px(760), a.px(480)};
+            mm->ptMinTrackSize = {a.px(1000), a.px(740)};
             return 0;
         }
         case WM_COMMAND: {
@@ -1285,6 +1494,16 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == IDC_SWAP_BTN) { team_swap(a); return 0; }
+            if (id >= IDC_CREST_PEN && id <= IDC_CREST_SAVE) {
+                PixelEditor& ce = *a.crest_ed;
+                if (id == IDC_CREST_PEN) ce.set_tool(PixelEditor::Tool::Pencil);
+                else if (id == IDC_CREST_FILL) ce.set_tool(PixelEditor::Tool::Fill);
+                else if (id == IDC_CREST_UNDO) ce.undo();
+                else ce.save();
+                InvalidateRect(a.tu.crest_view, nullptr, FALSE);
+                refresh(a);
+                return 0;
+            }
             if (id == IDC_SWAP_COMBO) return 0;
             if (id == IDC_PALSEL) {
                 if (code == CBN_SELCHANGE) {
@@ -1411,6 +1630,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     try {
         app.ed = std::make_unique<PixelEditor>(data);
         app.pal = std::make_unique<PaletteDoc>(data);
+        app.crest_ed = std::make_unique<PixelEditor>(data);
         app.team = std::make_unique<TeamDoc>(data);
         app.team->load();
         app.data = data;
@@ -1437,6 +1657,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     RegisterClassExW(&wc);
     wc.lpszClassName = kPalGridClass;
     wc.lpfnWndProc = pgrid_proc;
+    RegisterClassExW(&wc);
+    wc.lpszClassName = kCrestClass;
+    wc.lpfnWndProc = crest_proc;
     RegisterClassExW(&wc);
 
     HWND hwnd = CreateWindowExW(0, kMainClass, L"OpenEM Editor", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr, nullptr, inst, nullptr);
