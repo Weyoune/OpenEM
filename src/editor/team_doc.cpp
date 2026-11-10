@@ -86,7 +86,11 @@ bool TeamDoc::set_club_name(int t, const std::string& utf8) {
     const std::string s = upper(utf8);
     try {
         if (chars(s) > size_t(kClubLimit)) throw FormatError("Vereinsname: höchstens 22 Zeichen");
-        (void)utf8_to_iso646de(s);
+        try {
+            (void)utf8_to_iso646de(s);
+        } catch (const FormatError&) {
+            throw FormatError("Zeichen nicht erlaubt: das Spiel kennt nur ASCII und Ä Ö Ü ä ö ü ß");
+        }
     } catch (const std::exception& e) {
         status_ = e.what();
         return false;
@@ -102,7 +106,11 @@ bool TeamDoc::set_player_name(int t, int p, const std::string& utf8) {
     const std::string s = upper(utf8);
     try {
         if (chars(s) > size_t(kNameLimit)) throw FormatError("Spielername: höchstens 19 Zeichen");
-        (void)utf8_to_iso646de(s);
+        try {
+            (void)utf8_to_iso646de(s);
+        } catch (const FormatError&) {
+            throw FormatError("Zeichen nicht erlaubt: das Spiel kennt nur ASCII und Ä Ö Ü ä ö ü ß");
+        }
     } catch (const std::exception& e) {
         status_ = e.what();
         return false;

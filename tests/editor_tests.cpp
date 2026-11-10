@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
     const fs::path src = argv[1], tmp = fs::temp_directory_path() / "openem_editor_test";
     fs::remove_all(tmp);
     fs::create_directories(tmp / "KB");
-    for (const char* n : {"21.vga", "80.vga", "5.vga", "231.vga", "233.vga", "235.vga", "246.vga", "247.vga", "23.vga"}) fs::copy_file(src / "KB" / n, tmp / "KB" / n);
+    for (const char* n : {"21.vga", "80.vga", "5.vga", "231.vga", "233.vga", "235.vga", "246.vga", "247.vga", "23.vga", "8.vga", "14.vga"}) fs::copy_file(src / "KB" / n, tmp / "KB" / n);
 
     PixelEditor ed(tmp);
     CHECK(ed.load(80));
@@ -130,6 +130,17 @@ int main(int argc, char** argv) {
         pd.revert();
         CHECK(!pd.dirty() && pd.get(7)[0] == 63);
         CHECK(pd.load(247) && pd.palette().rgb[1] == decode_palette(read_file(tmp / "KB" / "247.vga")).rgb[1]);
+    }
+
+    // palette source: KB8 is drawn by the game over the palette of KB14; images with their own palette keep it
+    {
+        CHECK(ed.load(8) && ed.palette_source() == 14);
+        const auto p14 = ed.palette().rgb[40];
+        CHECK(ed.set_palette_source(21) && ed.palette_source() == 21 && ed.palette().rgb[40] != p14);
+        CHECK(ed.set_palette_source(14) && ed.palette().rgb[40] == p14);
+        CHECK(ed.load(80) && ed.palette_source() == 21);
+        CHECK(ed.load(14) && ed.has_own_palette() && !ed.set_palette_source(21));
+        CHECK(ed.load(231) && ed.palette_source() == 247);
     }
 
     // team editor

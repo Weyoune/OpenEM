@@ -85,6 +85,33 @@ PixelEditor::PixelEditor(const fs::path& data) : kb_(data / "KB") {
     status_ = std::to_string(files_.size()) + " Bilder in " + kb_.string();
 }
 
+// Images drawn by the game over the palette of another screen (found in src/ui): KB8 over KB14
+static int default_source(int number) { return number == 8 ? 14 : 21; }
+
+std::vector<int> PixelEditor::palette_choices() const {
+    std::vector<int> out;
+    for (int n : {21, 247, 5, 14, 16, 151, 195, 197}) {
+        std::error_code ec;
+        if (fs::exists(kb_ / (std::to_string(n) + ".vga"), ec)) out.push_back(n);
+    }
+    return out;
+}
+
+bool PixelEditor::set_palette_source(int number) {
+    if (current_ >= 0 && has_embedded_) return false;  // the image brings its own palette
+    try {
+        Bytes d = read_file(kb_ / (std::to_string(number) + ".vga"));
+        if (number == 21 || number == 247) pal_ = decode_palette(d);
+        else if (classify_vga(d) == VgaKind::ImageWithPalette) pal_ = decode_palette(d, 6 + le16(d, 4));
+        else return false;
+        pal_source_ = number;
+        revision_++;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 void PixelEditor::close() {
     current_ = -1;
     dirty_ = false;
@@ -128,13 +155,15 @@ bool PixelEditor::load(int number) {
             }
             img = decode_vga(d);
             embedded = k == VgaKind::ImageWithPalette;
-            what = embedded ? "eigene Palette" : "Palette KB21";
+            what = embedded ? std::string("eigene Palette") : "Palette KB" + std::to_string(default_source(number));
             if (!img.complete) what += ", Datenstrom unvollständig";
         }
-        const Palette* base = kind == Kind::Image ? &global_pal_ : &tore_pal_;
+        const int source = embedded ? number : kind != Kind::Image ? 247 : default_source(number);
         img_ = std::move(img);
         has_embedded_ = embedded;
-        pal_ = embedded ? decode_palette(d, 6 + le16(d, 4)) : *base;
+        pal_ = embedded ? decode_palette(d, 6 + le16(d, 4)) : global_pal_;
+        pal_source_ = source;
+        if (!embedded && source != 21) set_palette_source(source);
         kind_ = kind;
         cell_ = cell;
         cols_ = cols;

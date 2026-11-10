@@ -53,6 +53,12 @@ public:
     int current() const { return current_; }
     const Image& image() const { return img_; }
     const Palette& palette() const { return pal_; }
+    // Images without their own palette are shown with a palette chosen here: KB21 (game), KB247 (goal scenes) or the
+    // palette of a full screen (KB5, 14, 16, 151, 195, 197) - the game keeps the palette of the last screen it loaded,
+    // e.g. KB8 (stadium parts) is drawn over KB14. The choice does not change what is saved.
+    std::vector<int> palette_choices() const;
+    int palette_source() const { return pal_source_; }
+    bool set_palette_source(int number);
     bool has_own_palette() const { return has_embedded_; }
     const std::string& status() const { return status_; }
     void set_status(std::string s) { status_ = std::move(s); }
@@ -64,6 +70,7 @@ private:
     std::vector<Entry> files_;
     Palette global_pal_, tore_pal_, pal_;
     bool has_embedded_ = false;
+    int pal_source_ = 21;
     Image img_;
     int current_ = -1;
     Kind kind_ = Kind::Image;

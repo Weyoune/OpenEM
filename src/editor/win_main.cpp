@@ -53,6 +53,7 @@ enum Cmd : UINT {
     ID_HELP_ABOUT = 140,
     IDC_TOOLBAR = 201, IDC_LIST, IDC_STATUS, IDC_TAB,
     IDC_TRACK_R = 210, IDC_TRACK_G, IDC_TRACK_B,
+    IDC_PALSEL = 400,
     IDC_CLUB = 300, IDC_NAME0 = 310, IDC_FOR0 = 340, IDC_CREST = 370, IDC_PLACE, IDC_STR0 = 372, IDC_JER0 = 380, IDC_SWAP_BTN = 390, IDC_SWAP_COMBO,
 };
 
@@ -78,6 +79,7 @@ struct TeamUi {
 struct App {
     HINSTANCE inst = nullptr;
     HWND main = nullptr, toolbar = nullptr, list = nullptr, status = nullptr, canvas = nullptr, palette = nullptr;
+    HWND psel = nullptr;
     HWND tab = nullptr, pgrid = nullptr, track[3] = {}, tlabel[3] = {}, pinfo = nullptr;
     HFONT font = nullptr;
     UINT dpi = 96;
@@ -195,6 +197,9 @@ void refresh(App& a) {
         right += L"   Zoom " + std::to_wstring(a.zoom) + L"×";
     }
     SendMessage(a.status, SB_SETTEXT, 1, (LPARAM)right.c_str());
+    for (int i = 0, n = int(SendMessage(a.psel, CB_GETCOUNT, 0, 0)); i < n; i++)
+        if (int(SendMessage(a.psel, CB_GETITEMDATA, WPARAM(i), 0)) == e.palette_source()) SendMessage(a.psel, CB_SETCURSEL, WPARAM(i), 0);
+    EnableWindow(a.psel, e.current() >= 0 && !e.has_own_palette());
     InvalidateRect(a.palette, nullptr, FALSE);
     InvalidateRect(a.pgrid, nullptr, FALSE);
     if (a.shown_revision != e.revision()) {
@@ -357,6 +362,7 @@ void show_tab_controls(App& a) {
     const bool pt = pal_tab(a), tt = team_tab(a);
     ShowWindow(a.canvas, pt || tt ? SW_HIDE : SW_SHOW);
     ShowWindow(a.palette, pt || tt ? SW_HIDE : SW_SHOW);
+    ShowWindow(a.psel, pt || tt ? SW_HIDE : SW_SHOW);
     show_team(a, tt);
     ShowWindow(a.pgrid, pt ? SW_SHOW : SW_HIDE);
     ShowWindow(a.pinfo, pt ? SW_SHOW : SW_HIDE);
@@ -381,7 +387,8 @@ void layout(App& a) {
     const int lw = a.px(270), pw = a.px(250);
     MoveWindow(a.list, 0, top, lw, bottom - top, TRUE);
     MoveWindow(a.canvas, lw, top, std::max(10, int(r.right) - lw - pw), bottom - top, TRUE);
-    MoveWindow(a.palette, r.right - pw, top, pw, bottom - top, TRUE);
+    MoveWindow(a.psel, r.right - pw + a.px(10), top + a.px(8), pw - a.px(20), a.px(300), TRUE);
+    MoveWindow(a.palette, r.right - pw, top + a.px(40), pw, bottom - top - a.px(40), TRUE);
     // palette page: grid in the middle, sliders on the right
     MoveWindow(a.pgrid, lw, top, std::max(10, int(r.right) - lw - pw), bottom - top, TRUE);
     const int cx = r.right - pw + a.px(12), cw = pw - a.px(24);
@@ -1218,6 +1225,12 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                                      (HMENU)IDC_LIST, a.inst, nullptr);
             a.canvas = CreateWindowExW(WS_EX_CLIENTEDGE, kCanvasClass, nullptr, WS_CHILD | WS_VISIBLE | WS_HSCROLL | WS_VSCROLL, 0, 0, 0, 0, h, nullptr, a.inst, nullptr);
             a.palette = CreateWindowExW(0, kPaletteClass, nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, h, nullptr, a.inst, nullptr);
+            a.psel = CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_TABSTOP | CBS_DROPDOWNLIST, 0, 0, 0, 0, h, (HMENU)IDC_PALSEL, a.inst, nullptr);
+            for (int n : a.ed->palette_choices()) {
+                std::wstring label = n == 21 ? L"Palette: Spiel (KB21)" : n == 247 ? L"Palette: Torszenen (KB247)" : L"Palette: wie KB" + std::to_wstring(n);
+                const LRESULT i = SendMessage(a.psel, CB_ADDSTRING, 0, (LPARAM)label.c_str());
+                SendMessage(a.psel, CB_SETITEMDATA, WPARAM(i), n);
+            }
             a.tab = CreateWindowExW(0, WC_TABCONTROLW, nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FIXEDWIDTH, 0, 0, 0, 0, h, (HMENU)IDC_TAB, a.inst, nullptr);
             const wchar_t* tabs[] = {L"Bilder", L"Torszenen", L"Paletten", L"Mannschaften"};
             for (int i = 0; i < 4; i++) {
@@ -1235,7 +1248,7 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessage(a.track[i], TBM_SETTICFREQ, 8, 0);
                 SendMessage(a.track[i], TBM_SETPAGESIZE, 0, 4);
             }
-            for (HWND c : {a.toolbar, a.status, a.list, a.tab, a.pinfo, a.tlabel[0], a.tlabel[1], a.tlabel[2]}) SendMessage(c, WM_SETFONT, (WPARAM)a.font, TRUE);
+            for (HWND c : {a.toolbar, a.status, a.list, a.tab, a.pinfo, a.psel, a.tlabel[0], a.tlabel[1], a.tlabel[2]}) SendMessage(c, WM_SETFONT, (WPARAM)a.font, TRUE);
             create_team_controls(a);
             init_list(a);
             return 0;
@@ -1246,7 +1259,7 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DPICHANGED: {
             a.dpi = HIWORD(wp);
             make_font(a);
-            for (HWND c : {a.toolbar, a.status, a.list, a.tab, a.pinfo, a.tlabel[0], a.tlabel[1], a.tlabel[2]}) SendMessage(c, WM_SETFONT, (WPARAM)a.font, TRUE);
+            for (HWND c : {a.toolbar, a.status, a.list, a.tab, a.pinfo, a.psel, a.tlabel[0], a.tlabel[1], a.tlabel[2]}) SendMessage(c, WM_SETFONT, (WPARAM)a.font, TRUE);
             TabCtrl_SetItemSize(a.tab, a.px(110), a.px(26));
             const RECT* r = reinterpret_cast<const RECT*>(lp);
             SetWindowPos(h, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1273,6 +1286,14 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (id == IDC_SWAP_BTN) { team_swap(a); return 0; }
             if (id == IDC_SWAP_COMBO) return 0;
+            if (id == IDC_PALSEL) {
+                if (code == CBN_SELCHANGE) {
+                    const LRESULT i = SendMessage(a.psel, CB_GETCURSEL, 0, 0);
+                    if (i >= 0) a.ed->set_palette_source(int(SendMessage(a.psel, CB_GETITEMDATA, WPARAM(i), 0)));
+                    refresh(a);
+                }
+                return 0;
+            }
             command(a, id);
             return 0;
         }
