@@ -632,7 +632,7 @@ void setup_computer_team(HokTeam& t, const HokTeam& opp, const HumanSquad* human
 
 // Penalty decisions: ovl06_161d quick path and ovl06_3adb after a full minute game.
 void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool human = false, bool scenes = false,
-              std::vector<GoalScene>* scene_log = nullptr) {
+              std::vector<GoalScene>* scene_log = nullptr, const std::function<void(int, bool)>* after_shot = nullptr) {
     int x = 0, y = 0;
     // the original draws the shoot-out with Borland rand (REAL-CODE: (2,5) pairs of the cup overtime)
     auto draw = [&](int lo, int hi) { return rng.borland ? rng.borland->range(lo, hi) : int(rng.range(lo, hi)); };
@@ -650,6 +650,9 @@ void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool hu
                 if (scene_log) scene_log->push_back(s);
             }
             goals[side] += hit;
+            // the players of a managed side are picked after each of its shots (REAL-CODE Köln periods 10 and 55: goal
+            // weights after a hit, rand(120,170) after a miss; the goal itself is not booked)
+            if (after_shot && *after_shot) (*after_shot)(side, hit);
         };
         for (int pair = 0; pair < 5 || goals[0] == goals[1]; pair++) {
             shot(first);
@@ -865,6 +868,14 @@ struct MatchRun::Impl {
     bool scenes_on() const { return g_goal_scenes != 0 && rng.borland && board() && !std::getenv("EM_OLD_NOSCENES"); }
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool idle_next = false;  // MatchRun::idle_next_minute
+    // the player picks after each shot of a managed side in the shoot-out (a chance without a goal)
+    std::function<void(int, bool)> shootout_picks() {
+        if (std::getenv("EM_OLD_SHOOTPICKS")) return {};
+        return [this](int side, bool hit) {
+            if (side == 0 && hp && hp->on_shot) hp->on_shot(hit, h, hsq);
+            if (side == 1 && ap && ap->on_shot) ap->on_shot(hit, a, asq);
+        };
+    }
     // MatchRun::take_lineup: the lineup screen of ovl14_24bc changed the manager's squad between two minutes. The working
     // squad takes the roles and lines; leaving the lineup screen sets the effort again as in a drawn game (situation 2),
     // like the lineup after an injury in step().
@@ -908,7 +919,7 @@ struct MatchRun::Impl {
             if (minute == 60 && opts.knockout && score.home == score.away) { last = 70; score.decision_marker = 30; }
             const bool more = minute < last;
             if (!more && opts.knockout && !shootout_done && score.home == score.away) {
-                shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes);
+                { const std::function<void(int, bool)> picks = shootout_picks(); shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
                 shootout_done = true;
             }
             return more;
@@ -1031,7 +1042,7 @@ struct MatchRun::Impl {
         const bool more = minute < last;
         // a knock-out game that is still level after its last minute goes to the shoot-out at once (the other games go on)
         if (!more && opts.knockout && !shootout_done && score.home == score.away) {
-            shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes);
+            { const std::function<void(int, bool)> picks = shootout_picks(); shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
             shootout_done = true;
         }
         return more;

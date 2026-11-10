@@ -826,6 +826,7 @@ void Game::play_cup_day() {
             HumanSquad& sq = mgr_[size_t(m)].squad;
             sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
             sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working, m); };
+            sq.on_shot = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, true, goal, &team, &working, m); };
             sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
         }
     int loop_minutes = 60;
@@ -836,6 +837,7 @@ void Game::play_cup_day() {
         sq.on_minute = nullptr;
         sq.on_chance = nullptr;
         sq.on_opponent_chance = nullptr;
+        sq.on_shot = nullptr;
     }
     for (size_t match = 0; match < ties.size(); match++) {
         const Tie& t = ties[match];
@@ -2311,6 +2313,7 @@ void Game::play_playoff_day(bool setup_only) {
             HumanSquad& sq = mgr_[size_t(m)].squad;
             sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
             sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
+            sq.on_shot = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, true, goal, &team, &working, m); };
             sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
         }
         g_draw_scope = "playoff-live";
@@ -2322,6 +2325,7 @@ void Game::play_playoff_day(bool setup_only) {
             sq.on_minute = nullptr;
             sq.on_chance = nullptr;
             sq.on_opponent_chance = nullptr;
+            sq.on_shot = nullptr;
         }
         for (size_t k = 0; k < ties.size() && k < draw_index.size(); k++) live_result[draw_index[k]] = ties[k].result;
     }
@@ -2732,7 +2736,8 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
     };
     for (int goal = 0; goal < own_goals; goal++) {
         const bool penalty = goal >= own_goals - shootout_goals;
-        if (credit_goals || penalty) credit_human_goal(competition, penalty, true, nullptr, nullptr, m);  // minute-wise credited goals are not booked twice
+        // minute-wise credited goals are not booked twice; the shoot-out of a minute game picked its players at the shots
+        if (credit_goals || (penalty && std::getenv("EM_OLD_SHOOTPICKS"))) credit_human_goal(competition, penalty, true, nullptr, nullptr, m);
     }
     bool goalkeeper_booked = false;
     for (size_t slot = 0; slot < save_.squad_of(m).size(); slot++) {
