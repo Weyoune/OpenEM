@@ -28,14 +28,15 @@ bool ClassicApplication::main_menu_idle() const {
 void ClassicApplication::check_new_messages() {
     // ovr034:2120: entering the main menu with the manager's flag DS:5A50 set clears it and opens the field
     if (!main_menu_idle() || (career_ && career_->messages.active())) return;
-    if (session_.game().save().state.at(kMessageNewFlag) == 0) return;
-    action([](Game& game) { game.clear_message_flag(0); return ActionResult{}; });
+    const int m = active_manager();  // DS:5A50 + manager (Amiga FUN_0010615a: DAT_00155da2[m])
+    if (session_.game().save().state.at(kMessageNewFlag + size_t(m)) == 0) return;
+    action([m](Game& game) { game.clear_message_flag(m); return ActionResult{}; });
     open_messages();
 }
 
 void ClassicApplication::open_messages() {
     if (!career_) career_ = std::make_shared<ClassicCareerState>();
-    career_->messages.open(session_.game().save().state, 0);
+    career_->messages.open(session_.game().save().state, active_manager());
 }
 
 void ClassicApplication::show_immediate_messages() {

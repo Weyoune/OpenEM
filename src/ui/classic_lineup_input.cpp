@@ -21,7 +21,7 @@ std::string lineup_message(ManualLineupMessage message){
 }
 void ClassicApplication::open_lineup(){
     hover_kind_=ClassicRosterKind::Lineup;roster_hover_={};roster_rules_=false;
-    screen_=ClassicScreen::Lineup;selected_line_=0;lineup_cells_=classic_lineup_cells(snapshot());
+    screen_=ClassicScreen::Lineup;selected_line_=0;lineup_cells_=classic_lineup_cells(snapshot(),active_manager());
     const auto& first=(*lineup_cells_)[0];
     lineup_six_=std::count_if(first.begin(),first.end(),[](int n){return n!=0;})==6&&!(*lineup_cells_)[4][4];
 }
@@ -59,7 +59,7 @@ void ClassicApplication::apply_lineup(size_t slot,ManualLineupAction action){
 }
 void ClassicApplication::click_lineup(int x,int y,bool right){
     const auto& h=snapshot();
-    int count=0;for(int slot=0;slot<29;slot++)if(h.state.at(0x696D+size_t(slot)*52+15))++count;
+    int count=0;for(int slot=0;slot<29;slot++)if(h.state.at(squad_block(active_manager())+size_t(slot)*52+15))++count;
     const int slot=(y-29)/6;
     const bool roster=x>=0&&x<=233&&slot>=0&&slot<count;
     if(right){
@@ -72,7 +72,7 @@ void ClassicApplication::click_lineup(int x,int y,bool right){
     if(roster){apply_lineup(size_t(slot),ManualLineupAction::Select);return;}
     for(int line=0;line<5;line++)if(x>=246&&x<=318&&y>=15+42*line&&y<=53+42*line){
         selected_line_=line+1;
-        if(!lineup_cells_)lineup_cells_=classic_lineup_cells(h);
+        if(!lineup_cells_)lineup_cells_=classic_lineup_cells(h,active_manager());
         int cell=-1;
         if(line==4){if(x>=276&&x<=292&&y>=203&&y<=213)cell=4;}
         else{

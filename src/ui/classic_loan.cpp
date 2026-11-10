@@ -8,8 +8,9 @@ namespace em::ui {
 void ClassicApplication::open_loan(int slot){
     const auto& h=snapshot();
     const auto flags=h.state.at(0x81CD+size_t(slot)*52+0x1A);
-    if((flags&0x81)==0x81){notice("Angebot wurde\nbereits abgelehnt.");return;}
-    if(flags&1)return; // ovr035:1161: the manager bit alone leaves the click without reaction
+    const int bit=1<<active_manager();  // the refusal bit of the manager (game/purchase.cpp)
+    if((flags&0x80)&&(flags&bit)){notice("Angebot wurde\nbereits abgelehnt.");return;}
+    if(flags&bit)return; // ovr035:1161: the manager bit alone leaves the click without reaction
     roster_rules_=false;
     fee_editor_=FeeEditor{slot,{},true};
 }

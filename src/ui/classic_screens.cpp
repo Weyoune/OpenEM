@@ -25,7 +25,7 @@ namespace {
 constexpr auto mini=ClassicFontId::Mini,flow=ClassicFontId::Flow,bold=ClassicFontId::NewBold;
 std::string padded(int value,int width){std::string result=std::to_string(value);if(int(result.size())<width)result.insert(0,size_t(width-int(result.size())),'%');return result;}
 }
-void ClassicApplication::draw_lineup(){draw_classic_lineup(canvas_,snapshot(),0,selected_line_,lineup_cells_?&*lineup_cells_:nullptr,lineup_cells_?&lineup_six_:nullptr);}
+void ClassicApplication::draw_lineup(){draw_classic_lineup(canvas_,snapshot(),active_manager(),selected_line_,lineup_cells_?&*lineup_cells_:nullptr,lineup_cells_?&lineup_six_:nullptr);}
 void ClassicApplication::open_strengths(int league){
     action([](Game& game){game.enter_strengths();return ActionResult{};});
     strengths_league_=league;strengths_mode_=0;begin_page_working(ClassicScreen::Strengths);
@@ -140,7 +140,7 @@ void ClassicApplication::finish_page(){
 void ClassicApplication::draw_tactics(){
     if(!tactics_plan_)open_tactics();
     if(!tactics_view_)tactics_view_=std::make_unique<HokFile>(preview_tactics(snapshot(),*tactics_plan_));
-    draw_classic_tactics(canvas_,*tactics_view_,tactics_plan_->preset);
+    draw_classic_tactics(canvas_,*tactics_view_,tactics_plan_->preset,active_manager());
 }
 
 void ClassicApplication::bevel(int x1,int y1,int x2,int y2,int edge,int fill){
@@ -155,7 +155,7 @@ void ClassicApplication::bevel(int x1,int y1,int x2,int y2,int edge,int fill){
 
 std::pair<int,int> ClassicApplication::opponent() const{
     if(!session_.loaded()||!view_)return {-1,0};
-    const auto selected=classic_opponent(*view_,calendar_,session_.game().national_coach()>=0?5:0);
+    const auto selected=classic_opponent(*view_,calendar_,session_.game().national_coach()>=0&&session_.game().national_coach()==active_manager()?5:active_manager());
     return {selected.has_match()?int(selected.team):-1,int(selected.side)};
 }
 std::string ClassicApplication::recent_results(const HokFile& h,int team) const{
@@ -209,12 +209,12 @@ void ClassicApplication::draw_main_header(const SeasonReview* review){
     constexpr int icons[]={0,0,0,0,1,2,3,5,1};const int icon=event==kEventSectionEnd?4:icons[std::clamp(event_type,0,8)];
     canvas_.blit(3,111,35,78+14*icon,231,14,11);
     if(other>=0&&other<52)canvas_.blit(3,126,35,66-12*away,231,12,11);
-    const int face=h.state.at(0x01EE)%12;
+    const int face=h.state.at(0x01EE+size_t(active_manager()))%12;  // DS:0178 + manager
     canvas_.blit(0,233,34,41*(face%3)+1,41*(face/3)+1,38,38);
     const int crest=80+(h.teams.at(size_t(own)).raw[0x34]&63);canvas_.blit(crest,275,34,0,0,38,38);
     bevel(234,35,274,75,255,0);bevel(276,35,316,75,255,0);
     if(!review){
-        const auto status=classic_status(h,g.budget());
+        const auto status=classic_status(h,g.budget(),active_manager());
         for(int i=0;i<6;i++)canvas_.blit(3,226,33+7*i,196,219+6*int(status[size_t(i)]),6,6);
     }
     const auto d=review?review->date:session_.date();
@@ -222,7 +222,7 @@ void ClassicApplication::draw_main_header(const SeasonReview* review){
     constexpr const char* months[]={"Januar","Februar","März","April","Mai","Juni","Juli","August","Sept.","Okt.","Nov.","Dez."};
     const std::string date=std::string(weekdays[std::clamp(d.weekday,0,6)])+", "+std::to_string(d.day)+". "+months[std::clamp(d.month-1,0,11)]+padded(d.year,5);
     canvas_.text(mini,6,29,date,24,0);
-    canvas_.text(mini,108,29,h.manager,24,0,229);canvas_.text(mini,232,29,h.teams[size_t(own)].name,24,0,313);
+    canvas_.text(mini,108,29,manager_name(active_manager()),24,0,229);canvas_.text(mini,232,29,h.teams[size_t(own)].name,24,0,313);
     canvas_.text(mini,138,42,other>=0?h.teams.at(size_t(other)).name:event==kEventSectionEnd?"Saisonende":"Spielfrei",7,0,230);
     if(!review)canvas_.text(mini,138,55,recent_results(h,other),7,0,230);
     canvas_.text(mini,138,68,money(review?review->balance:g.budget().balance),7,0,230);
@@ -304,9 +304,9 @@ void ClassicApplication::draw_table(){
     }
 }
 
-void ClassicApplication::draw_totals(){draw_classic_totals(canvas_,snapshot(),session_.game().budget(),session_.finance_tables());}
-void ClassicApplication::draw_bank(){draw_classic_bank(canvas_,snapshot(),session_.game().budget(),bank_party_,bank_selected_,bank_amount_,bank_deposit_,0,mouse_y_>=73&&mouse_y_<=100);}
-void ClassicApplication::draw_contracts(){canvas_.background();draw_classic_roster(canvas_,snapshot(),true);}
+void ClassicApplication::draw_totals(){draw_classic_totals(canvas_,snapshot(),session_.game().budget(),session_.finance_tables(),active_manager());}
+void ClassicApplication::draw_bank(){draw_classic_bank(canvas_,snapshot(),session_.game().budget(),bank_party_,bank_selected_,bank_amount_,bank_deposit_,active_manager(),mouse_y_>=73&&mouse_y_<=100);}
+void ClassicApplication::draw_contracts(){canvas_.background();draw_classic_roster(canvas_,snapshot(),true,active_manager());}
 void ClassicApplication::draw_training(){
     canvas_.background(5);
     for(int day=0;day<7;day++)for(int unit=0;unit<4;unit++){
@@ -320,8 +320,9 @@ void ClassicApplication::draw_training(){
     struct Average{int count=0,fatigue=0,a=0,b=0;};
     std::array<Average,3> totals{};
     const auto& h=snapshot();
-    for(size_t slot=0;slot<h.squad.size();slot++){
-        const auto&s=h.squad[slot];
+    const auto& squad=h.squad_of(active_manager());
+    for(size_t slot=0;slot<squad.size();slot++){
+        const auto&s=squad[slot];
         if(s.player<0)continue;
         const auto&p=h.players.at(size_t(s.player));
         const int role=std::min(p.position/25,2);
@@ -346,18 +347,18 @@ void ClassicApplication::draw_banner(std::string_view text){
     canvas_.text(ClassicFontId::NewBold,0,126,text,11,-1,319);
 }
 void ClassicApplication::open_settings(){hover_kind_.reset();screen_=ClassicScreen::Settings;}
-void ClassicApplication::draw_settings(){draw_classic_settings(canvas_,session_.game().settings(),0);}
+void ClassicApplication::draw_settings(){draw_classic_settings(canvas_,session_.game().settings(),active_manager());}
 void ClassicApplication::click_settings(int x,int y,bool right){
     if(right){screen_=ClassicScreen::Main;return;}
     const auto hit=classic_settings_hit(x,y);
     if(hit.widget>=0){
         int value=0;
-        action([&](Game& game){value=game.toggle_setting(hit.widget,0);return ActionResult{};});
+        action([&](Game& game){value=game.toggle_setting(hit.widget,active_manager());return ActionResult{};});
         if(hit.widget==9&&value==2&&!settings_rink_hint_shown_){
             settings_rink_hint_shown_=true;
             notice("Neuer Spielmodus:\nDas Eisfeld bleibt während des\ngesamten Spieles an. Keine\nTeamveränderungen möglich.");
         }
     }else if(hit.speed>=0)action([&](Game& game){game.set_game_speed(hit.speed);return ActionResult{};});
 }
-void ClassicApplication::draw_transfer(){draw_classic_transfer(canvas_,purchase_backdrop_?*purchase_backdrop_:snapshot(),backdrop_budget_?*backdrop_budget_:session_.game().budget());}
+void ClassicApplication::draw_transfer(){draw_classic_transfer(canvas_,purchase_backdrop_?*purchase_backdrop_:snapshot(),backdrop_budget_?*backdrop_budget_:session_.game().budget(),active_manager());}
 } // namespace em::ui

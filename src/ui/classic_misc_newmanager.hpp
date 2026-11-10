@@ -19,8 +19,8 @@ namespace em::ui {
 // (KB7 at 184,32 with KB0 at 193,39) or the club board (KB7, a colour 11 page of twelve crests KB80+ at 190,41 and the
 // scroll bar at 310,39). Hovering a board cell frames it in colour 0x12; the club board also names the club. A
 // chosen face starts the name field (19 letters, at least two); a chosen club closes the board. A right click in a
-// row removes that new manager. "Los jetzt!" (253 < x < 309, 193 < y < 233) leaves. OpenEM plays one human manager,
-// so a completed new row is reported to the caller instead of being added to the game.
+// row removes that new manager. "Los jetzt!" (253 < x < 309, 193 < y < 233) leaves. In a running game OpenEM does not add
+// managers yet (a completed new row is reported to the caller); a new game takes all complete rows (classic_misc_input.cpp).
 class ClassicNewManager {
 public:
     enum class Result { None, Leave, LeaveWithManager };
