@@ -5,11 +5,12 @@ namespace em::ui {
 void ClassicApplication::open_purchase(int slot){
     const auto& h=snapshot();const size_t record=0x81CD+size_t(slot)*52;
     const auto flags=h.state.at(record+0x1A);
-    if((flags&0x81)==0x81){notice("Angebot wurde\nbereits abgelehnt.");return;}
+    const int bit=1<<active_manager(),owner=h.state.at(0x4FC6+size_t(h.state.at(record+15)-1)*33+0x1A);
+    if((flags&0x80)&&(flags&bit)){notice("Angebot wurde\nbereits abgelehnt.");return;}
     // ovr035:1161..1314..14E8: the manager bit without 0x80 on a computer player ends the click without
     // editor or message (every write sets the bit together with 0x80, ovr035:1303/1ADD, so this needs a
     // hand-made save).
-    if(flags&1)return;
+    if((flags&bit)&&owner==4)return;
     roster_rules_=false;
     fee_editor_=FeeEditor{slot,{}};
 }
@@ -29,6 +30,7 @@ void ClassicApplication::finish_fee(bool cancel){
     if(cancel||editor.digits.empty())return;
     const long fee=std::stol(editor.digits)*3;
     if(!fee)return;
+    if(bid_to_manager(editor.pool_slot,fee,editor.loan))return;  // the list player of another manager
     if(editor.loan){finish_loan(editor.pool_slot,fee);return;}
     try{
         auto backing=std::make_unique<HokFile>(clone_hok(snapshot()));
@@ -38,6 +40,7 @@ void ClassicApplication::finish_fee(bool cancel){
         if(result==PurchaseResult::Negotiating){
             purchase_draft_=draft;purchase_backdrop_=std::move(backing);
             open_contract(draft.club_slot);
+            if(contract_editor_)contract_editor_->offset=0;  // ovr035:185D: ovl11_41db(record, slot, 0), the panel at the top
             if(!contract_editor_)cancel_purchase();
             return;
         }

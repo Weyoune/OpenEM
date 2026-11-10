@@ -70,7 +70,8 @@ struct ManagerOffer {
 };
 
 enum class PurchaseResult { Invalid, Unavailable, Blocked, SellerRefused, InsufficientFunds,
-                            SquadFull, PlayerRefused, Purchased, Negotiating };
+                            SquadFull, PlayerRefused, Purchased, Negotiating,
+                            Unfair, OwnerQuestion };  // the last two: a list player of another human manager
 // Transient context for the original fee-editor -> contract-panel lifetime.
 // The UI retains this while the temporary native roster row exists; file
 // saving/day advancement is unavailable until finish or explicit cancel.
@@ -78,6 +79,8 @@ struct PurchaseDraft {
     int pool_slot=-1,player_id=0,club_slot=-1,old_team=-1;
     long fee=0,initial_salary=0;
     int manager=0;  // the buying manager (the active one when the purchase began)
+    int seller=-1;  // the human manager who listed the player (ovr035:1528), -1 = the computer market
+    bool loan=false;
 };
 //The native sponsor decides before its confirmation opens. The controller
 //retains this prepared resolution and cannot save/advance while it is pending.
@@ -223,6 +226,12 @@ public:
     // Loan of a computer transfer-list player for one season (src/game/loan.cpp, ovr035:1118 loan flag).
     // The fee is raw; Purchased means the player joined on loan.
     PurchaseResult loan_transfer_player(size_t slot,long fee,bool accept_subsidy=false,bool prepare_lineup=true);
+    // A bid for a list player of another human manager (purchase.cpp, ovr035:1528..17A5): Blocked, InsufficientFunds,
+    // Unfair (outside 60..140 % of the value, no refusal bit) or OwnerQuestion with `offer` for the owner's answer.
+    // answer_manager_offer: refusal -> SellerRefused and the bidder's bit; acceptance -> Negotiating (purchase, `draft`
+    // for the contract panel) or Purchased (loan). The owner gets the fee, there is no sponsor subsidy.
+    PurchaseResult offer_to_manager(size_t slot,long fee,bool loan,PurchaseDraft& offer);
+    PurchaseResult answer_manager_offer(const PurchaseDraft& offer,bool accept,PurchaseDraft& draft,bool prepare_lineup=true);
     // Sponsor offer (seg001:223E) of the last purchase/loan, raw, 0 = none; not in a checkpoint. The UI asks the
     // question afterwards and books an accepted offer with accept_purchase_subsidy (no further draws).
     long last_purchase_subsidy() const { return last_purchase_subsidy_; }
@@ -417,6 +426,8 @@ private:
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
     std::vector<std::string> manager_news_;
     long last_purchase_subsidy_ = 0;
+    PurchaseResult insert_purchase(size_t slot,long fee,PurchaseDraft& draft);  // purchase.cpp: the squad row of a bought list player
+    PurchaseResult insert_loan(size_t slot,long fee,int seller,bool accept_subsidy,bool prepare_lineup);  // loan.cpp
     std::vector<std::string> immediate_messages_;
     std::optional<SeasonReview> season_review_;
     ContractDecider contract_decider_;
