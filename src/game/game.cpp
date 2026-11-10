@@ -2257,12 +2257,70 @@ void Game::play_playoff_day(bool setup_only) {
         r.shootout = tie;
         return r;
     };
+    // A play-off day with a human club runs like a live cup day (REAL-CODE Köln period 34): per pair in slot order the
+    // gate of a manager's home game and the squad bookkeeping (sub_60D60), one stream spin, then every open series of the
+    // day together in the minute loop (ovl06_2522) with the knock-out rules.
+    std::vector<MatchResult> live_result(series_.size());
+    std::array<bool, kMaxManagers> gate_before{};
+    const bool live_round = human_today && !std::getenv("EM_OLD_POLIVE");
+    size_t knockout_pairs = 0;
+    int po_loop_minutes = 60;  // the last minute of the live loop (overtime breaks, see play_cup_day)
+    std::vector<MatchResult> relegation_live;  // results of the relegation games played in the live loop (group 1, then 2)
+    if (live_round) {
+        std::vector<HokPairing> draw;
+        std::vector<size_t> draw_index;
+        for (size_t index : open_today) {
+            const Series& s = series_[index];
+            const bool higher_home = s.games.size() % 2 == 0;
+            draw.push_back({higher_home ? s.higher : s.lower, higher_home ? s.lower : s.higher});
+            draw_index.push_back(index);
+        }
+        knockout_pairs = draw.size();
+        // the relegation round of the day runs in the same minute loop behind the play-off pairs (REAL-CODE Köln period 34:
+        // FUN_162c_16bf is called for 8-2, 18-12, 22-15 right after the quarter finals)
+        if (day % 5 == 0 || day % 5 == 2) {
+            const int round = stage * 2 + (day % 5 == 2 ? 1 : 0);
+            const auto pairs = round_robin_pairings(schedule_.teams4, round);
+            for (size_t g = 0; g < 2; g++)
+                for (const Pairing& p : pairs) draw.push_back({relegation_[g].teams[size_t(p.home)], relegation_[g].teams[size_t(p.away)]});
+        }
+        for (const HokPairing& p : draw)
+            for (int m = 0; m < managers_; m++) {
+                ManagerState& mg = mgr_[size_t(m)];
+                if (p.home != mg.team && p.away != mg.team) continue;
+                if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;
+                if (p.home == mg.team) {
+                    g_draw_scope = "gate";
+                    home_game(p.away, 1, 0, 0, position(p.home), position(p.away), false, m);
+                    gate_before[size_t(m)] = true;
+                }
+                manager_day(gate_before[size_t(m)], m);
+            }
+        spin_match_stream();
+        for (int m = 0; m < managers_; m++) {
+            HumanSquad& sq = mgr_[size_t(m)].squad;
+            sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
+            sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
+            sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
+        }
+        g_draw_scope = "playoff-live";
+        const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &po_loop_minutes, true, knockout_pairs);
+        for (size_t k = knockout_pairs; k < ties.size(); k++) relegation_live.push_back(ties[k].result);
+        injuries_in_minutes_ = true;
+        for (int m = 0; m < managers_; m++) {
+            HumanSquad& sq = mgr_[size_t(m)].squad;
+            sq.on_minute = nullptr;
+            sq.on_chance = nullptr;
+            sq.on_opponent_chance = nullptr;
+        }
+        for (size_t k = 0; k < ties.size() && k < draw_index.size(); k++) live_result[draw_index[k]] = ties[k].result;
+    }
     for (size_t index = 0; index < series_.size(); index++) {
         Series& s = series_[index];
         if (s.wins_higher == 3 || s.wins_lower == 3) continue;
         const bool higher_home = s.games.size() % 2 == 0;  // games 1, 3, 5 at the higher seed
         const int home = higher_home ? s.higher : s.lower, away = higher_home ? s.lower : s.higher;
-        const MatchResult r = human_today ? playoff_game(save_.teams, home, away, rng_, side) : quick_playoff(index, home, away);
+        const MatchResult r = live_round ? live_result[index] : human_today ? playoff_game(save_.teams, home, away, rng_, side) : quick_playoff(index, home, away);
         s.games.push_back(r);
         if ((r.home > r.away) == higher_home)  // a level result after the quick shoot-out goes to the away team (REAL-CODE period 28: both streams equal)
             s.wins_higher++;
@@ -2283,7 +2341,7 @@ void Game::play_playoff_day(bool setup_only) {
                 book_special_teams(st, own_side, m);
                 book_club_match(own_side == 0 ? r.home : r.away,
                                 own_side == 0 ? r.away : r.home, 0, false,
-                                r.shootout_goals[own_side], true, m);
+                                r.shootout_goals[own_side], !live_round, m);  // live: the goals were credited in the minutes
                 mgr_[size_t(m)].played = true;
             }
             record_head_to_head(home, away, r.home, r.away, m);
@@ -2291,7 +2349,27 @@ void Game::play_playoff_day(bool setup_only) {
             std::snprintf(line, sizeof line, "play-offs: %s - %s %d:%d (series %d:%d)", save_.teams[size_t(home)].name.c_str(),
                           save_.teams[size_t(away)].name.c_str(), r.home, r.away, s.wins_higher, s.wins_lower);
             log_.push_back(line);
-            if (!forfeited && own_side == 0) home_game(away, 1, 0, 0, position(home), position(away), false, m);
+            if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, 1, 0, 0, position(home), position(away), false, m);
+            if (live_round && !forfeited) {
+                // the overtime breaks of the live loop rest the managed pair after its own game too, as on a cup day
+                // (play_cup_day; REAL-CODE Köln period 34: Köln - Kaufbeuren decided in minute 61, +19 for both and the squad)
+                int played = 0;
+                for (int line = 0; line < 4; line++) played += st.line_minutes[0][line];
+                const int loop_breaks = po_loop_minutes > 60 ? 2 : 0;
+                const int own_breaks = played >= 66 ? 2 : played >= 61 ? 1 : 0;
+                const int recover = 19 * std::max(0, loop_breaks - own_breaks);
+                if (recover > 0) {
+                    for (int team : {home, away})
+                        for (auto& kind : save_.teams[size_t(team)].energy)
+                            for (auto& e : kind) e = uint8_t(std::min(90, e + recover));
+                    auto& own_squad = save_.squad_of(m);
+                    for (size_t slot = 0; slot < own_squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+                        uint8_t& f = save_.state.at(squad_block(m) + slot * kSquadRecord + 0x1B);
+                        f = uint8_t(std::min(90, int(f) + recover));
+                        own_squad[slot].fitness = f;
+                    }
+                }
+            }
         }
     }
     // relegation rounds on the first and third day of each play-off round (round index =
@@ -2312,7 +2390,10 @@ void Game::play_playoff_day(bool setup_only) {
                 const int home = t.teams[size_t(p.home)], away = t.teams[size_t(p.away)];
                 MatchResult r;
                 MatchStats* game_stats = &stats;
-                if (!manager_team(home) && !manager_team(away)) {  // without a human club a quick result (REAL-CODE period 28)
+                const size_t live_at = g * pairs.size() + pair;
+                if (live_round && live_at < relegation_live.size()) {
+                    r = relegation_live[live_at];
+                } else if (!manager_team(home) && !manager_team(away)) {  // without a human club a quick result (REAL-CODE period 28)
                     HokTeam h, a;
                     quick_setup(home, away, h, a);  // same quick path as the play-offs
                     r = quick_competition_match(h, a, true, true, rng_, 0, false, true);

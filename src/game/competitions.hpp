@@ -42,7 +42,9 @@ std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::ve
 // The same round with the cup display on: all pairs minute by minute (see competitions.cpp); updates the computer teams' records.
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
                                      const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer = nullptr,
-                                     int* loop_minutes = nullptr);  // the last minute of the round's minute loop (60..70)
+                                     int* loop_minutes = nullptr,  // the last minute of the round's minute loop (60..70)
+                                     bool playoff = false,  // play-off mode DS:76B2 (halved goal points)
+                                     size_t knockout_pairs = size_t(-1));  // pairs from this index on play without overtime (relegation round)
 
 // Native redraw: twenty random swaps, then home ice for the lower division.
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng);
