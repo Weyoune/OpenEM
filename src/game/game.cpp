@@ -2282,12 +2282,18 @@ void Game::play_playoff_day(bool setup_only) {
     if ((day % 5 == 0 || day % 5 == 2) && !std::getenv("EM_OLD_RELLIVE"))
         for (const GroupTable& g : relegation_)
             for (int team : g.teams) human_today |= manager_team(team);
-    if (!human_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28),
+    if (std::getenv("EM_DEBUG_PODAY")) std::fprintf(stderr, "playoff day %d (season day %d) stage %d human %d open %zu\n", day, day_, stage, int(human_today), open_today.size());
+    // a play-off day on which no game is left (all series decided, no relegation round) passes nothing: no menu routine, no
+    // rest (REAL-CODE Köln period 106: days 8 and 9 of the semi-final stage keep the records, DS:A88D and the messages)
+    const bool games_today = !open_today.empty() || day % 5 == 0 || day % 5 == 2 || std::getenv("EM_OLD_EMPTYPODAY");
+    if (!human_today && games_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28),
         // without a sort (REAL-CODE period 91: no swap on any of the play-off days without the human club)
         if (std::getenv("EM_OLD_POSORT")) native_sort_messages(save_.state);
         native_message_step(save_.state);
-        // and sets the match load of the human squads like the cup day without them (REAL-CODE Köln period 103: write watch on
-        // DS:974B, 7 -> 8 on the second play-off day without Köln)
+    }
+    if (!human_today) {
+        // the match load of the human squads is set like on a cup day without them, also on a day without games (REAL-CODE
+        // Köln period 103: write watch on DS:974B, 7 -> 8 on the second play-off day without Köln; period 106: 7 -> 11)
         if (!std::getenv("EM_OLD_POLOAD"))
             for (int m = 0; m < managers_; m++) {
                 const ManagerState& mg = mgr_[size_t(m)];
@@ -2534,7 +2540,7 @@ void Game::play_playoff_day(bool setup_only) {
     // energy 90 (the managed clubs keep their mode, the teams of today's quick games too), the squad fitness from the load
     // (rested_fitness), DS:A88D = FF (REAL-CODE Köln period 35: after the cup final Köln and Berlin, finalist of the
     // play-offs, stand at 90 on 30.03.; in the Mannheim chain everything was rested long before, so it did not show)
-    if (!human_today && !std::getenv("EM_OLD_PODAYREST")) {
+    if (!human_today && games_today && !std::getenv("EM_OLD_PODAYREST")) {
         for (int team = 0; team < 64; team++) {
             HokTeam& t = save_.teams[size_t(team)];
             const int mode = manager_team(team) ? (t.flags & 0x07) : 0;
