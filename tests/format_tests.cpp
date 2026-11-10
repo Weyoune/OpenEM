@@ -4551,10 +4551,10 @@ static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_
         for(int day=0;day<20&&decode_hok(direct.save_bytes()).matchday[0]<45;++day){direct.advance_day();restored.advance_day();}
         CHECK(decode_hok(direct.save_bytes()).matchday[0]==45);
         CHECK(direct.checkpoint_bytes()==restored.checkpoint_bytes());
-        // The native simulation prefix retains round44 once all leagues are
-        // finished. This is a separate check from menu preview generation.
+        // After the last league day the original sets up the play-off phase at once: the pair table DS:5D7B then holds
+        // the relegation round, not round44 (REAL-CODE Köln period 33). Leagues 1 and 2 keep their round44 pairs behind it.
         const auto last=round_robin_pairings(load_schedule_tables(exe).teams12,43);
-        for(size_t league=0;league<3;++league)for(size_t pair=0;pair<6;++pair){
+        for(size_t league=1;league<3;++league)for(size_t pair=0;pair<6;++pair){
             const size_t at=0x8dfd+league*12+pair*2;
             CHECK(direct.save().state.at(at)==int(league)*12+last[pair].home);
             CHECK(direct.save().state.at(at+1)==int(league)*12+last[pair].away);

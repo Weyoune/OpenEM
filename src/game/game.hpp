@@ -357,7 +357,7 @@ private:
     void quick_setup(int home, int away, HokTeam& h, HokTeam& a);
     bool human_in_next_euro() const;
     void play_euro_day();
-    void play_playoff_day();
+    void play_playoff_day(bool setup_only = false);  // setup_only: the first round set-up of the phase, run at the step end before it
     void store_playoff_state(int stage, int completed_days);
     void play_wm_day();
     void begin_world_championship();
@@ -486,6 +486,7 @@ private:
     std::vector<Series> series_;
     std::vector<HokTableRow> table_rows() const;  // the 48 rows of the three leagues as saved
     int playoff_day_ = 0, champion_ = -1, cup_winner_ = -1;
+    bool playoffs_set_up_ = false;  // the first round was set up at the step end (not in checkpoints: play_playoff_day redoes it)
     int seasons_ = 0;
     std::array<RoundRobinTable<6>, 2> wm_groups_{};  // nations 52-57 and 58-63
     std::vector<int> wm_slots_;                       // knock-out slots DS:5D5B, pairs (0,1), (2,3), ...

@@ -215,8 +215,10 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         if (std::getenv("EM_OLD_FINALCLOSE") && cup_round_ == 5 && cup_winner_ < 0 && cup_series_.size() == 1 && (cup_series_[0].wins_higher == 2 || cup_series_[0].wins_lower == 2))
             cup_winner_ = cup_series_[0].winner();
     }
-    if (playoff_day_ > 0) {
-        const int stage = std::min((playoff_day_ - 1) / 5, 2);
+    // after the last league day the save already holds the set-up of the play-off phase (play_playoff_day(true))
+    playoffs_set_up_ = playoff_day_ == 0 && matchday_[0] > 4 * (kHokLeagueSize - 1) && !std::getenv("EM_OLD_PLAYOFFSETUP");
+    if (playoff_day_ > 0 || playoffs_set_up_) {
+        const int stage = std::min(std::max(playoff_day_ - 1, 0) / 5, 2);
         const int base = kPlayoffBase[stage];
         for (int pair = 0; pair < (4 >> stage); pair++) {
             const size_t slot = size_t(base + pair * 2);
@@ -2120,15 +2122,21 @@ void Game::quick_setup(int home, int away, HokTeam& h, HokTeam& a) {
     }
 }
 
-void Game::play_playoff_day() {
-    const int day = playoff_day_++;
+void Game::play_playoff_day(bool setup_only) {
+    // The first round of the phase (quarter-final pairs, relegation groups, play-off grids) is set up at the end of the
+    // last league day: with the human club in the play-offs the menu before the first play-off day already shows it
+    // (REAL-CODE Köln period 33); without it the day loop plays on and the timing does not show (Mannheim period 28).
+    if (setup_only && (playoff_day_ != 0 || playoffs_set_up_)) return;
+    const int day = setup_only ? 0 : playoff_day_++;
+    const bool already_set_up = !setup_only && day == 0 && playoffs_set_up_;
+    if (!setup_only) playoffs_set_up_ = false;
     const int stage = day / 5;  // five days per best-of-five round
     MatchStats stats;
     std::array<MatchStats, kMaxManagers> other_stats{};  // the matches of managers 1..
     const HumanSide side = human_sides(&stats, other_stats);
     const League& first = leagues_[0];
     auto position = [&](int team) { return first.rows[size_t(team - first.first_team)].position; };
-    if (day % 5 == 0) {
+    if (day % 5 == 0 && !already_set_up) {
         std::vector<int> teams;
         if (stage == 0) {  // DS:5CCB: the first eight of the final table, 1-8, 2-7, 3-6, 4-5
             std::vector<int> order(kHokLeagueSize);
@@ -2194,6 +2202,14 @@ void Game::play_playoff_day() {
                 save_.state.at(kPlayoffScores + game * 14 + slot + 1) = 0;
             }
         }
+    }
+    if (setup_only) {
+        // the set-up starts the phase cursor at the quarter finals and clears the pending flag (REAL-CODE Köln period 33;
+        // on a play-off day store_playoff_state overwrites both)
+        save_.state.at(kPlayoffCursor) = uint8_t(kPlayoffBase[0]);
+        save_.state.at(kPlayoffPending) = 0;
+        playoffs_set_up_ = true;
+        return;
     }
     // ovl06_161d quick path (no human club in any series of the day): the games are played in slot order into the
     // result grid DS:5C4B; after each game sub_40683 scans every open pair of the day for H == A - the pairs not played
@@ -3844,7 +3860,7 @@ Bytes Game::save_bytes() const {
     if (euro_champion_ >= 0) s.at(kStateEuroWinner) = uint8_t(euro_champion_);
     if (cup_winner_ >= 0) s.at(kStateCupWinner) = uint8_t(cup_winner_);
     if (champion_ >= 0) s.at(kStateChampion) = uint8_t(champion_);
-    if (playoff_day_ > 0)
+    if (playoff_day_ > 0 || playoffs_set_up_)
         for (size_t group = 0; group < relegation_.size(); group++) {
             const GroupTable& table = relegation_[group];
             store_native_group(s, table, 1, int(group));
@@ -4090,6 +4106,9 @@ g_draw_scope = "youth";
 g_draw_scope = "league-day";
         play_league_day();
         league_since_refresh_ = true;
+        // after the last league day the play-off phase is set up at once: the image of the next days already counts the
+        // play-offs, and the menu before the first play-off day shows the pairs (REAL-CODE Köln period 33)
+        if (matchday_[0] > 4 * (kHokLeagueSize - 1) && !std::getenv("EM_OLD_PLAYOFFSETUP")) play_playoff_day(true);
         for (int m = 0; m < managers_; m++) mgr_[size_t(m)].played = mgr_[size_t(m)].team >= 0 && mgr_[size_t(m)].team < 3 * kHokLeagueSize;
     }
 g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: events at day %d: event %d league %d at %zu\n", day_, int(event), int(calendar_.league_day(day_)), (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
@@ -4192,10 +4211,13 @@ g_draw_scope = "weekly-injuries-offers-training";
         }
         // DS:A70E is the manager loop index of the original; the menu loop leaves it at 0 (ovr037 376d3, REAL-CODE period 29)
         if (national_coach_ < 0) save_.state.at(0x0788) = 0;
-        // the club menu refreshes the copies of the table (REAL-CODE period 28); before a WM day it is not entered (period 29)
-        if (next_event != kEventWorldChampionship) {
+        // the club menu refreshes the copies of the table (REAL-CODE period 28); before a WM day it is not entered (period 29);
+        // before a play-off day the copies keep the 43rd matchday (REAL-CODE Köln period 33)
+        if (next_event != kEventWorldChampionship && (next_event != kEventPlayoff || std::getenv("EM_OLD_PLAYOFFCOPY"))) {
             write_table_copies(save_.state, table_rows());
             table_copies_frozen_ = league_since_refresh_ = false;
+        } else if (next_event == kEventPlayoff && league_since_refresh_) {
+            table_copies_frozen_ = true;
         }
         // messages (24 entries of 0x71 bytes at DS:D294, src/game/messages.cpp): ovr038:3019 sorts them (newest first),
         // ovr038:3067 counts the general ones down (0x38, 0x28, 0x18, gone); entries of a player stay
