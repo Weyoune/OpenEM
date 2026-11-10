@@ -112,3 +112,13 @@ long renewal_demand(const ContractTables& t, const ContractPlayer& p, int years,
 }
 
 }  // namespace em
+
+namespace em {
+long season_change_demand(const ContractTables& t, const HokFile& h, int m, const ContractPlayer& p, int years, int mood,
+                          BorlandRandom& rng) {
+    ContractPlayer aged = p;
+    const int id = h.state.at(kSquad + size_t(m) * kSquadBlock + 3 * kSquadRecord + 0x0F);
+    if (id) aged.age = h.state.at(kPlayers + size_t(id - 1) * kPlayerRecord + 0x14);
+    return renewal_demand(t, aged, years, mood, 0, 44, 233, rng);
+}
+}  // namespace em

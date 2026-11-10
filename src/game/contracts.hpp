@@ -79,5 +79,11 @@ long player_worth(const ContractTables&,const ContractPlayer&,Worth,const Contra
 // ovl11_41db: salary the player asks for a new contract of `years` seasons.
 long renewal_demand(const ContractTables& t, const ContractPlayer& p, int years, int mood, int matchday,
                     int matchdays, int season_day, BorlandRandom& rng);
+// The same dialog at the season change (ovr026 -> ovl11_41db, ovr035:481B..49F2) for other years than the proposal: the
+// mood DS:E1A4, the rest of the season of the new season (DS:07A9 = 0: 100 %) and, after season day 232, the age factor
+// (152 - age) / 100 - with the age of the player in squad slot 3 of manager `m`: the drawing loop before leaves di = 3
+// (a bug of the original that the player sees in the offered salary).
+long season_change_demand(const ContractTables& t, const HokFile& h, int m, const ContractPlayer& p, int years, int mood,
+                          BorlandRandom& rng);
 
 }  // namespace em

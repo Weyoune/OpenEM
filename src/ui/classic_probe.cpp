@@ -20,7 +20,13 @@ ClassicUiProbe ClassicApplication::probe() const {
     if (sale_quote_) { p.modal = "sale-offer"; return p; }
     if (talent_question_) { p.modal = "talent-question"; return p; }
     if (quit_question_) { p.modal = "quit-question"; return p; }
-    if (session_.contract_question()) { p.modal = "contract-question"; p.text = session_.contract_question()->name; return p; }
+    if (session_.contract_question()) {  // the review of the day comes first, then the dialog
+        if (const auto career = career_modal(); !career.empty()) { p.modal = career; return p; }
+        p.modal = "contract-question";
+        p.text = session_.contract_question()->name;
+        p.slot = session_.contract_question()->slot;
+        return p;
+    }
     if (advancing_) { p.modal = "advancing"; return p; }
     if (const auto career = career_modal(); !career.empty()) { p.modal = career; return p; }
     if (advert_renewal_) { p.modal = "advert-question"; return p; }

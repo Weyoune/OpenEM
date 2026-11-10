@@ -42,17 +42,25 @@ void ClassicApplication::open_messages() {
 void ClassicApplication::show_immediate_messages() {
     if (!session_.loaded()) return;
     const Game& game = session_.game();
+    if (game.season_review() && season_review_shown_) {  // shown before the contract talks of this day
+        season_review_shown_ = false;
+        return;
+    }
     if (!game.season_review() && game.immediate_messages().empty()) return;
-    if (!career_) career_ = std::make_shared<ClassicCareerState>();
-    if (game.season_review()) {
-        career_->review = *game.season_review();
-        career_->review_overview = true;
-        career_->review_cleared = false;
-        career_->review_messages = game.immediate_messages();
-    } else {
+    if (game.season_review()) show_review(*game.season_review(), game.immediate_messages());
+    else {
+        if (!career_) career_ = std::make_shared<ClassicCareerState>();
         career_->messages.show_immediate(game.immediate_messages());
     }
     advancing_ = false;  // the original waits for the player at the review and at each of these messages
+}
+
+void ClassicApplication::show_review(const SeasonReview& review, std::vector<std::string> messages) {
+    if (!career_) career_ = std::make_shared<ClassicCareerState>();
+    career_->review = review;
+    career_->review_overview = true;
+    career_->review_cleared = false;
+    career_->review_messages = std::move(messages);
 }
 
 // The review ends with its last message, or with the first click when there is none.

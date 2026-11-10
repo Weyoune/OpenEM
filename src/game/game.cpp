@@ -1316,6 +1316,7 @@ void Game::restore_offers(int m) {
 // added to DS:97EA), his record goes (ovl09_25d6) and he is a free player (+0x1A = 6, no team)
 // for ovl16_0480. A player who accepts gets the years and the salary.
 void Game::expire_contracts(int m) {
+    contract_outcomes_.clear();
     constexpr int kMatchdays = 44;
     for (size_t slot = 0; slot < save_.squad_of(m).size();) {
         uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
@@ -1331,33 +1332,74 @@ void Game::expire_contracts(int m) {
             // (no random draw); ovl11_41db shows it. "Mach' ich!" on the unchanged proposal takes it without the acceptance
             // roll (ovr035:4C3C) and drops a pending message of the player (ovl12_0180). REAL-CODE period 58: 25 of 25.
             const long proposal = long(int32_t(player_worth(contracts_, cp, Worth::Salary, brng_) * (147 - int(pl.age)) / 100));
-            const int years = contract_decider_ ? contract_decider_(cp, proposal) : 1;  // the default takes the proposal
-            if (years == 1) {
-                r[0x0B] = 1;
+            ContractTerms terms;
+            if (contract_terms_decider_) terms = contract_terms_decider_(cp, int(slot), proposal);
+            else terms.years = contract_decider_ ? contract_decider_(cp, proposal) : 1;  // the default takes the proposal
+            // The insurance line of ovl11_41db writes the premium (+0x30, ovl11_3d36(record, 1) / 2) at once and marks it
+            // (+0x2F bit 7) when the player signs; the native lock (bit 7 or flags & 3 == 2) keeps it as it is.
+            const bool was_insured = le32(save_.state, size_t(r - save_.state.data()) + 0x30) != 0;
+            const bool insurance = contract_terms_decider_ && terms.years > 0 && terms.insured != was_insured &&
+                                   !(r[0x2F] & 0x80) && (r[0x09] & 3) != 2;
+            auto change_insurance = [&] {
+                if (!insurance) return;
+                const long premium = terms.insured ? player_worth(contracts_, cp, Worth::Salary, brng_) / 2 : 0;
+                for (int b = 0; b < 4; b++) r[0x30 + b] = uint8_t(uint32_t(premium) >> (8 * b));
+            };
+            auto signed_on = [&](int years, long salary, const std::string& text) {
+                r[0x0B] = uint8_t(years);
                 r[0x18] = 0;
-                for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(proposal >> (8 * b));
+                for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(salary >> (8 * b));
+                if (insurance && terms.insured && le32(save_.state, size_t(r - save_.state.data()) + 0x30)) r[0x2F] |= 0x80;
+                sp.contract_years = years;
+                sp.salary = salary / 3;
+                log_.push_back(pl.name + text + std::to_string(salary / 3) + " DM");
+                contract_outcomes_.push_back({pl.name, true, false, 0});
+                slot++;
+            };
+            if (terms.years == 1 && (terms.salary == 0 || terms.salary == proposal)) {
+                change_insurance();
                 uint8_t* praw = save_.state.data() + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
                 if (praw[0x1E] >= 1 && praw[0x1E] <= 24) native_delete_message(save_.state, praw[0x1E]);
-                sp.contract_years = 1;
-                sp.salary = proposal / 3;
-                log_.push_back(pl.name + " stays for 1 year at " + std::to_string(proposal / 3) + " DM");
-                slot++;
+                signed_on(1, proposal, " stays for 1 year at ");
                 continue;
             }
-            if (years > 1) {  // the manager changed the years: the player decides (player_accepts, ovl11_3a3b)
-                const long demand = renewal_demand(contracts_, cp, years, 100, kMatchdays, kMatchdays, 233, brng_);
-                if (player_accepts(contracts_, cp, years, demand, kMatchdays, kMatchdays, 233, brng_)) {
-                    r[0x0B] = uint8_t(years);
-                    r[0x18] = 0;
-                    for (int b = 0; b < 4; b++) r[0x28 + b] = uint8_t(demand >> (8 * b));
-                    sp.contract_years = years;
-                    sp.salary = demand / 3;
-                    log_.push_back(pl.name + " signs for " + std::to_string(years) + " years at " + std::to_string(demand / 3) + " DM");
-                    slot++;
+            bool refused = false, too_long = false;
+            if (contract_terms_decider_ && terms.years >= 1) {
+                // ovl11_41db as the season change calls it (ovr035:4A6D..49F2, 4AD8..4D7D): a new number of years asks
+                // season_change_demand at once, writes it into the record (+0x0B, +0x28) and "Mach' ich!" takes it without
+                // the acceptance roll; a typed salary is rolled for (ovl11_3a3b) unless it reaches the record's salary.
+                // More than four years: "SOOOO lange..." and the player goes. A refusal draws the wish counter.
+                long record_salary = proposal, offer = proposal;
+                if (terms.years != 1) record_salary = offer = std::max(season_change_demand(contracts_, save_, m, cp, terms.years, daily_luck_, brng_), proposal);
+                bool roll = false;
+                if (terms.salary) { offer = terms.salary; roll = offer < record_salary; }
+                change_insurance();
+                if (terms.years > 4) too_long = true;
+                else if (!roll || player_accepts(contracts_, cp, terms.years, offer, kMatchdays, kMatchdays, 233, brng_)) {
+                    uint8_t* praw = save_.state.data() + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+                    if (praw[0x1E] >= 1 && praw[0x1E] <= 24) native_delete_message(save_.state, praw[0x1E]);
+                    signed_on(terms.years, offer, " signs for " + std::to_string(terms.years) + " years at ");
+                    continue;
+                } else refused = true;
+                r[0x18] = uint8_t(brng_.range(10, 18));  // the wish counter starts again
+            } else if (terms.years >= 1) {  // the old decider: other years, the player decides (player_accepts, ovl11_3a3b)
+                long offer = terms.salary;
+                if (terms.years != 1) {
+                    const long demand = renewal_demand(contracts_, cp, terms.years, 100, kMatchdays, kMatchdays, 233, brng_);
+                    if (!offer) offer = demand;
+                }
+                if (player_accepts(contracts_, cp, terms.years, offer, kMatchdays, kMatchdays, 233, brng_)) {
+                    signed_on(terms.years, offer, " signs for " + std::to_string(terms.years) + " years at ");
                     continue;
                 }
                 r[0x18] = uint8_t(brng_.range(10, 18));  // a refusal: the wish counter starts again
+                refused = true;
             }
+            if (contract_terms_decider_) {  // ovl12_0180 at the end of ovl11_41db: the player's pending message goes
+                uint8_t* praw = save_.state.data() + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
+                if (praw[0x1E] >= 1 && praw[0x1E] <= 24) native_delete_message(save_.state, praw[0x1E]);
+            }
+            contract_outcomes_.push_back({pl.name, false, refused, 0, too_long});
         }
         const long demand = std::getenv("EM_OLD_CONTRACTS") ? renewal_demand(contracts_, cp, 2, 100, kMatchdays, kMatchdays, 233, brng_) : 0;
         const int years = std::getenv("EM_OLD_CONTRACTS") ? (contract_decider_ ? contract_decider_(cp, demand) : 2) : 0;
@@ -1373,6 +1415,7 @@ void Game::expire_contracts(int m) {
         }
         const long fee = player_worth(contracts_, cp, Worth::Value, brng_) / 2;
         mgr_[m].budget.balance += fee;
+        if (!contract_outcomes_.empty() && !contract_outcomes_.back().signed_on) contract_outcomes_.back().fee = fee;
         const int exe_index = r[0x0F];
         remove_squad_record(m, int(slot), kHokSquadSlots - 1);
         save_.squad_of(m).erase(save_.squad_of(m).begin() + long(slot));
