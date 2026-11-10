@@ -118,6 +118,7 @@ void ClassicApplication::click_start_menu(int x, int y, bool right) {
         invalidate();
         screen_ = ClassicScreen::Main;
         table_order_ = session_.game().league(division_).ranking;
+        ask_cup_draw();  // ovl05_4c7b(0, 0) at the start of the game (classic_hotseat.cpp)
     } catch (const std::exception& e) {
         notice(e.what());
     }

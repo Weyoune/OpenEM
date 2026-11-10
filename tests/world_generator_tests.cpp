@@ -71,6 +71,18 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
         check(rec[0x1C] >= 40 && rec[0x1C] <= 55 && rec[0x1D] >= 40 && rec[0x1D] <= 55, tag + ": team form");
     }
     for (size_t m = 0; m < s.managers.size(); m++) check(team(h, s.managers[m].team)[0x16] == m + 1, tag + ": human club +0x16");
+    // ovr027:1B27..1DE8 for every manager of a new game; the original's fresh states (BACKUP.HOK: 50 50 50 / 5 5 5 / 0 0 0,
+    // +0x18B = 99999; its two-manager game HOT2 at level 3: balance 1500000) agree
+    for (size_t m = 0; m < s.managers.size(); m++) {
+        const size_t youth = 0x06B8 + m * 0x15, block = 0x0DCD + m * 0x1AF;
+        for (size_t i = 0; i < 3; i++)
+            check(h.state.at(youth + i) == 0x34 + 14 * (2 - s.squad_size) && h.state.at(youth + 3 + i) == 5 && h.state.at(youth + 6 + i) == s.squad_size,
+                  tag + ": youth teams of manager " + std::to_string(m));
+        check(int32_t(le32(h.state, block + 0x18F)) == (5 - s.level) * 150000 + 1200000, tag + ": balance (DS:0ED8 * 150000 + 1200000)");
+        check(le32(h.state, block + 0x18B) == 99999, tag + ": +0x18B = 99999");
+        check((team(h, s.managers[m].team)[0x34] >> 6) == 2, tag + ": the manager's club is reported on a board (mode 2)");
+    }
+    for (size_t m = s.managers.size(); m < 4; m++) check(h.state.at(0x06B8 + m * 0x15) == 0, tag + ": no youth teams for unused managers");
     // players
     std::set<std::string> names;
     for (int id = 1; id < 200; id++) {

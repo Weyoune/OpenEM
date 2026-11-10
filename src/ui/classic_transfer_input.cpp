@@ -46,8 +46,8 @@ void ClassicApplication::click_transfer(int x,int y,bool right){
         if(owner==m){
             if(h.state.at(record+9)&0x80){open_sale_offer(4,pool,int16_t(x));return;}
             action([&](Game& game){const auto result=game.recall_transfer_player(size_t(pool),false);return ActionResult{result==TransferMoveResult::Moved?"":"Dieser Spieler kann derzeit nicht zurückgerufen werden.",result==TransferMoveResult::Moved};});
-        }else if(owner==4&&x<=250)open_purchase(pool);
-        else if(owner==4)open_loan(pool);
+        }else if(owner<=4&&x<=250)open_purchase(pool);  // owner 0..3: another manager's list player (classic_hotseat.cpp)
+        else if(owner<=4)open_loan(pool);
         return;
     }
     if(x>261&&x<318&&y>226&&y<238)open_talent_question();

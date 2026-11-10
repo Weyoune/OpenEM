@@ -396,6 +396,7 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(native_notice_until_)return;
+    if(manager_question_){click_manager_question(x,y,right);return;}  // hot seat (classic_hotseat.cpp)
     if(!notice_.empty()){
         if(!right){notice_.clear();if(season_editor_with_notice_){season_editor_with_notice_=false;contract_editor_.reset();}if(advert_renewal_refused_)resolve_advert_renewal(false);if(!pending_notices_.empty()){notice_=pending_notices_.front();pending_notices_.erase(pending_notices_.begin());}}
         return;
@@ -752,6 +753,7 @@ void ClassicApplication::draw(){
     if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
 }
 void ClassicApplication::draw_dialog(){
+    if(manager_question_){draw_manager_question();return;}  // hot seat (classic_hotseat.cpp)
     if(notice_.empty()&&!quit_question_&&!talent_question_&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
     if(advancing_&&notice_.empty())return;
     const bool advert_question=advert_renewal_.has_value()&&!advert_renewal_refused_;

@@ -147,6 +147,94 @@ int main(int argc, char** argv) {
             check(played0 >= 3 && played1 >= 3, "both managers' clubs played their league games (" + std::to_string(played0) + ", " + std::to_string(played1) + ")");
         }
 
+        // --- offers between managers: HOT3 = the original after bert listed his goalie MERK (pool slot 1), at anna's
+        //     menu of 17.09.1993; HOT3BUY = the original after anna bought him for 500000 DM (1 year, 17100 DM) ----------
+        {
+            const auto rgb = [&](const char* n) { return goldens / (std::string("offer-") + n + ".rgb"); };
+            auto open_transfer = [&](ClassicApplication& app) {
+                app.click(110, 110, false);  // Mannschaft
+                app.click(185, 220, false);  // Transfer
+                require(app.screen() == ClassicScreen::Transfer, "anna's transfer page");
+            };
+            auto bid = [&](ClassicApplication& app, const char* amount) {
+                app.click(200, 52, false);  // MERK, x <= 250: purchase
+                app.text_input(amount);
+                app.key(SDLK_RETURN);
+            };
+            const size_t merk_pool = 0x81CD + 52 + 0x1A;
+            {
+                ClassicApplication app(data, output / "hot3a", refs / "HOT3.HOK");
+                open_transfer(app);
+                app.motion(230, 230);
+                app.draw();
+                check(differences(app.canvas(), rgb("transfer_hot3")) == 0, "anna's transfer page with bert's MERK");
+                bid(app, "100000");
+                app.motion(200, 52);
+                app.draw();
+                // (314,36): right end of the pool hover line, a transfer-page detail outside the hot seat
+                check(differences(app.canvas(), rgb("unfair_m0"), {{314, 36, 315, 37}}) == 0, "unfair bid: bert's dialog \"nicht erlaubt (unfair)\"");
+                app.click(190, 172, false);  // "Nein"
+                check((app.session().game().save().state.at(merk_pool) & 0x80) == 0, "an unfair bid sets no refusal bit");
+                SDL_Delay(1450); app.tick();  // the timed notice "Ihr Angebot wurde abgelehnt." (25 BIOS ticks)
+                bid(app, "500000");
+                app.motion(200, 52);
+                app.draw();
+                check(differences(app.canvas(), rgb("question_hot3")) == 0, "bert is asked: \"Nehmen Sie das Angebot (500000 DM)\"");
+                app.click(190, 172, false);  // bert: "Nein !"
+                check(app.session().game().save().state.at(merk_pool) == 0x81, "bert's refusal sets bit 7 and anna's bit (as in the original)");
+            }
+            {
+                ClassicApplication app(data, output / "hot3b", refs / "HOT3.HOK");
+                open_transfer(app);
+                bid(app, "500000");
+                app.click(125, 172, false);  // bert: "Na gut."
+                app.motion(125, 172);
+                app.draw();
+                // masked: the pool hover rules of the original (stale from the bid click) and the hover help line, transfer-page
+                // details outside the hot seat
+                check(differences(app.canvas(), rgb("contract_hot3"), {{176, 52, 316, 53}, {176, 68, 316, 69}, {60, 210, 110, 220}}) == 0,
+                      "contract panel for MERK after bert's yes (at the top: ovl11_41db(record, slot, 0))");
+                app.click(40, 89, false);  // "Mach' ich!"
+                app.motion(40, 89);
+                app.draw();
+                // masked: MERK's last column (profile draws of the insertion, OpenEM's Borland stream is not the original's here) and
+                // the footer (the original pads the numbers to width 1 after the contract panel, DS:0374; hover line)
+                check(differences(app.canvas(), rgb("after_buy_hot3"), {{148, 40, 154, 46}, {0, 218, 320, 240}}) == 0, "anna's transfer page after the purchase");
+                const Bytes s = decode_hok(app.session().game().save_bytes()).state;
+                const Bytes want = decode_hok(read_file(refs / "HOT3BUY.HOK")).state;
+                for (const auto& [at, what] : std::vector<std::pair<size_t, const char*>>{
+                         {0x0DCD + 0x18F, "anna's balance"}, {0x0DCD + 0x1AF + 0x18F, "bert's balance"},
+                         {0x4FA5 + 5 * 0x21 + 0x15, "MERK +0x15"}, {0x4FA5 + 5 * 0x21 + 0x1A, "MERK owner"}, {0x4FA5 + 5 * 0x21 + 0x1D, "MERK club"}}) {
+                    bool same = true;
+                    for (size_t k = 0; k < (std::string(what).find("balance") != std::string::npos ? 4u : 1u); k++) same &= s.at(at + k) == want.at(at + k);
+                    check(same, std::string("after the purchase like the original: ") + what + " (OpenEM " + std::to_string(int32_t(le32(s, at))) + ", original " + std::to_string(int32_t(le32(want, at))) + ")");
+                }
+                check(app.session().game().save().squad_of(1).size() == decode_hok(read_file(refs / "HOT3.HOK")).squad_of(1).size(), "bert's squad unchanged");
+            }
+            {  // loan (x > 250): value / 3 for the fairness check; bert keeps the player (+0x1A), anna has him for a season
+                ClassicApplication app(data, output / "hot3c", refs / "HOT3.HOK");
+                open_transfer(app);
+                const long anna = app.session().game().budget().balance;
+                app.click(290, 52, false);
+                app.text_input("170000");
+                app.key(SDLK_RETURN);
+                app.click(125, 172, false);  // bert: "Na gut."
+                const Bytes s = decode_hok(app.session().game().save_bytes()).state;
+                const size_t merk = 0x4FA5 + 5 * 0x21;
+                check(app.session().game().budget().balance == anna - 510000, "loan: anna pays the bid, no sponsor");
+                check(s.at(merk + 0x1A) == 1 && s.at(merk + 0x1D) == app.session().game().human_team(), "loan: bert keeps MERK, he plays for anna");
+                const Bytes before = decode_hok(read_file(refs / "HOT3.HOK")).state;
+                const size_t bert = 0x0DCD + 0x1AF + 0x18F;
+                check(int32_t(le32(s, bert)) == int32_t(le32(before, bert)) + 510000, "loan: bert gets the bid");
+                bool loaned = false;
+                for (int slot = 0; slot < 29; slot++) {
+                    const size_t r = 0x696D + size_t(slot) * 52;
+                    loaned |= s.at(r + 15) == 5 && s.at(r + 0x0B) == 1 && s.at(r + 0x0C) == uint8_t(before.at(merk + 0x1D) + 0x80);
+                }
+                check(loaned, "loan: MERK in anna's squad for one season, returning to bert's club");
+            }
+        }
+
         // --- a new game with two managers plays its first days (Session, game/new_game.cpp start_new_world) ---
         {
             Session s(data);
@@ -192,6 +280,11 @@ int main(int argc, char** argv) {
 
             app.click(282, 212, false);  // Los jetzt!
             require(app.session().loaded(), "Los jetzt! starts the game");
+            // the DEB cup draw question "An Alle:" over the empty draw board (ovr029:4693..487F), pixel-equal to the original
+            app.motion(281, 213);
+            app.draw();
+            check(differences(app.canvas(), goldens / "cupq2.rgb") == 0, "cup draw question \"An Alle:\" at the start");
+            app.click(190, 172, false);  // "Kein Gedanke"
             const Game& g = app.session().game();
             check(g.managers() == 2 && app.session().active_manager() == 0, "two managers, manager 0 at the menu");
             const HokFile& h = g.save();

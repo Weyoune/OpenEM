@@ -48,6 +48,16 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
         return PurchaseResult::SellerRefused;
     }
     if (mgr_[a].budget.balance < fee) return PurchaseResult::InsufficientFunds;
+    return insert_loan(slot, fee, -1, accept_subsidy, prepare_lineup);
+}
+
+// The loaned list player joins the active manager's squad (ovr035:17B2..19DE). `seller` >= 0: the list player of that
+// human manager, who agreed (answer_manager_offer): he gets the fee, no sponsor subsidy (ovr035:1962, 1A0C).
+PurchaseResult Game::insert_loan(size_t slot, long fee, int seller, bool accept_subsidy, bool prepare_lineup) {
+    const int a = active_manager_;
+    const size_t source = kPoolBase + slot * kRecord;
+    const int id = save_.state.at(source + 15);
+    HokPlayer* player = player_by_exe_index(id);
     const size_t kSquadBase = squad_block(a);
 
     HokFile prepared = decode_hok(save_bytes());
@@ -74,6 +84,14 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     brng_ = next;
     mgr_[a].budget.balance -= fee;
     log_.push_back(player->name + " loaned for " + std::to_string(fee / 3) + " DM, salary " + std::to_string(salary / 3) + " DM");
+    if (seller >= 0 && seller < managers_) {
+        mgr_[seller].budget.balance += fee;
+        last_purchase_subsidy_ = 0;
+        if (prepare_lineup) prepare_human_lineup(false, a);
+        refresh_budget_roster(a);
+        refresh_budget_roster(seller);
+        return PurchaseResult::Purchased;
+    }
     const long subsidy = purchase_subsidy(fee, brng_);
     last_purchase_subsidy_ = subsidy;
     if (subsidy > 0) {
