@@ -65,6 +65,7 @@ ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::pa
     if(!session_.loaded()){if(session_.can_start_new_game())open_start_menu();else open_files(false);}
 }
 const HokFile& ClassicApplication::snapshot(){
+    if(season_view_)return *season_view_;  // the contract talks of the season change draw the staged day
     if(!view_||view_revision_!=session_.revision()){
         view_=std::make_unique<HokFile>(decode_hok(session_.game().save_bytes()));view_revision_=session_.revision();
     }
@@ -211,6 +212,8 @@ void ClassicApplication::tick(){
         else if(screen_==ClassicScreen::Main){live_screen_=false;screen_=live_screen_before_;}  // the screen was left
         return;
     }
+    if(season_view_&&!session_.contract_question()&&notice_.empty())season_view_.reset();  // talks done, notices read
+    if(season_pending_open_&&notice_.empty()&&session_.contract_question()){season_pending_open_=false;open_season_talk();}
     if(!advancing_)update_roster_hover();
     if(!advancing_)tick_stats_hold(classic_ticks());
     if(tick_match_view())return;
@@ -253,6 +256,7 @@ void ClassicApplication::tick(){
         bool advanced=false;
         try{advanced=session_.advance_day();}catch(...){live_day_=false;throw;}
         const bool live=live_day_||live_skip_;live_day_=false;
+        if(!advanced&&session_.contract_question()){open_season_talk();return;}  // the contract talks of the season change
         if(advanced){
             advance_first_=false;invalidate();
             if(post_tables_)news_after_tables_=true;else show_manager_news();  // the tables belong to the match day
@@ -344,7 +348,7 @@ void ClassicApplication::accept_file(){
         if(!file.has_extension())file+=save_mode_?".OEM":".HOK";
         if(save_mode_)session_.save(file);else{
             if(session_.loaded()&&session_.dirty())autosave();
-            session_.load(file);invalidate();
+            session_.load(file);invalidate();close_start_menu();
         }
         //Live load/save returns within the same native menu invocation.
         //The selected category/footer survives; startup loading starts at-1.
@@ -393,7 +397,7 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(native_notice_until_)return;
     if(!notice_.empty()){
-        if(!right){notice_.clear();if(advert_renewal_refused_)resolve_advert_renewal(false);if(!pending_notices_.empty()){notice_=pending_notices_.front();pending_notices_.erase(pending_notices_.begin());}}
+        if(!right){notice_.clear();if(season_editor_with_notice_){season_editor_with_notice_=false;contract_editor_.reset();}if(advert_renewal_refused_)resolve_advert_renewal(false);if(!pending_notices_.empty()){notice_=pending_notices_.front();pending_notices_.erase(pending_notices_.begin());}}
         return;
     }
     if(sale_quote_){
@@ -414,11 +418,9 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(session_.contract_question()){
-        if(!right&&(inside(x,y,96,167,151,177)||inside(x,y,166,167,221,177))){
-            // the last answer completes the day: as in tick, the season review and its messages follow
-            try{pending_match_frames_.clear();if(session_.answer_contract(x<160)){invalidate();show_manager_news();begin_match_view();}invalidate();advance_first_=false;}
-            catch(const std::exception&e){notice(e.what());}
-        }
+        // the review of the day first (career_click), then the dialog "Vertragsverhandlung" (classic_contracts.cpp)
+        if(career_click(x,y,right))return;
+        if(contract_editor_&&contract_editor_->season)click_contract_editor(x,y,right);
         return;
     }
     if(advancing_)return;
@@ -450,29 +452,7 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(screen_==ClassicScreen::Statistics){click_statistics(x,y,right);return;}
     if(roster_kind())roster_rules_=false;
-    if(contract_editor_){
-        auto& e=*contract_editor_;
-        if(right)return;
-        if(e.field>=0)return;
-        const int s=e.offset;
-        if(inside(x,y,12,s+81,67,s+91)){submit_contract();return;}
-        if(inside(x,y,91,s+81,146,s+91)){
-            if(purchase_draft_){try{cancel_purchase();}catch(const std::exception& e){notice(e.what());}}
-            else contract_editor_.reset();return;
-        }
-        if(x>2&&x<158&&y>s+52&&y<s+78){
-            const int field=int(y>s+63)+int(y>s+71);
-            const size_t record=squad_block(active_manager())+size_t(e.slot)*52;
-            const auto& h=snapshot();
-            if(field==2){
-                if((h.state.at(record+0x2F)&0x80)||(h.state.at(record+9)&3)==2)return;
-                e.insured=!e.insured;return;
-            }
-            if(h.state.at(record+0x18)!=0){notice(h.players.at(size_t(e.player)).name+" ist im Moment\nnicht verhandlungs-\nbereit.");return;}
-            e.field=field;e.digits.clear();
-        }
-        return;
-    }
+    if(contract_editor_){click_contract_editor(x,y,right);return;}
     if(screen_==ClassicScreen::Lineup){click_lineup(x,y,right);return;}
     if(screen_==ClassicScreen::Tactics){click_tactics(x,y,right);return;}
     if(screen_==ClassicScreen::Transfer){click_transfer(x,y,right);return;}
@@ -559,7 +539,7 @@ void ClassicApplication::click(int x,int y,bool right){
                     return;
                 }
             }
-            if(session_.loaded())screen_=ClassicScreen::Main;return;
+            if(session_.loaded())screen_=ClassicScreen::Main;else if(start_menu_open())screen_=ClassicScreen::NewManager;return;  // ovr027:0EDD: back to the start menu
         }
         if(inside(x,y,88,194,290,204)){filename_focus_=true;filename_.clear();return;}
         if(y>=207&&y<=218){
@@ -690,7 +670,7 @@ void ClassicApplication::key(int key){
     }
     if(key==SDLK_ESCAPE){
         if(!notice_.empty())notice_.clear();else if(quit_question_)quit_question_=false;
-        else if(session_.contract_question()){session_.cancel_advance();advancing_=false;}
+        else if(session_.contract_question()){session_.cancel_advance();advancing_=false;contract_editor_.reset();season_view_.reset();season_review_shown_=false;season_outcomes_seen_=0;season_pending_open_=false;season_editor_with_notice_=false;}
         else if(screen_==ClassicScreen::Main)category_=-1;else if(screen_!=ClassicScreen::Training&&screen_!=ClassicScreen::Tactics&&screen_!=ClassicScreen::Lineup&&screen_!=ClassicScreen::Transfer&&screen_!=ClassicScreen::Strengths&&screen_!=ClassicScreen::Cup&&screen_!=ClassicScreen::EuroCup&&screen_!=ClassicScreen::WorldChampionship&&screen_!=ClassicScreen::LeagueFixtures&&screen_!=ClassicScreen::LeagueCompetition&&screen_!=ClassicScreen::Advertising&&session_.loaded())screen_=ClassicScreen::Main;
         return;
     }
@@ -736,6 +716,11 @@ void ClassicApplication::draw(){
         if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
         return;
     }
+    if(season_view_&&career_modal().empty()){  // the contract talks of the season change (classic_contracts.cpp)
+        draw_season_talk();draw_dialog();
+        if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
+        return;
+    }
     switch(screen_){
         case ClassicScreen::Main:draw_main();break;case ClassicScreen::Files:draw_files();break;
         case ClassicScreen::Table:draw_table();break;case ClassicScreen::Totals:draw_totals();break;
@@ -767,12 +752,12 @@ void ClassicApplication::draw(){
     if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
 }
 void ClassicApplication::draw_dialog(){
-    if(notice_.empty()&&!quit_question_&&!talent_question_&&!session_.contract_question()&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
-    if(advancing_&&notice_.empty()&&!session_.contract_question())return;
+    if(notice_.empty()&&!quit_question_&&!talent_question_&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
+    if(advancing_&&notice_.empty())return;
     const bool advert_question=advert_renewal_.has_value()&&!advert_renewal_refused_;
     const bool stadium_question=stadium_build_.has_value();
     const bool talent_question=talent_question_&&notice_.empty();
-    const bool question=quit_question_||session_.contract_question().has_value()||advert_question||stadium_question||talent_question;
+    const bool question=quit_question_||advert_question||stadium_question||talent_question;
     canvas_.frame(75,107,7,4);
     canvas_.text(flow,105,125,session_.loaded()?manager_name(active_manager()):"",7,0,210);  // FUN_00146858: the name of the manager at the menu
     for(const int x:{83,212}){
@@ -795,11 +780,6 @@ void ClassicApplication::draw_dialog(){
         canvas_.text_native(mini,105,141,"M|chten Sie den Vertrag mit",7,0,210);
         canvas_.text_native(mini,105,149,advert_renewal_name_,7,0,210);
         canvas_.text_native(mini,105,157,"verl{ngern ?",7,0,210);
-    }else if(session_.contract_question()){
-        const auto& q=*session_.contract_question();
-        canvas_.text(mini,105,141,q.name,7,0,210);
-        canvas_.text(mini,105,149,"Neuer Vertrag für 1 Jahr",7,0,210);
-        canvas_.text(mini,105,157,money(q.monthly_salary)+" / Monat",7,0,210);
     }else{
         std::vector<std::string> lines;
         if(notice_.find('\n')!=std::string::npos){
@@ -818,7 +798,7 @@ void ClassicApplication::draw_dialog(){
         for(size_t i=0;i<std::min(lines.size(),size_t(4));i++)canvas_.text(mini,105,y+int(i)*pitch,lines[i],7,0,210);
         if(lines.size()>=3){button(95,166,"Na gut.");button(165,166,"Na gut.");}
     }
-    if(quit_question_||session_.contract_question()||advert_question||stadium_question||talent_question){
+    if(quit_question_||advert_question||stadium_question||talent_question){
         button(95,166,talent_question?"Aber immer!":quit_question_?"Leider ja":advert_question||stadium_question?"Ja.":"Mach' ich!");
         button(165,166,talent_question?"Lieber nicht.":quit_question_?"Kein Gedanke":advert_question||stadium_question?"Nein.":"Lass' ich!");
     }
@@ -846,6 +826,7 @@ void ClassicApplication::render_screen(std::string_view name){
     }
     else if(name=="main-files-return"){screen_=ClassicScreen::Main;category_=6;}
     else if(render_statistics(name)){}
+    else if(render_season_talk(name)){}
     else if(name=="table")screen_=ClassicScreen::Table;
     else if(name=="load")open_files(false);else if(name=="save")open_files(true);
     else if(name=="totals")screen_=ClassicScreen::Totals;else if(name=="bank")screen_=ClassicScreen::Bank;

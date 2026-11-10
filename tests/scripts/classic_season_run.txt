@@ -3,7 +3,12 @@
 # Coordinates: main-menu tiles at (43 + 77*col, 108 + 60*row), sub-menu items at (26 + 53*item, 220),
 # Gemischtes = tile 6 (197,168), Laden = item 0, Speichern = item 1; the file name field at (150,199).
 
-# --- New game: face and name in row 0, a club, "Los jetzt!" ----------------------------------------------
+# --- New game: the header of the start menu opens Laden (ovr027:0E87), a right click goes back; then face and
+# name in row 0, a club, "Los jetzt!" -----------------------------------------------------------------------------
+expect screen=NewManager
+click 160 10
+expect screen=Files
+rclick 160 120
 expect screen=NewManager
 click 20 60
 click 210 60
@@ -59,12 +64,12 @@ type D:\RUN1.HOK
 key return
 expect notice~Keinen heutigen
 main
-# the guard holds for every save of the running program; after a restart (with the AUTOSAVE.HOK of the game)
-# the save loads through the file dialog and the game goes back to its day
-restart AUTOSAVE.HOK
-main
-click 197 168
-click 26 220
+# the guard holds for every save of the running program; after a restart (the start menu of a new game) the save
+# loads through Laden in the header of the start menu and the game goes back to its day
+restart
+expect screen=NewManager
+click 160 10
+expect screen=Files
 click 150 199
 type D:\RUN1.HOK
 key return
@@ -84,17 +89,28 @@ expect idle
 tour
 
 # --- second season: the contracts of the first season run out at its end -------------------------------------
-# one player is let go ("Lass' ich!"), the others get the one-year proposal ("Mach' ich!")
-contracts no 1
-play until modal=contract-question
-render contract-question.bmp
+# The original shows the review first, then the squad list with "Vertragsverhandlung" for each of these players
+# (ovr026 -> ovl11_41db). The first gets two years with insurance (the demand is taken without a roll), the next
+# is let go ("Abbruch": two notices), the others take the one-year proposal ("Mach' ich!").
 play until modal=review-overview
 render review2-overview.bmp
 click 160 120
 render review2.bmp
+play until modal=contract-question
+render contract-question.bmp
+click 120 140
+type 2
+key return
+click 120 156
+render contract-two-years.bmp
+click 38 165
+contracts no 1
 # the passive manager ends the second season deep in debt: the financial license is withdrawn (insolvency;
 # the original has no page of its own for it, docs/logic/MELDUNGEN.md)
+play until date>=29.04.1995
 expect news~financial license withdrawn
+expect news~signs for 2 years
+expect news~leaves the club
 play until date>=20.09.1995
 main
 expect idle

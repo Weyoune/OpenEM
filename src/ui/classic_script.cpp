@@ -169,8 +169,8 @@ private:
         else if (m == "contract-question") {
             const bool yes = contract_count_ >= contracts_no_;
             contract_count_++;
-            log(std::string("Vertragsfrage ") + p.text + ": " + (yes ? "Mach' ich!" : "Lass' ich!"));
-            click(yes ? 120 : 190, 171, false);
+            log(std::string("Vertragsfrage ") + p.text + ": " + (yes ? "Mach' ich!" : "Abbruch"));
+            click(yes ? 38 : 118, (p.slot < 12 ? 80 : 0) + 86, false);  // ovl11_41db sits low for the first twelve
         } else if (m == "player-detail") click(196, 214, false);
         else if (m == "club-info" || m == "team-schedule") click(160, 120, true);
         else if (m == "file-preview") { app().release(); settle_frame(); }
@@ -301,6 +301,7 @@ private:
             owned_ = restart_(rest);
             app_ = owned_.get();
             last_seen_.clear();
+            last_day_ = -1;
             settle_frame();
             log("Neustart" + (rest.empty() ? std::string() : " mit " + rest) + " (" + describe() + ")");
         } else if (word == "echo") log(rest + " (" + describe() + ")");

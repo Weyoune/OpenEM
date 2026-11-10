@@ -171,13 +171,20 @@ bool Session::advance_day() {
     const Bytes before = game().checkpoint_bytes();
     auto next = staged_game(before);
     size_t question = 0;
-    next->set_contract_decider([&](const ContractPlayer& player, long demand) {
+    next->set_contract_terms_decider([&](const ContractPlayer& player, int slot, long proposal) {
         if (question < contract_answers_.size()) return contract_answers_[question++];
         ContractQuestion q;
         q.player = player.player;
         q.name = player.player >= 0 ? next->save().players.at(size_t(player.player)).name : "Spieler";
         q.age = player.age;
-        q.monthly_salary = demand;  // the proposal of ovl02_0000 (raw)
+        q.monthly_salary = proposal;  // the proposal of ovl02_0000 (raw)
+        q.slot = slot;
+        q.index = int(question);
+        q.luck = next->daily_luck();
+        q.save = next->save_bytes();
+        q.review = next->season_review();
+        q.review_messages = next->immediate_messages();
+        q.outcomes = next->contract_outcomes();
         contract_question_ = std::move(q);
         throw NeedContract{};
     });
@@ -206,8 +213,18 @@ bool Session::next_day_has_match() const {
 }
 
 bool Session::answer_contract(bool renew) {
+    Game::ContractTerms terms;  // "Mach' ich!" takes the unchanged one-year proposal (Game::expire_contracts)
+    terms.years = renew ? 1 : 0;
+    if (contract_question_ && renew) {
+        const HokFile staged = decode_hok(contract_question_->save);
+        terms.insured = le32(staged.state, 0x696D + size_t(contract_question_->slot) * 52 + 0x30) != 0;
+    }
+    return answer_contract(terms);
+}
+
+bool Session::answer_contract(const Game::ContractTerms& terms) {
     if (!contract_question_) throw std::logic_error("Keine Vertragsentscheidung offen.");
-    contract_answers_.push_back(renew ? 1 : 0);  // "Mach' ich!" takes the unchanged one-year proposal (Game::expire_contracts)
+    contract_answers_.push_back(terms);
     contract_question_.reset();
     return advance_day();
 }

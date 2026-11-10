@@ -314,6 +314,16 @@ public:
     // (raw) and returns the years offered (0 = let him go). Without one the club offers 2 years.
     using ContractDecider = std::function<int(const ContractPlayer& player, long demand)>;
     void set_contract_decider(ContractDecider d) { contract_decider_ = std::move(d); }
+    // The same talks as the native dialog "Vertragsverhandlung" (ovl11_41db) offers them: the manager answers with
+    // years (0 = "Abbruch", the player leaves), a salary (raw; 0 = what the player asks for these years) and the
+    // insurance. Used instead of the decider above when set. `slot` is the player's squad slot at that moment.
+    struct ContractTerms { int years = 1; long salary = 0; bool insured = false; };
+    using ContractTermsDecider = std::function<ContractTerms(const ContractPlayer& player, int slot, long proposal)>;
+    void set_contract_terms_decider(ContractTermsDecider d) { contract_terms_decider_ = std::move(d); }
+    int daily_luck() const { return daily_luck_; }  // DS:E1A4, the mood of the dialog (renewal_demand)
+    // Outcome of each contract talk of the last season change, in order (for the notices of the dialog).
+    struct ContractOutcome { std::string name; bool signed_on = false, refused = false; long fee = 0; bool too_long = false; };
+    const std::vector<ContractOutcome>& contract_outcomes() const { return contract_outcomes_; }
     // Match display (ui/classic_match_view): observes the minute loops of league and cup days; never changes the game.
     void set_match_observer(MatchMinuteObserver o) { match_observer_ = std::move(o); }
     long match_attendance() const { return match_attendance_; }  // the last home game of the human club (ovl08_21e5)
@@ -420,6 +430,8 @@ private:
     std::vector<std::string> immediate_messages_;
     std::optional<SeasonReview> season_review_;
     ContractDecider contract_decider_;
+    ContractTermsDecider contract_terms_decider_;
+    std::vector<ContractOutcome> contract_outcomes_;
     MatchMinuteObserver match_observer_;
     long match_attendance_ = 0;
     bool match_sold_out_ = false;

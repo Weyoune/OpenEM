@@ -23,6 +23,7 @@ struct ClassicUiProbe {
     std::string text;       // the notice text
     int category = -1;      // selected main-menu category
     std::optional<uint64_t> deadline;  // classic_ticks() at which the screen moves on by itself
+    int slot = -1;          // contract-question: squad slot of the player (the dialog sits low for slots 0..11)
 };
 
 struct ClassicMiscState;  // classic_misc_input.cpp
@@ -119,6 +120,8 @@ private:
     void text_misc(std::string_view text);
     std::shared_ptr<ClassicMiscState> misc_; // incomplete here; shared_ptr keeps the deleter
     void open_start_menu();                   // new game (classic_misc_input.cpp)
+    bool start_menu_open() const;             // the start menu of a new game is waiting (its "Laden" is open)
+    void close_start_menu();
     void click_start_menu(int x,int y,bool right);
     // Message field and career pages (classic_career.cpp)
     bool main_menu_idle() const;
@@ -157,6 +160,21 @@ private:
     void submit_purchase();
     void cancel_purchase(bool feedback=true);
     void finish_numeric(bool cancel);
+    void click_contract_editor(int x,int y,bool right);
+    // Contract talks of the season change (ovr026 -> ovl11_41db, classic_contracts.cpp): the squad list of the staged
+    // day with the dialog "Vertragsverhandlung" for each player whose contract ran out.
+    void open_season_talk();
+    void answer_season_talk(bool sign);
+    void queue_season_outcomes(const std::vector<Game::ContractOutcome>& outcomes);
+    void draw_season_talk();
+    bool render_season_talk(std::string_view name);  // render_screen: "contract-season:SLOT:LUCK", "season-notice:BEHIND:TEXT"
+    void show_review(const SeasonReview& review,std::vector<std::string> messages);  // classic_career.cpp
+    std::unique_ptr<HokFile> season_view_;      // the staged game of the open question
+    bool season_review_shown_=false;            // the review came before the talks; not again after the day
+    size_t season_outcomes_seen_=0;
+    bool season_editor_with_notice_=false;     // a refusal is shown over the dialog
+    bool season_pending_open_=false;           // the next dialog follows the notices
+    int season_luck_=100;
     void button(int x,int y,std::string_view label);
     void plain_frame(int left,int top,int right,int bottom,uint8_t fill);
     // Statistiken pages (classic_stats_app.cpp)
@@ -276,7 +294,8 @@ private:
     struct ContractEditor {
         int slot=0,player=-1,years=1,offset=0,field=-1;
         long salary=0,premium=0;
-        bool insured=false,original_insured=false;
+        bool insured=false,original_insured=false,season=false,salary_edited=false;
+        long record_salary=0;  // season change: the salary ovl11_41db wrote into the record (the proposal, then each new demand)
         std::string digits;
     };
     std::optional<ContractEditor> contract_editor_;

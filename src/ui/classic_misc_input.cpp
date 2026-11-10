@@ -98,8 +98,14 @@ void ClassicApplication::open_start_menu() {
     screen_ = ClassicScreen::NewManager;
 }
 
+bool ClassicApplication::start_menu_open() const { return misc_ && misc_->start_base; }
+void ClassicApplication::close_start_menu() { if (misc_) misc_->start_base.reset(); }
+
 void ClassicApplication::click_start_menu(int x, int y, bool right) {
     auto& m = *misc_;
+    // ovr027:0E87..0F24: with argument 1 a left click on the header (y < 0x21) opens "Laden" (sub_24FA1(1)); cancelled,
+    // the start menu waits again, a loaded game leaves it
+    if (!right && y < 0x21) { open_files(false); return; }
     if (m.setup.click(*m.start_base, x, y, right) != ClassicNewManager::Result::LeaveWithManager) return;
     // ovr027:1666: the complete rows become managers 0..N-1 in menu order (hot seat, classic_hotseat.cpp)
     std::vector<NewGameSetup> managers;

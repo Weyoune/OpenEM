@@ -29,6 +29,13 @@ struct ContractQuestion {
     std::string name;
     int age = 0;
     long monthly_salary = 0;  // raw one-year proposal of the season review (ovl02_0000)
+    int slot = -1;            // squad slot of the player in `save`
+    int index = 0;            // contract talks already answered in this season change
+    int luck = 100;           // the daily mood DS:E1A4 of the dialog (renewal_demand for changed years)
+    Bytes save;               // the staged game as a native save at the question (the list behind the dialog)
+    std::optional<SeasonReview> review;           // the season review of the staged day (shown before the talks)
+    std::vector<std::string> review_messages;     // its immediate messages
+    std::vector<Game::ContractOutcome> outcomes;  // the talks answered so far
 };
 
 // UI-independent controller. Each action is staged from a full checkpoint, so
@@ -67,7 +74,8 @@ public:
     // Observer of the minute loops of the next advance_day (match display); called with the staged game, read-only.
     using MatchObserver = std::function<void(const Game& game, int minute, const std::vector<LiveMatch>& matches)>;
     void set_match_observer(MatchObserver observer) { match_observer_ = std::move(observer); }
-    bool answer_contract(bool renew);
+    bool answer_contract(bool renew);  // "Mach' ich!" on the unchanged proposal or "Abbruch"
+    bool answer_contract(const Game::ContractTerms& terms);
     void cancel_advance();
 
 private:
@@ -85,7 +93,7 @@ private:
     bool dirty_ = false;
     uint64_t revision_ = 0;
     int active_manager_ = 0;
-    std::vector<int> contract_answers_;
+    std::vector<Game::ContractTerms> contract_answers_;
     std::optional<ContractQuestion> contract_question_;
     MatchObserver match_observer_;
 };
