@@ -864,6 +864,26 @@ struct MatchRun::Impl {
     bool board() const { return (h.raw && (h.raw[0x34] & 0x80)) || (a.raw && (a.raw[0x34] & 0x80)); }
     bool scenes_on() const { return g_goal_scenes != 0 && rng.borland && board() && !std::getenv("EM_OLD_NOSCENES"); }
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
+    bool idle_next = false;  // MatchRun::idle_next_minute
+    // MatchRun::take_lineup: the lineup screen of ovl14_24bc changed the manager's squad between two minutes. The working
+    // squad takes the roles and lines; leaving the lineup screen sets the effort again as in a drawn game (situation 2),
+    // like the lineup after an injury in step().
+    void take_lineup() {
+        for (int side = 0; side < 2; side++) {
+            const std::vector<HokSquadPlayer>* outer = outer_squad[side];
+            const HumanSquad* m = side == 0 ? hp : ap;
+            if (!outer || !m) continue;
+            std::vector<HokSquadPlayer>& working = side == 0 ? hsq : asq;
+            bool changed = false;
+            for (size_t s = 0; s < working.size() && s < outer->size(); s++)
+                if (working[s].role != (*outer)[s].role || working[s].line != (*outer)[s].line) {
+                    working[s].role = (*outer)[s].role;
+                    working[s].line = (*outer)[s].line;
+                    changed = true;
+                }
+            if (changed) apply_effort(side == 0 ? h : a, 0, 0, &working, m->effort_control, 2);
+        }
+    }
     bool step() {
         if (forfeit || minute >= last) return false;
         shown.scenes.clear();
@@ -880,6 +900,18 @@ struct MatchRun::Impl {
                 prepare_match_energy(h, hp ? &hsq : nullptr, true);
                 prepare_match_energy(a, ap ? &asq : nullptr, true);
             }
+        }
+        if (idle_next) {
+            // ovl06_2522 opened the Einstellungen at the start of this minute (space key): the minute passes for every match
+            // without events, energy, lines or penalties; the period start above and the end of the game still apply
+            idle_next = false;
+            if (minute == 60 && opts.knockout && score.home == score.away) { last = 70; score.decision_marker = 30; }
+            const bool more = minute < last;
+            if (!more && opts.knockout && !shootout_done && score.home == score.away) {
+                shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes);
+                shootout_done = true;
+            }
+            return more;
         }
         // ovr030:3680..3772 (called by the minute loop for a match with a manager): one draw rand(0, 200 + 200 * level + 20 * v) per
         // human manager of the match, v = min(40, 60 - byte); a zero starts an interactive event (not simulated)
@@ -1031,6 +1063,8 @@ MatchRun::MatchRun(const HokTeam& home, const HokTeam& away, GameRandom& rng, in
     : p_(std::make_unique<Impl>(home, away, rng, level, hh, ha, stats, opts)) {}
 MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
+void MatchRun::idle_next_minute() { p_->idle_next = true; }
+void MatchRun::take_lineup() { p_->take_lineup(); }
 void MatchRun::set_watched(bool on) { p_->watched = on; }
 MatchProgress MatchRun::progress() const {
     MatchProgress m = p_->shown;

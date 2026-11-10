@@ -139,6 +139,14 @@ void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
     append_live_frames();
     live_wait_=false;
     while(live_day_&&!live_wait_&&!live_skip_&&!finished_&&pump_)pump_();
+    if(live_lineup_){live_lineup_=false;for(const LiveMatch& m:matches)const_cast<MatchRun&>(*m.run).take_lineup();}
+    if(live_idle_){
+        // ovl06_2522 took the Einstellungen instead of this minute: no match plays it; speed and goal scenes are taken anew,
+        // the quick switch is off (ovl14_15c3(10, 0xE4, 0))
+        live_idle_=false;
+        for(const LiveMatch& m:matches)const_cast<MatchRun&>(*m.run).idle_next_minute();
+        live_scenes_=session_.game().settings().flags[9];live_fast_=false;rebase_live();
+    }
     for(const ClassicBoardOrder& o:live_orders_){
         if(o.team<0)continue;
         for(const LiveMatch& m:matches){
@@ -155,17 +163,20 @@ void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
     live_orders_.clear();
     g_goal_scenes=live_fast_?0:live_scenes_;  // DS:0226 while the quick switch is on (ovl06_3856)
 }
+// A new processing base after a change of speed / goal scenes: the frames shown so far stay, the next ones follow the new setting.
+void ClassicApplication::rebase_live(){
+    live_base_=pending_match_frames_.empty()?0:pending_match_frames_.size()-1;
+    std::vector<ClassicMatchFrame> base(pending_match_frames_.begin()+std::ptrdiff_t(live_base_),pending_match_frames_.end());
+    live_out_=classic_board_messages(classic_goal_flashes(std::move(base)),live_speed(),live_fast_?0:live_scenes_,canvas_.data()).size();
+    for(size_t i=match_frame_;i<match_frames_.size();i++)match_frames_[i].settings_lamp=live_fast_;
+}
 bool ClassicApplication::live_click(int x,int y,bool right){
     if(right){live_skip_=true;match_frames_.clear();return true;}
     const auto order=classic_board_click(match_frames_[match_frame_],x,y);
     if(!order)return false;
-    if(order->quick){
-        live_fast_=!live_fast_;
-        // a new processing base: the frames shown so far stay, the next ones follow the new speed / scene setting
-        live_base_=pending_match_frames_.empty()?0:pending_match_frames_.size()-1;
-        std::vector<ClassicMatchFrame> base(pending_match_frames_.begin()+std::ptrdiff_t(live_base_),pending_match_frames_.end());
-        live_out_=classic_board_messages(classic_goal_flashes(std::move(base)),live_speed(),live_fast_?0:live_scenes_,canvas_.data()).size();
-        for(size_t i=match_frame_;i<match_frames_.size();i++)match_frames_[i].settings_lamp=live_fast_;
+    if(order->quick){live_fast_=!live_fast_;rebase_live();}
+    if(order->squad&&order->team==session_.game().human_team()){  // ovl14_24bc: the lineup of the clicked club (Knopf 1)
+        live_screen_=true;live_lineup_=true;live_screen_before_=screen_;open_lineup();return true;
     }
     if(order->team>=0&&(order->effort>=0||order->offence>=0||order->line[0]>=0||order->line[1]>=0))live_orders_.push_back(*order);
     return true;
@@ -195,10 +206,22 @@ void ClassicApplication::tick(){
         if(classic_ticks()<*native_notice_until_)return;
         finish_timed_native_notice();
     }
-    if(live_day_){tick_match_view();return;}  // inside the minute observer: only the match display runs
+    if(live_day_){  // inside the minute observer: only the match display runs
+        if(!live_screen_)tick_match_view();
+        else if(screen_==ClassicScreen::Main){live_screen_=false;screen_=live_screen_before_;}  // the screen was left
+        return;
+    }
     if(!advancing_)update_roster_hover();
     if(!advancing_)tick_stats_hold(classic_ticks());
     if(tick_match_view())return;
+    if(post_table_open_&&screen_==ClassicScreen::Table)return;  // the table after the match day waits for a right click
+    post_table_open_=false;
+    if(post_tables_){
+        int l=0;while(!(post_tables_>>l&1))l++;
+        post_tables_&=~(1<<l);
+        division_=l;table_view_=1;table_order_=session_.game().league(l).ranking;screen_=ClassicScreen::Table;post_table_open_=true;
+        return;
+    }
     if(!advancing_)check_new_messages();
     if(!advancing_||!notice_.empty()||quit_question_||session_.contract_question())return;
     if(match_banner_until_){
@@ -216,6 +239,13 @@ void ClassicApplication::tick(){
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
         prepare_match_view(match_day);
+        // ovl06_161d end: the leagues of the day whose switch Tabelle (DS:021F + 3 * league) is on show their table
+        post_tables_=0;
+        if(pending_league_day_){
+            const uint8_t leagues=calendar_.event(session_.game().season_day()+1)&kEventLeagueMask;
+            const GameSettings s=session_.game().settings();
+            for(int l=0;l<3;l++)if((leagues>>l&1)&&s.flags[size_t(l*3+2)])post_tables_|=1<<l;
+        }
         // with the frontend's pump the minutes are shown while the day is played (clicks reach the minute loop)
         live_skip_=false;live_fast_=false;live_base_=0;live_out_=0;live_orders_.clear();
         live_day_=pump_&&classic_match_display_wanted(session_.game(),match_day,!pending_league_day_);
@@ -224,7 +254,8 @@ void ClassicApplication::tick(){
         try{advanced=session_.advance_day();}catch(...){live_day_=false;throw;}
         const bool live=live_day_||live_skip_;live_day_=false;
         if(advanced){
-            advance_first_=false;invalidate();show_manager_news();
+            advance_first_=false;invalidate();
+            if(post_tables_)news_after_tables_=true;else show_manager_news();  // the tables belong to the match day
             if(!live)begin_match_view();
             else{pending_match_frames_.clear();if(live_skip_)match_frames_.clear();else if(!match_frames_.empty())match_frame_until_=classic_ticks()+1000;}
             live_skip_=false;
@@ -339,7 +370,7 @@ void ClassicApplication::open_player(int slot,int manager){
     }catch(const std::exception& e){notice(e.what());}
 }
 void ClassicApplication::click(int x,int y,bool right){
-    if(!match_frames_.empty()){
+    if(!match_frames_.empty()&&!live_screen_){  // live_screen_: a screen opened during the minutes takes the input
         if(live_day_&&!match_frames_[match_frame_].waits()&&live_click(x,y,right))return;
         // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
         size_t next=match_frame_+1;
@@ -353,6 +384,11 @@ void ClassicApplication::click(int x,int y,bool right){
             match_frames_.clear();return;
         }
         match_frame_=next;match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[next],session_.game().settings().speed));
+        return;
+    }
+    if(post_table_open_&&screen_==ClassicScreen::Table&&right){  // the table of ovl06_161d ends the match day
+        screen_=ClassicScreen::Main;post_table_open_=false;
+        if(!post_tables_&&news_after_tables_){news_after_tables_=false;show_manager_news();}
         return;
     }
     if(native_notice_until_)return;
@@ -545,7 +581,7 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(screen_==ClassicScreen::Table){
-        if(right){screen_=ClassicScreen::Main;return;}
+        if(right){screen_=ClassicScreen::Main;post_table_open_=false;if(!post_tables_&&news_after_tables_){news_after_tables_=false;show_manager_news();}return;}
         for(int v=0;v<3;v++)if(inside(x,y,31+102*v,165,86+102*v,175)){table_view_=v;return;}
         return;
     }
@@ -625,8 +661,12 @@ void ClassicApplication::motion(int x,int y){
 }
 void ClassicApplication::key(int key){
     // the key buffer read by ovl14_1dc7 after a goal scene
-    if(!match_frames_.empty()&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
-    if(live_day_)return;  // the day is being played
+    if(!match_frames_.empty()&&!live_screen_&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
+    if(live_day_&&!live_screen_){  // the day is being played
+        // ovl06_2522: the space key opens the Einstellungen at the start of the next minute, which then passes without play
+        if(key==SDLK_SPACE&&!match_frames_.empty()){live_screen_=true;live_idle_=true;live_screen_before_=screen_;open_settings();}
+        return;
+    }
     if(native_notice_until_||sale_quote_)return;
     if(career_key(key))return;
     if(screen_==ClassicScreen::NewManager){key_misc(key);return;}
@@ -679,7 +719,7 @@ void ClassicApplication::text_input(std::string_view text){
     }
 }
 void ClassicApplication::draw(){
-    if(!match_frames_.empty()){
+    if(!match_frames_.empty()&&!live_screen_){
         const ClassicMatchFrame& frame=match_frames_[match_frame_];
         if(frame.league_page){
             std::vector<std::array<int,4>> scores;
