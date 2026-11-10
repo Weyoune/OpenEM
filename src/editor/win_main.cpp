@@ -96,6 +96,7 @@ struct App {
     std::unique_ptr<TeamDoc> team;
     TeamUi tu;
     int team_sel = 0;
+    bool crest_auto = true;  // zoom follows the available space until the user picks one
     int crest_zoom = 5, cscroll_x = 0, cscroll_y = 0;  // crest editor view
     bool loading_team = false;
     em::Image crest_img;
@@ -215,6 +216,7 @@ void refresh(App& a) {
 bool team_save(App& a);
 bool crest_confirm(App& a);
 void load_crest(App& a);
+void crest_autofit(App& a);
 void load_team_controls(App& a);
 void layout_team(App& a, int x, int y, int w, int h, int rx, int rw);
 void show_team(App& a, bool on);
@@ -860,6 +862,7 @@ void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
         MoveWindow(u.cr_zout, bx, cy0 + 3 * rowh, half, eh, TRUE);
         MoveWindow(u.cr_zin, bx + half + a.px(6), cy0 + 3 * rowh, half, eh, TRUE);
         MoveWindow(u.cr_save, bx, cy0 + 4 * rowh + a.px(8), bw, eh + 2, TRUE);
+        crest_autofit(a);
     }
     // right column
     const int cx = rx + a.px(12), cw = rw - a.px(24), nw = a.px(70);
@@ -1060,6 +1063,19 @@ CrestGeo crest_geo(App& a) {
     return g;
 }
 
+void update_crest_scroll(App& a);
+
+void crest_autofit(App& a) {
+    if (!a.crest_auto || !a.tu.crest_view || !a.crest_ed || a.crest_ed->current() < 0) return;
+    RECT r;
+    GetClientRect(a.tu.crest_view, &r);
+    const auto& img = a.crest_ed->image();
+    const int m = a.px(6), view_w = int(r.right) - 16 * a.px(8) - m - a.px(10) - 2 * m, view_h = int(r.bottom) - 2 * m;
+    const int device = std::min(view_w / std::max(1, img.width), view_h / std::max(1, img.height));
+    a.crest_zoom = std::clamp(device * 96 / int(a.dpi), 2, 16);
+    update_crest_scroll(a);
+}
+
 void update_crest_scroll(App& a) {
     HWND h = a.tu.crest_view;
     if (!h) return;
@@ -1087,6 +1103,7 @@ void update_crest_scroll(App& a) {
 }
 
 void set_crest_zoom(App& a, int z) {
+    a.crest_auto = false;
     a.crest_zoom = std::clamp(z, 2, 16);
     update_crest_scroll(a);
     InvalidateRect(a.tu.crest_view, nullptr, FALSE);
@@ -1267,6 +1284,7 @@ void load_crest(App& a) {
     const BOOL on = a.crest_ed->current() >= 0;
     for (HWND w : {a.tu.cr_pen, a.tu.cr_fill, a.tu.cr_undo, a.tu.cr_save, a.tu.cr_zout, a.tu.cr_zin}) EnableWindow(w, on);
     a.cscroll_x = a.cscroll_y = 0;
+    crest_autofit(a);
     update_crest_scroll(a);
     InvalidateRect(a.tu.crest_view, nullptr, FALSE);
 }
@@ -1735,6 +1753,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     RegisterClassExW(&wc);
     wc.hIcon = nullptr;
     wc.hbrBackground = nullptr;
+    wc.style = CS_HREDRAW | CS_VREDRAW;  // repaint everything on resize (no stale copies of the old picture)
     wc.lpszClassName = kCanvasClass;
     wc.lpfnWndProc = canvas_proc;
     RegisterClassExW(&wc);
