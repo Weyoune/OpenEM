@@ -17,4 +17,8 @@ Ohne `--data` sucht der Editor wie `openem` (`OPENEM_DATA`, `work/EM`, Programmo
 
 Werkzeuge: Stift (P), Linie (L), Rechteck (R), gefülltes Rechteck (B), Füllen (F), Pipette (I, oder Rechtsklick); Rückgängig/Wiederholen (Strg+Z/Y), Speichern (Strg+S), BMP-Export (Strg+E), Raster (G), Zoom (Strg+Mausrad, +/−).
 
-Noch offen: PNG-Import/-Export, Paketierung im Release. Bedeutung der drei Stärkewerte und des Platzes ist nicht abschließend geklärt (siehe `docs/formats/HOK_TORE.md`); die Ausländer-Markierung ist das Byte hinter dem Spielernamen.
+Bilder lassen sich als PNG (8 Bit mit der aktuellen Palette) oder BMP exportieren und als PNG, BMP, GIF oder JPEG importieren (Strg+I, über Windows Imaging Component): jedes Pixel erhält die nächste Farbe der Palette (Farben 0–254, transparente Pixel Farbe 0); unveränderte Farben behalten ihren Index, auch wenn die Palette eine Farbe doppelt enthält. Eine andere Größe akzeptiert der Editor nur bei einfachen Bildern und nach Rückfrage; Kachel-/Spritebögen und die Anzeigetafel müssen genau passen. Kommandozeile: `--file N --export-png out.png` und `--file N --import-png in.png` (speichert).
+
+Ein Release-Ordner mit Spiel und Editor entsteht mit `cmake --install build --config Release --prefix <Ordner>`.
+
+Noch offen: Importe über mehrere Bilder gleichzeitig, eine Anzeige der Palettennähe (Abweichung je Pixel). Bedeutung der drei Stärkewerte und des Platzes ist nicht abschließend geklärt (siehe `docs/formats/HOK_TORE.md`); die Ausländer-Markierung ist das Byte hinter dem Spielernamen.

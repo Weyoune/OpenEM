@@ -40,6 +40,10 @@ Spielstände: im Quellcode-Checkout unter `work/saves`, sonst im Benutzer-Dateno
 
 Bestehende Speicherdateien werden nicht überschrieben.
 
+## Editor
+
+`em_editor` (Windows, liegt im Release neben `openem`) bearbeitet die Originaldaten: Bilder, Torszenen-Grafik, Paletten, Hallenkarten und die Mannschaften (Namen, Wappen, Stärken, Trikotfarben). Er sucht die Daten wie `openem` und legt vor dem ersten Überschreiben eine `.bak` an. Bedienung: [docs/EDITOR.md](docs/EDITOR.md). Ein Release-Ordner entsteht mit `cmake --install build --config Release --prefix <Ordner>`.
+
 ## Stand und Belege
 
 [Bedienung und Grenzen](docs/CLASSIC_UI.md), [Projektstand](docs/STATUS.md), [Prüfungen](docs/TESTING.md), [Tagesvergleiche mit dem Original](docs/DAYDIFF.md), [Abweichungen](docs/DEVIATIONS.md) und [Checkpointformat](docs/formats/OPENEM_CHECKPOINT.md) beschreiben den aktuellen Umfang.

@@ -17,6 +17,7 @@
 #include <shellapi.h>
 #include <shobjidl.h>
 #include <uxtheme.h>
+#include <wincodec.h>
 #include <windowsx.h>
 
 #include <algorithm>
@@ -38,6 +39,7 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 namespace fs = std::filesystem;
 using em::editor::MapDoc;
@@ -48,7 +50,7 @@ using em::editor::TeamDoc;
 namespace {
 
 enum Cmd : UINT {
-    ID_FILE_SAVE = 101, ID_FILE_EXPORT, ID_FILE_EXIT,
+    ID_FILE_SAVE = 101, ID_FILE_EXPORT, ID_FILE_EXIT, ID_FILE_IMPORT,
     ID_EDIT_UNDO = 110, ID_EDIT_REDO,
     ID_TOOL_PENCIL = 120, ID_TOOL_LINE, ID_TOOL_RECT, ID_TOOL_FILLRECT, ID_TOOL_FILL, ID_TOOL_PICKER,
     ID_VIEW_GRID = 130, ID_VIEW_FIT, ID_VIEW_ZOOMIN, ID_VIEW_ZOOMOUT,
@@ -173,6 +175,94 @@ std::wstring dialog_path(const wchar_t* title, bool folder, bool save, const std
     return result;
 }
 
+// ------------------------------------------------------------------------------------- PNG and other formats (WIC)
+
+// Open or save dialog for pictures; the chosen extension decides the format (png default, bmp)
+std::wstring image_dialog(bool save, const std::wstring& name, HWND owner) {
+    std::wstring result;
+    IFileDialog* d = nullptr;
+    if (FAILED(CoCreateInstance(save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&d))))
+        return result;
+    DWORD opts = 0;
+    d->GetOptions(&opts);
+    d->SetOptions(opts | FOS_FORCEFILESYSTEM);
+    if (save) {
+        static const COMDLG_FILTERSPEC spec[] = {{L"PNG-Bild (*.png)", L"*.png"}, {L"Bitmap (*.bmp)", L"*.bmp"}};
+        d->SetTitle(L"Bild exportieren");
+        d->SetFileTypes(2, spec);
+        d->SetDefaultExtension(L"png");
+        d->SetFileName(name.c_str());
+    } else {
+        static const COMDLG_FILTERSPEC spec[] = {{L"Bilder (PNG, BMP, GIF, JPEG)", L"*.png;*.bmp;*.gif;*.jpg;*.jpeg"}, {L"Alle Dateien", L"*.*"}};
+        d->SetTitle(L"Bild importieren");
+        d->SetFileTypes(2, spec);
+    }
+    if (SUCCEEDED(d->Show(owner))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(d->GetResult(&item))) {
+            PWSTR p = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &p))) {
+                result = p;
+                CoTaskMemFree(p);
+            }
+            item->Release();
+        }
+    }
+    d->Release();
+    return result;
+}
+
+template <class T>
+struct ComPtr {
+    T* p = nullptr;
+    ~ComPtr() { if (p) p->Release(); }
+    T** operator&() { return &p; }
+    T* operator->() const { return p; }
+};
+
+bool export_png(const fs::path& to, const em::Image& img, const em::Palette& pal) {
+    ComPtr<IWICImagingFactory> f;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&f)))) return false;
+    ComPtr<IWICStream> st;
+    if (FAILED(f->CreateStream(&st)) || FAILED(st->InitializeFromFilename(to.c_str(), GENERIC_WRITE))) return false;
+    ComPtr<IWICBitmapEncoder> enc;
+    if (FAILED(f->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc)) || FAILED(enc->Initialize(st.p, WICBitmapEncoderNoCache))) return false;
+    ComPtr<IWICBitmapFrameEncode> fr;
+    ComPtr<IPropertyBag2> bag;
+    if (FAILED(enc->CreateNewFrame(&fr, &bag)) || FAILED(fr->Initialize(bag.p))) return false;
+    WICPixelFormatGUID pf = GUID_WICPixelFormat8bppIndexed;
+    if (FAILED(fr->SetSize(UINT(img.width), UINT(img.height))) || FAILED(fr->SetPixelFormat(&pf))) return false;
+    WICColor cols[256];
+    for (size_t i = 0; i < 256; i++) cols[i] = 0xFF000000u | uint32_t(pal.rgb[i][0]) << 16 | uint32_t(pal.rgb[i][1]) << 8 | pal.rgb[i][2];
+    ComPtr<IWICPalette> wp;
+    if (FAILED(f->CreatePalette(&wp)) || FAILED(wp->InitializeCustom(cols, 256)) || FAILED(fr->SetPalette(wp.p))) return false;
+    std::vector<uint8_t> px = img.pixels;
+    if (FAILED(fr->WritePixels(UINT(img.height), UINT(img.width), UINT(px.size()), px.data())) || FAILED(fr->Commit()) || FAILED(enc->Commit()))
+        return false;
+    return true;
+}
+
+// Any picture format WIC knows -> 0xAARRGGBB pixels
+bool load_argb(const fs::path& from, std::vector<uint32_t>& out, int& w, int& h) {
+    ComPtr<IWICImagingFactory> f;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&f)))) return false;
+    ComPtr<IWICBitmapDecoder> dec;
+    if (FAILED(f->CreateDecoderFromFilename(from.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &dec))) return false;
+    ComPtr<IWICBitmapFrameDecode> fr;
+    if (FAILED(dec->GetFrame(0, &fr))) return false;
+    ComPtr<IWICFormatConverter> conv;
+    if (FAILED(f->CreateFormatConverter(&conv)) ||
+        FAILED(conv->Initialize(fr.p, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+        return false;
+    UINT uw = 0, uh = 0;
+    if (FAILED(conv->GetSize(&uw, &uh)) || uw == 0 || uh == 0 || uw > 4096 || uh > 4096) return false;
+    out.assign(size_t(uw) * uh, 0);
+    if (FAILED(conv->CopyPixels(nullptr, uw * 4, UINT(out.size() * 4), reinterpret_cast<BYTE*>(out.data())))) return false;
+    w = int(uw);
+    h = int(uh);
+    return true;
+}
+
 // ------------------------------------------------------------------------------------------- UI state
 
 void update_scroll(App& a);
@@ -203,6 +293,7 @@ void refresh(App& a) {
     HMENU m = GetMenu(a.main);
     EnableMenuItem(m, ID_FILE_SAVE, MF_BYCOMMAND | (cur >= 0 && dirty ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_FILE_EXPORT, MF_BYCOMMAND | (!pt && e.current() >= 0 ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(m, ID_FILE_IMPORT, MF_BYCOMMAND | (!pt && e.current() >= 0 ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_EDIT_UNDO, MF_BYCOMMAND | ((mt ? a.map->can_undo() : pt ? dirty : e.can_undo()) ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, ID_EDIT_REDO, MF_BYCOMMAND | ((mt ? a.map->can_redo() : !pt && e.can_redo()) ? MF_ENABLED : MF_GRAYED));
     CheckMenuItem(m, ID_VIEW_GRID, MF_BYCOMMAND | (a.grid ? MF_CHECKED : MF_UNCHECKED));
@@ -1842,7 +1933,8 @@ void build_menu(HWND hwnd) {
     HMENU bar = CreateMenu();
     HMENU file = CreatePopupMenu(), edit = CreatePopupMenu(), tool = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
     AppendMenuW(file, MF_STRING, ID_FILE_SAVE, L"&Speichern\tStrg+S");
-    AppendMenuW(file, MF_STRING, ID_FILE_EXPORT, L"Als &BMP exportieren…\tStrg+E");
+    AppendMenuW(file, MF_STRING, ID_FILE_IMPORT, L"Bild &importieren…	Strg+I");
+    AppendMenuW(file, MF_STRING, ID_FILE_EXPORT, L"Bild &exportieren… (PNG, BMP)	Strg+E");
     AppendMenuW(file, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(file, MF_STRING, ID_FILE_EXIT, L"&Beenden\tAlt+F4");
     AppendMenuW(edit, MF_STRING, ID_EDIT_UNDO, L"&Rückgängig\tStrg+Z");
@@ -1919,9 +2011,45 @@ void command(App& a, UINT id) {
             else e.save();
             break;
         case ID_FILE_EXPORT: {
-            if (e.current() < 0) break;
-            std::wstring p = dialog_path(L"Als BMP exportieren", false, true, L"kb" + std::to_wstring(e.current()) + L".bmp", a.main);
-            if (!p.empty()) e.export_bmp(fs::path(p));
+            if (e.current() < 0 || pal_tab(a) || team_tab(a) || map_tab(a)) break;
+            const std::wstring p = image_dialog(true, L"kb" + std::to_wstring(e.current()) + L".png", a.main);
+            if (p.empty()) break;
+            const fs::path path(p);
+            std::wstring ext = path.extension().wstring();
+            for (auto& ch : ext) ch = wchar_t(towlower(ch));
+            if (ext == L".bmp") e.export_bmp(path);
+            else e.set_status(export_png(path, e.image(), e.palette()) ? "Exportiert: " + path.filename().string() : "Export fehlgeschlagen");
+            break;
+        }
+        case ID_FILE_IMPORT: {
+            if (e.current() < 0 || pal_tab(a) || team_tab(a) || map_tab(a)) break;
+            const std::wstring p = image_dialog(false, L"", a.main);
+            if (p.empty()) break;
+            std::vector<uint32_t> px;
+            int w = 0, h = 0;
+            if (!load_argb(fs::path(p), px, w, h)) {
+                e.set_status("Import: Datei konnte nicht gelesen werden");
+                break;
+            }
+            bool resize = false;
+            if ((w != e.image().width || h != e.image().height) && e.picture_kind() == PixelEditor::Kind::Image) {
+                const std::wstring head = L"Die Datei ist " + std::to_wstring(w) + L" × " + std::to_wstring(h) + L", das Bild " + std::to_wstring(e.image().width) + L" × " + std::to_wstring(e.image().height) + L".";
+                TASKDIALOG_BUTTON buttons[] = {{101, L"Größe des Bildes ändern"}};
+                TASKDIALOGCONFIG cfg{sizeof cfg};
+                cfg.hwndParent = a.main;
+                cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW;
+                cfg.dwCommonButtons = TDCBF_CANCEL_BUTTON;
+                cfg.pszWindowTitle = L"OpenEM Editor";
+                cfg.pszMainIcon = TD_WARNING_ICON;
+                cfg.pszMainInstruction = head.c_str();
+                cfg.pszContent = L"Das Spiel erwartet für viele Bilder feste Größen. Rückgängig ist danach für dieses Bild nicht mehr möglich.";
+                cfg.pButtons = buttons;
+                cfg.cButtons = 1;
+                int pressed = 0;
+                if (FAILED(TaskDialogIndirect(&cfg, &pressed, nullptr, nullptr)) || pressed != 101) break;
+                resize = true;
+            }
+            if (e.import_argb(px, w, h, resize)) fit_zoom(a);
             break;
         }
         case ID_FILE_EXIT: SendMessage(a.main, WM_CLOSE, 0, 0); return;
@@ -2151,7 +2279,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     app.inst = inst;
     fs::path data;
     int file = -1, tab_arg = -1;
-    std::wstring shot;
+    std::wstring shot, export_png_arg, import_png_arg;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; i + 1 < argc; i += 2) {
@@ -2159,6 +2287,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
         if (o == L"--data") data = argv[i + 1];
         else if (o == L"--file") file = _wtoi(argv[i + 1]);
         else if (o == L"--shot") shot = argv[i + 1];
+        else if (o == L"--export-png") export_png_arg = argv[i + 1];
+        else if (o == L"--import-png") import_png_arg = argv[i + 1];
         else if (o == L"--tab") tab_arg = _wtoi(argv[i + 1]);
     }
     LocalFree(argv);
@@ -2242,8 +2372,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     ShowWindow(hwnd, show);
     UpdateWindow(hwnd);
 
+    // command line conversion (also used by the tests): --file N with --export-png out.png or --import-png in.png (saves)
+    if ((!export_png_arg.empty() || !import_png_arg.empty()) && file >= 0) {
+        PixelEditor& e = *app.ed;
+        if (!e.load(file)) return 2;
+        if (!export_png_arg.empty()) return export_png(fs::path(export_png_arg), e.image(), e.palette()) ? 0 : 3;
+        std::vector<uint32_t> px;
+        int w = 0, h = 0;
+        if (!load_argb(fs::path(import_png_arg), px, w, h) || !e.import_argb(px, w, h, true)) return 4;
+        return e.save() ? 0 : 5;
+    }
     ACCEL keys[] = {
-        {FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE},   {FCONTROL | FVIRTKEY, 'E', ID_FILE_EXPORT}, {FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO},
+        {FCONTROL | FVIRTKEY, 'S', ID_FILE_SAVE},   {FCONTROL | FVIRTKEY, 'E', ID_FILE_EXPORT}, {FCONTROL | FVIRTKEY, 'I', ID_FILE_IMPORT}, {FCONTROL | FVIRTKEY, 'Z', ID_EDIT_UNDO},
         {FCONTROL | FVIRTKEY, 'Y', ID_EDIT_REDO},   {FVIRTKEY, 'P', ID_TOOL_PENCIL},           {FVIRTKEY, 'L', ID_TOOL_LINE},
         {FVIRTKEY, 'R', ID_TOOL_RECT},              {FVIRTKEY, 'B', ID_TOOL_FILLRECT},          {FVIRTKEY, 'F', ID_TOOL_FILL},
         {FVIRTKEY, 'I', ID_TOOL_PICKER},            {FVIRTKEY, 'G', ID_VIEW_GRID},              {FVIRTKEY, VK_ADD, ID_VIEW_ZOOMIN},

@@ -4,6 +4,7 @@
 // No user interface in here (the Windows front end is win_main.cpp), so it can be tested without a window.
 #include <filesystem>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "formats/vga.hpp"
@@ -32,6 +33,12 @@ public:
     int cell_columns() const { return cols_; }  // cells per row of a sheet
     bool save();                                       // writes KB\<n>.vga, first time with a .bak copy
     bool export_bmp(const std::filesystem::path& to);  // 8-bit indexed BMP with the current palette
+    // Replaces the picture by 32-bit pixels (0xAARRGGBB, row by row): each pixel takes the nearest colour of the
+    // current palette (colours 0..254; transparent pixels become colour 0). A different size is accepted for plain images
+    // only when `allow_resize` is set (the undo history is then cleared); sheets and the panel must match.
+    // `approximated` receives the number of pixels without an exact palette match.
+    bool import_argb(const std::vector<uint32_t>& argb, int w, int h, bool allow_resize, int* approximated = nullptr);
+    Kind picture_kind() const { return kind_; }
     void undo();
     void redo();
     bool can_undo() const { return !undo_.empty(); }
@@ -85,6 +92,7 @@ private:
     bool drawing_ = false;
     int sx_ = 0, sy_ = 0, lx_ = 0, ly_ = 0;
     std::vector<uint8_t> base_;
+    std::unordered_set<uint32_t> cache_inexact_;  // scratch of import_argb
 
     void put(int x, int y, int c);
     void draw_line(int x0, int y0, int x1, int y1, int c);

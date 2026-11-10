@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -231,6 +232,58 @@ bool PixelEditor::export_bmp(const fs::path& to) {
     const bool ok = bool(f);
     status_ = ok ? "Exportiert: " + to.filename().string() : "Export fehlgeschlagen";
     return ok;
+}
+
+bool PixelEditor::import_argb(const std::vector<uint32_t>& argb, int w, int h, bool allow_resize, int* approximated) {
+    if (current_ < 0 || w <= 0 || h <= 0 || argb.size() != size_t(w) * size_t(h)) {
+        status_ = "Import: kein Bild geöffnet oder ungültige Daten";
+        return false;
+    }
+    const bool resize = w != img_.width || h != img_.height;
+    if (resize && (!allow_resize || kind_ != Kind::Image)) {
+        status_ = "Import: Größe " + std::to_string(w) + " × " + std::to_string(h) + " passt nicht zu " + std::to_string(img_.width) + " × " + std::to_string(img_.height);
+        return false;
+    }
+    std::vector<uint8_t> out(argb.size());
+    std::unordered_map<uint32_t, uint8_t> cache;
+    int inexact = 0;
+    for (size_t i = 0; i < argb.size(); i++) {
+        const uint32_t v = argb[i];
+        if ((v >> 24) < 128) { out[i] = 0; continue; }
+        const uint32_t key = v & 0xFFFFFF;
+        if (!resize) {  // same colour as before: keep the index (palettes may hold a colour twice)
+            const auto& oc = pal_.rgb[img_.pixels[i]];
+            if (key == (uint32_t(oc[0]) << 16 | uint32_t(oc[1]) << 8 | oc[2])) { out[i] = img_.pixels[i]; continue; }
+        }
+        auto it = cache.find(key);
+        if (it == cache.end()) {
+            const int r = int(key >> 16 & 255), g = int(key >> 8 & 255), b = int(key & 255);
+            int best = 0, bd = 1 << 30;
+            for (int k = 0; k < 255; k++) {
+                const auto& c = pal_.rgb[size_t(k)];
+                const int d = (c[0] - r) * (c[0] - r) + (c[1] - g) * (c[1] - g) + (c[2] - b) * (c[2] - b);
+                if (d < bd) { bd = d; best = k; }
+            }
+            it = cache.emplace(key, uint8_t(best)).first;
+            if (bd != 0) cache_inexact_.insert(key);
+        }
+        out[i] = it->second;
+        if (cache_inexact_.count(key)) inexact++;
+    }
+    cache_inexact_.clear();
+    if (resize) {
+        img_ = Image(w, h);
+        undo_.clear();
+        redo_.clear();
+    } else {
+        push_undo();
+    }
+    img_.pixels = std::move(out);
+    dirty_ = true;
+    revision_++;
+    if (approximated) *approximated = inexact;
+    status_ = "Importiert: " + std::to_string(w) + " × " + std::to_string(h) + (inexact ? ", " + std::to_string(inexact) + " Pixel der Palette angenähert" : ", Farben exakt");
+    return true;
 }
 
 void PixelEditor::put(int x, int y, int c) {

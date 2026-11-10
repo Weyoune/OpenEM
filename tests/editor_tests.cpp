@@ -144,6 +144,37 @@ int main(int argc, char** argv) {
         CHECK(ed.load(231) && ed.palette_source() == 247);
     }
 
+    // PNG-style import: exact palette colours map back to their (first matching) index, near colours snap
+    {
+        CHECK(ed.load(80));
+        const Image before = ed.image();
+        std::vector<uint32_t> px(before.pixels.size());
+        for (size_t i = 0; i < px.size(); i++) {
+            const auto& c = ed.palette().rgb[before.pixels[i]];
+            px[i] = 0xFF000000u | uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
+        }
+        int approx = -1;
+        CHECK(ed.import_argb(px, before.width, before.height, false, &approx) && approx == 0);
+        // duplicate palette colours may map to another index with the same colour: compare as colours
+        bool same = true;
+        for (size_t i = 0; i < px.size(); i++) {
+            const auto& a2 = ed.palette().rgb[ed.image().pixels[i]];
+            const auto& b2 = ed.palette().rgb[before.pixels[i]];
+            same = same && a2 == b2;
+        }
+        CHECK(same);
+        ed.undo();
+        CHECK(ed.image().pixels == before.pixels);
+        // a colour that is not in the palette snaps to the nearest one; transparent -> 0
+        std::vector<uint32_t> two(4, 0xFF000000u);
+        two[0] = 0xFFFE0101u;
+        two[1] = 0x00123456u;
+        CHECK(ed.import_argb(two, 2, 2, true, &approx) && approx >= 1 && ed.image().width == 2 && ed.image().height == 2);
+        CHECK(ed.image().pixels[1] == 0 && !ed.can_undo());
+        CHECK(ed.load(80) && !ed.import_argb(two, 2, 2, false));  // other size without permission
+        CHECK(ed.load(233) && !ed.import_argb(two, 2, 2, true));  // sheets must match exactly
+    }
+
     // hall map editor
     {
         MapDoc md(tmp);
