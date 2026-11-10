@@ -280,6 +280,12 @@ public:
     MatchRun(const MatchRun&) = delete;
     MatchRun& operator=(const MatchRun&) = delete;
     bool step();           // plays the next minute; false when no minute is left
+    // The next minute passes without play: the original's minute loop opened the Einstellungen instead (space key,
+    // ovl06_2522); only the period start and the end of the game apply (docs/logic/SPIELANSICHT_LIVE.md).
+    void idle_next_minute();
+    // The manager's squad was changed between two minutes (lineup screen from the board, ovl14_24bc): the working squad
+    // takes the roles and lines, the effort is set again as after leaving the lineup screen. No change: nothing happens.
+    void take_lineup();
     MatchResult finish();  // plays the remaining minutes and returns the result
     HokTeam& home_mut();  // the working copies for the pair-table error of the original (shared team records, play_matchdays)
     HokTeam& away_mut();
