@@ -2,6 +2,8 @@
 #include "game/messages.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 #include "game/scorers.hpp"
@@ -100,6 +102,7 @@ void native_delete_message(Bytes& state, uint8_t& handle) {
 
 void native_sort_messages(Bytes& state) {
     check(state);
+    if (std::getenv("EM_DEBUG_SORT")) std::fprintf(stderr, "message sort [%s]\n", g_draw_scope ? g_draw_scope : "");
     std::array<uint8_t, kMessageSize> swap{};
     for (int i = 0; i < kMessageSlots - 1; i++)
         for (int j = i + 1; j < kMessageSlots; j++) {

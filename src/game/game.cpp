@@ -751,8 +751,10 @@ void Game::play_cup_day() {
         // REAL-CODE period 11) and the stream spin of the day (REAL-CODE period 7)
         if (mgr_[0].team >= 0 && mgr_[0].team < kHokTeams)
             save_.state.at(kManagerBlock + 0xF0) = uint8_t(squad_match_load(save_.teams[size_t(mgr_[0].team)], mgr_[0].squad));
-        if (!std::getenv("EM_OLD_CUP_MSG")) {  // the cup display passes the menu routine: messages sorted and counted (REAL-CODE period 20)
-            native_sort_messages(save_.state);
+        if (!std::getenv("EM_OLD_CUP_MSG")) {  // the cup display passes the menu routine (REAL-CODE period 20)
+            // but it does not sort: REAL-CODE period 91 (write watch on DS:D294) shows no swap on two cup days without the
+            // human club; every earlier period stays exact without it
+            if (std::getenv("EM_OLD_CUPSORT")) native_sort_messages(save_.state);
             if (std::getenv("EM_OLD_MSGSTEP")) native_message_step(save_.state);  // the count-down of this day already ran in the day loop (period 44); counting here too doubled it (period 64)
         }
         g_draw_scope = "randomize";
@@ -2073,8 +2075,9 @@ void Game::play_playoff_day() {
         open_today.push_back(i);
         human_today |= manager_team(s.higher) || manager_team(s.lower);
     }
-    if (!human_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28)
-        native_sort_messages(save_.state);
+    if (!human_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28),
+        // without a sort (REAL-CODE period 91: no swap on any of the play-off days without the human club)
+        if (std::getenv("EM_OLD_POSORT")) native_sort_messages(save_.state);
         native_message_step(save_.state);
     }
     std::vector<std::array<int, 2>> grid(series_.size(), {0, 0});
@@ -3445,6 +3448,9 @@ void Game::new_season() {
     mgr_[0].transfer_offers.clear();  // the offer flags are cleared above (ovl02_0000)
     // power play counters (manager block +0x177) start from 0 again (NEUSAIS); the series records stay
     std::fill(save_.state.begin() + long(kSpecialTeams), save_.state.begin() + long(kSpecialTeams + 12), uint8_t(0));
+    // the season change sorts the messages once before the contract talks (REAL-CODE period 92: the injury of 13.04. stands
+    // first, the two contract wishes behind it are deleted by the talks; the exact call site in ovr026 is not located)
+    if (!std::getenv("EM_OLD_WMEXIT")) native_sort_messages(save_.state);
     expire_contracts();
     redistribute_players(0);
     redistribute_players(1);
@@ -3787,8 +3793,11 @@ void Game::advance_day() {
                           (ev == kEventEuroCup && human_in_next_euro()) || (ev == kEventPlayoff && human_in_next_playoff()) ||
                           (ev == kEventWorldChampionship && national_coach_ >= 0) || std::getenv("EM_OLD_MSGSORT");
         // after a stop the sort already ran before the menu (see the step end): only days inside a step sort here
+        // leaving the menu into a WM day without a national coach takes the WM branch: no count-down either (REAL-CODE
+        // period 92: the injury message of 13.04. keeps its count 3 until the summer)
+        const bool wm_exit = message_step_pending_ && ev == kEventWorldChampionship && national_coach_ < 0 && !std::getenv("EM_OLD_WMEXIT");
         if (sort && (!message_step_pending_ || std::getenv("EM_OLD_MSGSORTPOS"))) native_sort_messages(save_.state);
-        native_message_step(save_.state);
+        if (!wm_exit) native_message_step(save_.state);
         message_step_pending_ = false;
     }
     interactive_played_ = false;
