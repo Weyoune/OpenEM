@@ -63,6 +63,8 @@ public:
     void start_new_game(const NewGameSetup& setup, uint32_t seed = 1);
     // Two to four managers (hot seat): the world of the new-game generator (game/new_game.hpp start_new_world).
     void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1);
+    // The start menu with only the WM icon on ("Nur WM", game/wm_mode.hpp): one manager, the national coach.
+    void start_wm_game(const NewGameSetup& setup, uint32_t seed = 1);
     // The manager the UI acts for (Game::select_manager). It is not part of a checkpoint, so the session keeps it and
     // gives it to every staged game; loading or starting a game selects manager 0.
     bool select_manager(int manager);

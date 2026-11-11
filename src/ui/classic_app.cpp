@@ -104,6 +104,7 @@ void ClassicApplication::autosave(){
 }
 void ClassicApplication::start_advance(){
     if(!session_.loaded())return;
+    if(wm_flag_blocked())return;  // ovr034:2372 (classic_wm_mode.cpp)
     if(hand_over_menu())return;  // hot seat (classic_hotseat.cpp): the next manager's menu before the day
     advancing_=true;advance_first_=true;advanced_days_=0;category_=-1;
 }
@@ -457,6 +458,8 @@ void ClassicApplication::click(int x,int y,bool right){
     if(screen_==ClassicScreen::Lineup){click_lineup(x,y,right);return;}
     if(screen_==ClassicScreen::Tactics){click_tactics(x,y,right);return;}
     if(screen_==ClassicScreen::Transfer){click_transfer(x,y,right);return;}
+    if(screen_==ClassicScreen::WmSquad){click_wm_squad(x,y,right);return;}  // national coach (classic_wm_mode.cpp)
+    if(screen_==ClassicScreen::Friendlies){click_friendlies(x,y,right);return;}
     if(screen_==ClassicScreen::LeagueCompetition){
         if(right){finish_page();return;}
         if(fixture_league_==0){
@@ -523,7 +526,8 @@ void ClassicApplication::click(int x,int y,bool right){
             const int category=row*4+col;if(category==7)request_exit();else category_=category;return;
         }
         constexpr int counts[]={6,5,6,6,6,4,3,0};
-        if(category_>=0)for(int item=0;item<counts[category_];item++)if(inside(x,y,3+53*item,201,50+53*item,238)){if(category_==1&&item==3)transfer_native_si_=int16_t(y);route_submenu(item);return;}
+        if(category_>=0)for(int item=0;item<counts[category_];item++)if(inside(x,y,3+53*item,201,50+53*item,238)){if(wm_menu_route(item))return;  // night sky or national page (classic_wm_mode.cpp)
+            if(category_==1&&item==3)transfer_native_si_=int16_t(y);route_submenu(item);return;}
         return;
     }
     if(screen_==ClassicScreen::Files){
@@ -727,6 +731,7 @@ void ClassicApplication::draw(){
         case ClassicScreen::Table:draw_table();break;case ClassicScreen::Totals:draw_totals();break;
         case ClassicScreen::Bank:draw_bank();break;case ClassicScreen::Contracts:draw_contracts();break;
         case ClassicScreen::Training:draw_training();break;case ClassicScreen::Transfer:draw_transfer();break;
+        case ClassicScreen::WmSquad:draw_wm_squad();break;case ClassicScreen::Friendlies:draw_friendlies();break;  // classic_wm_mode.cpp
         case ClassicScreen::Lineup:draw_lineup();break;case ClassicScreen::Tactics:draw_tactics();break;
         case ClassicScreen::Strengths:draw_strengths();break;
         case ClassicScreen::Cup:draw_cup();break;case ClassicScreen::EuroCup:draw_euro();break;

@@ -36,6 +36,8 @@ public:
     // Start of a new game (argument 1): no running managers; "Los jetzt!" needs one complete new row.
     void open_start(const HokFile& base);
     bool start_mode() const { return start_mode_; }
+    // The two mode icons (menu variable var_57, game/wm_mode.hpp): bit 0 Liga/Cup, bit 1 WM; 2 = "Nur WM".
+    int mode_bits() const { return mode_; }
     void draw(ClassicCanvas& canvas, const HokFile& h, int mouse_x, int mouse_y) const;
     Result click(const HokFile& h, int x, int y, bool right);
     void key(int key);
@@ -64,5 +66,6 @@ private:
     std::array<uint8_t, 4> options_{};       // state 0x28 (DS:0118): level, duration, league, strength
     bool highscore_ = false;                 // DS:0256 != 0: notepad instead of the bare nail
     bool start_mode_ = false;                // ovr027:0135 argument 1 (new game)
+    int mode_ = 3;                           // var_57, ovr027:0161
 };
 }  // namespace em::ui

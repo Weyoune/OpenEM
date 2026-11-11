@@ -6,6 +6,7 @@
 #include "game/new_game.hpp"
 
 #include "game/highscore.hpp"
+#include "game/wm_mode.hpp"
 #include "ui/classic_app.hpp"
 #include "ui/classic_misc_highscore.hpp"
 #include "ui/classic_misc_newmanager.hpp"
@@ -112,13 +113,17 @@ void ClassicApplication::click_start_menu(int x, int y, bool right) {
     for (const auto& r : m.setup.rows())
         if (r.face >= 0 && r.team >= 0 && r.name.size() >= 2) managers.push_back({r.name, r.face, r.team});
     if (managers.empty()) return;
+    const bool wm_only = m.setup.mode_bits() == kStartModeWm;  // "Nur WM" (game/wm_mode.hpp, classic_wm_mode.cpp)
+    if (wm_only && managers.size() > 1) return;               // the icon switches only for a single manager
     try {
+        if (wm_only) session_.start_wm_game(managers.front());
+        else
         session_.start_new_game(managers);
         m.start_base.reset();
         invalidate();
         screen_ = ClassicScreen::Main;
         table_order_ = session_.game().league(division_).ranking;
-        ask_cup_draw();  // ovl05_4c7b(0, 0) at the start of the game (classic_hotseat.cpp)
+        if (!wm_only) ask_cup_draw();  // ovl05_4c7b(0, 0) at the start of the game (classic_hotseat.cpp); ovr029:467B skips it in "Nur WM"
     } catch (const std::exception& e) {
         notice(e.what());
     }

@@ -353,6 +353,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         }
     }
     for (int m = 1; m < managers_; m++) restore_offers(m);  // the interests saved for managers 1.. (no draws)
+    wm_only_prepare();  // WM-only mode: day-loop entry ovr038:2E5E (src/game/wm_mode.cpp)
 }
 
 Bytes Game::checkpoint_bytes() const {
@@ -3801,6 +3802,7 @@ void Game::new_season() {
         if(const auto location=native_find_roster_player(save_,uint8_t(id))){
             const size_t row=kSquad+size_t(location->manager)*0x618+size_t(location->slot)*kSquadRecord;
             save_.state.at(row+9)&=0x3f;
+            if(!wm_only())  // ovr026:05D9: the WM-only mode keeps the contract years
             save_.state.at(row+0x0b)=uint8_t(save_.state.at(row+0x0b)-1);
         }
     }
@@ -4352,6 +4354,7 @@ void Game::advance_day() {
             write_table_copies(save_.state, table_rows());
             table_copies_frozen_ = league_since_refresh_ = false;
             message_step_pending_ = true;
+            wm_only_prepare();  // WM-only mode: the next appointment (ovr038:3972) and the jump to the WM
             return;
         }
     }
