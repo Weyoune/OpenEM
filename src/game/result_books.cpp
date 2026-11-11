@@ -41,7 +41,8 @@ void book_head_to_head(Bytes& state, int home, int away, int home_goals, int awa
     auto put = [&](int opp, int side, int own, int against) {
         if (opp < 0 || opp >= kSeriesTeams) return;  // the block has 64 rows
         uint8_t* row = state.data() + kHeadToHead + size_t(manager) * 0x280 + size_t(opp) * 10;
-        const uint8_t v = uint8_t(std::min(against, 15) << 4 | std::min(own, 15));
+        // no clamping: the nibbles are shifted and truncated to a byte (REAL-CODE Köln period 277: 1:17 is stored as 0x11)
+        const uint8_t v = std::getenv("EM_OLD_H2HCAP") ? uint8_t(std::min(against, 15) << 4 | std::min(own, 15)) : uint8_t((against << 4) | own);
         std::vector<uint8_t*> slots;  // the column, or both for nations and later teams
         if (opp < kFirstNationalTeam) {
             for (int i = 0; i < 5; i++) slots.push_back(row + 2 * i + side);
