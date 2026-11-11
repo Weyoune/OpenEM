@@ -1229,6 +1229,9 @@ void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
         if (brng_.range(0, 10) <= (weaker ? 3 : 7)) continue;
         if (std::min(2, save_.players[size_t(sp.player)].position / 25) == 0 && brng_.range(0, 2) != 0) continue;
         injure(slot, 1, m);
+        // leaving the line-up screen (sub_55DD2) recomputes the club record from the squad with the place of the injured player
+        // empty (162c:146c; REAL-CODE Köln period 277: goalkeeper hurt, record 47/42/67/50 -> 30/42/3/50 until the next menu)
+        if (!std::getenv("EM_OLD_INJREFRESH")) refresh_human_team(m);
         if (slot < mgr_[m].hurt_in_match.size()) mgr_[m].hurt_in_match[slot] = true;
         // the original opens the line-up screen; leaving it runs sub_55DD2: the active line quotas DS:CC73 follow the
         // raw ones DS:CC43 of the manager (normalised to a sum of 8; REAL-CODE period 28; 8 bytes per manager as in tactics.cpp)
@@ -4465,7 +4468,8 @@ g_draw_scope = "weekly-injuries-offers-training";
                                             !((ne == kEventCup && !human_in_next_cup()) || (ne == kEventEuroCup && !human_in_next_euro()) ||
                                               (ne == kEventPlayoff && !human_in_next_playoff()) || (ne == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0)));
         skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_[size_t(m)] ||
-                             (calendar_.event(day_) == kEventCup && !menu_next && !std::getenv("EM_OLD_CUPREFRESH"));
+                             (calendar_.event(day_) == kEventCup && !menu_next && !std::getenv("EM_OLD_CUPREFRESH")) ||
+                             (!menu_next && !std::getenv("EM_OLD_STEPREFRESH"));  // inside a step the evening does not refresh the club record either (Köln 277)
         prepare_human_lineup(true, m);
     }
     empty_cup_day_ = false;

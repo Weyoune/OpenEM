@@ -2763,7 +2763,14 @@ static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_d
         CHECK(own >= 0 && against >= 0);
         if (own >= 0) check(before, after, own, against, cup ? 1 : euro ? 2 : 0, league, shootout_goals);
         Game restored(exe, game.save_bytes(), 12);
-        CHECK(restored.save_bytes() == game.save_bytes());
+        {
+            // loading recomputes the club record (162c:146c); inside a step it is not refreshed (REAL-CODE Köln period 277)
+            HokFile x = decode_hok(game.save_bytes()), y = decode_hok(restored.save_bytes());
+            const int own = x.state.at(0x0DCD + 0x14);
+            if (own >= 0 && own < kHokTeams)
+                for (size_t f : {0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x32}) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
+            CHECK(x.state == y.state);
+        }
     }
     std::printf("human statistics: native and simulated goals, assists, games and goalkeeper fields across competitions checked\n");
 }
@@ -3989,7 +3996,15 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const Bytes bytes = game.save_bytes();
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
-            CHECK(resumed.save_bytes() == bytes);
+            {
+                // loading recomputes the club record (162c:146c), which inside a step is not refreshed in the evening (REAL-CODE
+                // Köln period 277): only skill1/skill2/form and the skater count of the own club may change
+                HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
+                const int own = x.state.at(0x0DCD + 0x14);
+                if (own >= 0 && own < kHokTeams)
+                    for (size_t f : {0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x32}) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
+                CHECK(x.state == y.state);
+            }
             CHECK(resumed.champion() == game.champion() && resumed.cup_winner() == game.cup_winner());
             if (checkpoint < 15) {
                 while (resumed.season_day() < calendar.nth_day(kEventPlayoff, checkpoint + 1)) resumed.advance_day();
