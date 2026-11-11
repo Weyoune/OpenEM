@@ -189,6 +189,7 @@ void ClassicApplication::draw_main(){
         for(int item=0;item<6;item++){
             canvas_.frame(3+53*item,201,2,2);canvas_.rect(7+53*item,205,46+53*item,234,30);
             if(item>=counts[category_])canvas_.blit(3,8+53*item,206,118,203,38,28);
+            else if(wm_menu_disabled(category_,item))canvas_.blit(3,8+53*item,206,157,203,38,28);  // night sky (ovr034:2A3B)
             else{const int index=offsets[category_]+item;int sx=1+39*(index%6),sy=87+29*(index/6);if((category_==3||category_==4)&&item>2)sx+=39;canvas_.blit(3,8+53*item,206,sx,sy,38,28);}
         }
     }
@@ -196,7 +197,9 @@ void ClassicApplication::draw_main(){
 // Header of the main menu (ovl10_0cd1). The season review calls it with 0xFE (ovl01_0f6a): no ranking graph and
 // no status lights, its own date and balance, the section-end symbol and "Saisonende".
 void ClassicApplication::draw_main_header(const SeasonReview* review){
-    const auto& h=snapshot();const auto& g=session_.game();const int own=g.human_team();
+    const auto& h=snapshot();const auto& g=session_.game();
+    const bool nat=!review&&national_view();  // the national coach: nation, national account, no graph (NATSTART)
+    const int own=nat?g.national_team():g.human_team();
     canvas_.rect(2,22,317,74,2);
     canvas_.line(2,22,317,22,7);canvas_.line(1,23,1,74,7);
     canvas_.line(2,75,317,75,3);canvas_.line(318,23,318,74,3);
@@ -214,7 +217,7 @@ void ClassicApplication::draw_main_header(const SeasonReview* review){
     const int crest=80+(h.teams.at(size_t(own)).raw[0x34]&63);canvas_.blit(crest,275,34,0,0,38,38);
     bevel(234,35,274,75,255,0);bevel(276,35,316,75,255,0);
     if(!review){
-        const auto status=classic_status(h,g.budget(),active_manager());
+        const auto status=classic_status(h,g.budget(),nat?5:active_manager());
         for(int i=0;i<6;i++)canvas_.blit(3,226,33+7*i,196,219+6*int(status[size_t(i)]),6,6);
     }
     const auto d=review?review->date:session_.date();
@@ -225,9 +228,9 @@ void ClassicApplication::draw_main_header(const SeasonReview* review){
     canvas_.text(mini,108,29,manager_name(active_manager()),24,0,229);canvas_.text(mini,232,29,h.teams[size_t(own)].name,24,0,313);
     canvas_.text(mini,138,42,other>=0?h.teams.at(size_t(other)).name:event==kEventSectionEnd?"Saisonende":"Spielfrei",7,0,230);
     if(!review)canvas_.text(mini,138,55,recent_results(h,other),7,0,230);
-    canvas_.text(mini,138,68,money(review?review->balance:g.budget().balance),7,0,230);
-    if(!review)draw_classic_ranking_graph(canvas_,h,own,other<0?255:other,calendar_.league_day(g.season_day()+1));
-    else{canvas_.line(5,46,5,69,6);canvas_.line(6,70,101,70,8);}  // 0xFE: the graph routine draws its axes only
+    canvas_.text(mini,138,68,money(review?review->balance:nat?long(int32_t(le32(h.state,manager_block(5)+0x18F))):g.budget().balance),7,0,230);
+    if(!review&&!nat)draw_classic_ranking_graph(canvas_,h,own,other<0?255:other,calendar_.league_day(g.season_day()+1));
+    else if(review){canvas_.line(5,46,5,69,6);canvas_.line(6,70,101,70,8);}  // 0xFE: the graph routine draws its axes only
 }
 
 void ClassicApplication::draw_files(){

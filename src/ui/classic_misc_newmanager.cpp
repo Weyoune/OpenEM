@@ -3,6 +3,8 @@
 
 #include <algorithm>
 
+#include "game/wm_mode.hpp"
+
 namespace em::ui {
 namespace {
 constexpr size_t kOptions = 0x28, kFaces = 0x01EE, kFileNumber = 0x06AE;  // DS:0118, DS:0178, DS:0256
@@ -84,8 +86,8 @@ void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my)
     if (mark_.first > 0) mark(c, mark_.first, mark_.second, 0x18);
     if (panel_ == Panel::Options) {
         c.blit(1, 0xC2, 0xC2, 0x71, highscore_ ? 0x26 : 0, 0x36, 0x26, true, kKey);  // notepad / nail
-        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D, 0x39, 0x0D);           // league/cup mode on
-        c.blit(1, 0x103, 0x2F, 0x71, 0x66 + 0x0D, 0x39, 0x0D);          // WM mode on
+        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D * (mode_ & 1), 0x39, 0x0D);         // league/cup mode (ovr027:073F)
+        c.blit(1, 0x103, 0x2F, 0x71, 0x66 + 0x0D * ((mode_ & 2) != 0), 0x39, 0x0D);  // WM mode (ovr027:077C)
         for (int i = 0; i < 4; i++)
             c.blit(1, 0xC3, 0x51 + 0x1C * i, 0, 10 * (options_[size_t(i)] + kOptionOffset[size_t(i)]), 0x71, 10, true, kKey);
         return;
@@ -183,9 +185,18 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
         if (y <= 0xF0 && y > 0x2C && x > 0x2D && x < 0x88) close_panel();  // ovr027:0F35
         return Result::None;
     }
+    if (start_mode_ && x > 0xBE && y > 0x2D && y < 0x3D) {  // ovr027:06C6..0721: the mode icons of a new game
+        int filled = 0;
+        for (const auto& r : rows_) filled += !r.name.empty();
+        if (x < 0xFE && filled > 1) return Result::None;  // "Nur WM" only for a single manager
+        mode_ ^= x > 0xFD ? 2 : 1;
+        highscore_ = start_menu_highscore(mode_, options_);  // ovr027:096D
+        return Result::None;
+    }
     if (x > 0xFD && y > 0xC1 && x < 0x135 && y < 0xE9) {  // Los jetzt!
         for (const auto& r : rows_)
             if (!r.existing && ((r.face >= 0) != (r.team >= 0))) return Result::None;  // incomplete row
+        if (start_mode_ && mode_ == 0) return Result::None;  // ovr027:15AF: var_57 != 0
         for (const auto& r : rows_)
             if (!r.existing && r.face >= 0) return Result::LeaveWithManager;
         if (start_mode_) return Result::None;  // ovr027:15AF: a new game needs a manager (var_57 != 0)

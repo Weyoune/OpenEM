@@ -203,6 +203,21 @@ public:
     std::vector<HokSquadPlayer> national_squad() const { return hok_squad(save_, 5); }
     bool select_national_player(size_t player, bool selected);
     bool auto_select_national_squad();
+    // ---- WM-only mode "Nur WM" (state 0x025A = 1, src/game/wm_mode.cpp, docs/logic/WM.md "WM-Modus")
+    bool wm_only() const;
+    bool wm_started() const { return wm_round_ > 0; }  // the flag was clicked: the tournament runs
+    int friendlies_played() const;                       // DS:D0C1
+    // ovl07_1f27: opening the friendlies page (national coach before the WM) sets every nominee's exhaustion to 70.
+    bool enter_friendlies();
+    struct FriendlyOutcome {
+        bool played = false;
+        std::string refusal;  // native notice text when the game was refused
+        int home = -1, away = -1, home_goals = 0, away_goals = 0, bonus = 0;
+        long price = 0;  // raw
+    };
+    FriendlyOutcome play_friendly(int opponent, bool home);
+    // ovl07_1af6: ABWEHR/STURM values of lines 1-3 ([kind][line]); the own nation with its WM squad.
+    std::array<std::array<int, 3>, 2> line_overview(int team) const;
     // World championship places 1-8 (team indices) after its last day, else empty.
     const std::vector<int>& world_ranking() const { return wm_ranking_; }
     const RoundRobinTable<6>& world_group(int g) const { return wm_groups_[size_t(g)]; }
@@ -391,6 +406,7 @@ private:
     bool league_since_refresh_ = false;  // a league day was played since the copies were last refreshed
     int last_scorer_slot_ = 0;  // DS:3277 (byte_33277): slot of the last scorer pick, reused when a club without a squad scores
     void reset_wm();
+    void wm_only_prepare();  // WM-only mode: jump to the WM and appoint manager 0 (wm_mode.cpp)
     void new_season();
     void redistribute_players(int mode);
     void refresh_transfer_list();

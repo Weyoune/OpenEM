@@ -11,7 +11,8 @@
 #include "ui/classic_match_view.hpp"
 
 namespace em::ui {
-enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager };
+enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager,
+                           WmSquad, Friendlies };  // national coach: WM squad ovl07_29ac, friendlies ovl07_1f27
 
 // Milliseconds of the UI clock: SDL_GetTicks64, or the clock of a scripted headless run (classic_script.hpp).
 uint64_t classic_ticks();
@@ -28,6 +29,7 @@ struct ClassicUiProbe {
 
 struct ClassicMiscState;  // classic_misc_input.cpp
 struct ClassicCareerState;  // classic_career.cpp
+struct ClassicWmModeState;  // classic_wm_mode.cpp
 class ClassicApplication {
 public:
     ClassicApplication(std::filesystem::path data, std::filesystem::path saves, const std::filesystem::path& initial);
@@ -136,6 +138,16 @@ private:
     void draw_career();
     std::string career_modal() const;  // "messages", "review-overview", "review" or ""
     std::shared_ptr<ClassicCareerState> career_;
+    // National coach / WM-only mode (classic_wm_mode.cpp, docs/logic/WM.md "WM-Modus")
+    bool national_view() const;                         // byte_2F6DE = 5: the active manager is the national coach
+    bool wm_menu_disabled(int menu,int item) const;     // night-sky item (DS:5159 tables, ovr034:1E6D)
+    bool wm_menu_route(int item);                        // a main-menu item click: disabled or national page
+    bool wm_flag_blocked();                              // ovr034:2372: fewer than 10 nominees
+    void draw_wm_squad();
+    void click_wm_squad(int x,int y,bool right);
+    void draw_friendlies();
+    void click_friendlies(int x,int y,bool right);
+    std::shared_ptr<ClassicWmModeState> wm_mode_;
     void draw_dialog();
     void draw_contract_editor();
     void open_contract(int slot);

@@ -77,6 +77,7 @@ add_library(em_game STATIC
     src/game/purchase.cpp
     src/game/loan.cpp
     src/game/talent.cpp
+    src/game/wm_mode.cpp
     src/game/messages.cpp
     src/game/new_game.cpp
     src/game/world_generator.cpp
@@ -151,7 +152,7 @@ target_sources(em_formats PRIVATE src/formats/sound.cpp src/formats/opl2.cpp)
 
 option(EM_BUILD_GUI "Build the playable OpenEM frontend" ON)
 if(EM_BUILD_GUI)
-    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_loan.cpp src/ui/classic_scout.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp src/ui/classic_misc_input.cpp src/ui/classic_career.cpp src/ui/classic_season_review.cpp src/ui/classic_hotseat.cpp)
+    add_library(em_classic_app STATIC src/ui/classic_app.cpp src/ui/classic_screens.cpp src/ui/classic_contracts.cpp src/ui/classic_tactics_input.cpp src/ui/classic_lineup_input.cpp src/ui/classic_transfer_input.cpp src/ui/classic_hover_state.cpp src/ui/classic_purchase.cpp src/ui/classic_sale.cpp src/ui/classic_loan.cpp src/ui/classic_scout.cpp src/ui/classic_advertising_input.cpp src/ui/classic_stadium_input.cpp src/ui/classic_youth_input.cpp src/ui/classic_misc_input.cpp src/ui/classic_wm_mode.cpp src/ui/classic_career.cpp src/ui/classic_season_review.cpp src/ui/classic_hotseat.cpp)
     target_link_libraries(em_classic_app PUBLIC em_frontend em_classic ${EM_SDL_TARGET})
     target_sources(em_classic_app PRIVATE src/ui/classic_stats_app.cpp)
     target_sources(em_classic_app PRIVATE src/ui/classic_sound.cpp)  # SDL audio output
@@ -180,6 +181,8 @@ if(EM_BUILD_GUI)
     target_link_libraries(em_classic_career_tests PRIVATE em_classic_app)
     add_executable(em_classic_hotseat_tests tests/classic_hotseat_tests.cpp)
     target_link_libraries(em_classic_hotseat_tests PRIVATE em_classic_app)
+    add_executable(em_wm_mode_tests tests/wm_mode_tests.cpp)  # WM-only mode "Nur WM"
+    target_link_libraries(em_wm_mode_tests PRIVATE em_classic_app)
     add_executable(em_classic_match_tests tests/classic_match_tests.cpp)
     target_link_libraries(em_classic_match_tests PRIVATE em_classic_app)
     add_executable(em_classic_match_view_tests tests/classic_match_view_tests.cpp)
@@ -346,6 +349,9 @@ if(IS_DIRECTORY "${EM_DATA}")
         endif()
         add_test(NAME classic_loan_scout COMMAND em_classic_loan_scout_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/transfer_20261110/raster_goldens" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
         add_test(NAME classic_hold COMMAND em_classic_hold_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/classic-test-work")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/national_team_20261102/NATAUTO_native.hok")
+            add_test(NAME wm_mode COMMAND em_wm_mode_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/national_team_20261102" "${CMAKE_CURRENT_BINARY_DIR}/wm-mode-work")
+        endif()
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/hotseat_20261110/HOT2.HOK")
             add_test(NAME classic_hotseat COMMAND em_classic_hotseat_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/hotseat_20261110" "${CMAKE_CURRENT_BINARY_DIR}/classic-hotseat-work")
         endif()

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ui/session.hpp"
 #include "game/checkpoint.hpp"
+#include "game/wm_mode.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -101,6 +102,12 @@ void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
     start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed))), seed);
+}
+
+void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
+    const auto base = find_new_game_base(data_directory_);
+    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
+    start_from(encode_hok(em::start_wm_only_game(decode_hok(read_file(*base)), *database_, setup)), seed);
 }
 
 void Session::start_from(const Bytes& bytes, uint32_t seed) {
