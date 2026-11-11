@@ -307,6 +307,7 @@ public:
     const HokTeam& away_state() const;
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
     void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
+    void set_display(bool on);  // ovr030:2937: the full minute belongs to the pairs whose home team is in the display list (overrides the manager test)
     MatchProgress progress() const;  // display state after the last played minute (read-only observer)
 
 private:

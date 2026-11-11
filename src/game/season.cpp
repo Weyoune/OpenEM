@@ -194,6 +194,17 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (f->home == f->away) f->run->mark_same_club();
             if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d (now %d-%d, scheduled %d-%d) at B%zu\n", f->pair, side, next, f->home, f->away, f->scheduled[0], f->scheduled[1], g_borland_log ? g_borland_log->size() : size_t(0));
         }
+        // ovr030:2937 (sub_5F431): the full minute (energy, lines, side swap) belongs to the pairs whose current home team is in
+        // the display list DS:0233, which holds the manager pair of the day; after the rewrite a manager match with team 0 at
+        // home loses it (REAL-CODE: watch on DS:0233 in Köln period 195, the minute draws of periods 179/195/262/265)
+        if (!std::getenv("EM_OLD_PHANTOMDISPLAY")) {
+            std::vector<int> display;
+            for (auto& g : entries)
+                if (humans.is_human(g->scheduled[0]) || humans.is_human(g->scheduled[1])) { display.push_back(g->scheduled[0]); display.push_back(g->scheduled[1]); }
+            if (!display.empty())
+                for (auto& g : entries)
+                    g->run->set_display(std::find(display.begin(), display.end(), g->home) != display.end());
+        }
         (void)trigger;
     };
     auto pull_shared = [&](Entry& e) {

@@ -878,6 +878,7 @@ struct MatchRun::Impl {
 
     // ovl06_161d: three periods 1-20, 21-40, 41-60; a drawn knock-out match goes on 61-65 and 66-70
     bool watched = false;
+    int display_override = -1;  // >= 0: the home team is (1) or is not (0) in the display list DS:0233 (pair-table error, see season.cpp)
     bool shootout_done = false;
     MatchProgress shown;  // display bookkeeping only (ovl14_1dc7), never read by the simulation
     // a match with a board (team byte +0x34 bit 7 at home or away) draws goal scenes when they are switched on
@@ -1018,7 +1019,7 @@ struct MatchRun::Impl {
         // line changes, effort of the situation (even minutes), penalties.
         bool swap_sides = false;
         if (hp && std::getenv("EM_DEBUG_SCORE")) std::fprintf(stderr, "minute %d score %d:%d draws %zu\n", minute, score.home, score.away, g_game_log ? g_game_log->size() : size_t(0));
-        if (hp || ap || (watched && minute <= 60)) {  // REAL-CODE: the watched list of the other matches ends with the regular time (the overtime minutes of the other pairs skip energy, swap and line changes)
+        if (display_override >= 0 ? display_override != 0 : (hp || ap || (watched && minute <= 60))) {  // REAL-CODE: the watched list of the other matches ends with the regular time (the overtime minutes of the other pairs skip energy, swap and line changes)
             const bool decided_now = opts.knockout && minute > 60 && score.home != score.away;  // the golden goal of the overtime: the minute ends without energy (REAL-CODE)
             scope("energy");
             if (!decided_now) {
@@ -1101,6 +1102,7 @@ bool MatchRun::step() { return p_->step(); }
 void MatchRun::idle_next_minute() { p_->idle_next = true; }
 void MatchRun::take_lineup() { p_->take_lineup(); }
 void MatchRun::set_watched(bool on) { p_->watched = on; }
+void MatchRun::set_display(bool on) { p_->display_override = on ? 1 : 0; }
 MatchProgress MatchRun::progress() const {
     MatchProgress m = p_->shown;
     m.minute = p_->minute;
