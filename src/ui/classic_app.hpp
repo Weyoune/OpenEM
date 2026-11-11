@@ -178,6 +178,8 @@ private:
     void draw_season_talk();
     bool render_season_talk(std::string_view name);  // render_screen: "contract-season:SLOT:LUCK", "season-notice:BEHIND:TEXT"
     void show_review(const SeasonReview& review,std::vector<std::string> messages);  // classic_career.cpp
+    void show_reviews(const std::array<std::optional<SeasonReview>,kMaxManagers>& reviews,const std::array<std::vector<std::string>,kMaxManagers>& messages);  // classic_career.cpp
+    int season_manager() const{return session_.contract_question()?session_.contract_question()->manager:0;}  // the manager of the open season talk
     std::unique_ptr<HokFile> season_view_;      // the staged game of the open question
     bool season_review_shown_=false;            // the review came before the talks; not again after the day
     size_t season_outcomes_seen_=0;

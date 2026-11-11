@@ -148,7 +148,6 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     // team's name (notably national previews). Native load uses manager+14.
     mgr_[0].team = save_.state.at(kManagerBlock + 0x14);
     managers_ = std::clamp(int(save_.state.at(kManagerCount)), 1, kMaxManagers);
-    if (managers_ > 1) log_.push_back("warning: " + std::to_string(managers_) + " managers in the save; OpenEM simulates manager 0 only so far");
     if(mgr_[0].team<0||mgr_[0].team>=kHokTeams)throw FormatError("HOK: invalid manager club");
     // the header holds the calendar year of the save (1994 in MONAT4, February), DS:03BB the year
     // the season started; the day loop counts from the season start
@@ -166,8 +165,11 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     rng_.borland = &brng_;
     mgr_[0].budget = budget_from_save(save_, 0);
     mgr_[0].offers = sponsor_offers_from_save(save_.state, 0);
-    for (int d = 0; d < kTrainingDays; d++)
-        for (int u = 0; u < kTrainingUnits; u++) plan_[size_t(d)][size_t(u)] = save_.state[0x070C + size_t(d * 4 + u)];
+    // the training plans DS:A8A1 + 0x1C * manager (seg002:015E; state 0x070C, 0x70 bytes = four plans)
+    for (int m = 0; m < kMaxManagers; m++)
+        for (int d = 0; d < kTrainingDays; d++)
+            for (int u = 0; u < kTrainingUnits; u++)
+                mgr_[size_t(m)].plan[size_t(d)][size_t(u)] = save_.state[0x070C + size_t(m * 0x1C + d * 4 + u)];
     mgr_[0].image = le16(save_.state, 0x0DCD + 0x173);
     // Managers 1.. (only with more than one manager): club, money, sponsor offers and image for the UI actions
     // (step 5), the match layer (step 6) and the day loop (step 7).
@@ -270,8 +272,15 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     reset_wm();
     wm_round_ = std::clamp(int(save_.state.at(kWorldRound)), 0, 7);
     const size_t national_manager = kManagerBlock + 5 * 0x1AF;
-    if (save_.state.at(0x0788) == 5 && save_.state.at(national_manager + 0x14) == save_.state.at(0x068C))
-        national_coach_ = save_.state.at(national_manager + 0xE4) == 0 ? 0 : -1;
+    if (save_.state.at(0x0788) == 5 && save_.state.at(national_manager + 0x14) == save_.state.at(0x068C) &&
+        save_.state.at(national_manager + 0xE4) == 0) {
+        // the national block holds a copy of the appointed manager's first 20 bytes (name, begin_world_championship)
+        national_coach_ = 0;
+        for (int m = managers_ - 1; m >= 0; m--)  // the first manager whose name matches
+            if (std::equal(save_.state.begin() + long(manager_block(m)), save_.state.begin() + long(manager_block(m) + 20),
+                           save_.state.begin() + long(national_manager)))
+                national_coach_ = m;
+    }
     if (wm_round_ == 7) {
         bool final_played = true;
         for (size_t pair = 0; pair < 4; pair++) {
@@ -328,6 +337,7 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
         for (size_t slot = 0; slot < save_.squad.size(); slot++)
             save_.squad[slot].status = SquadStatus(checkpoint.squad_status.at(slot));
         seasons_ = checkpoint.seasons;
+        daily_luck_ = checkpoint.daily_luck;  // v10 (v1-9: 100 as before)
         mgr_[0].budget.team_strength = checkpoint.team_strength;
         mgr_[0].budget.players = checkpoint.players;
         mgr_[0].budget.squad_costs = checkpoint.squad_costs;
@@ -336,23 +346,50 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
             mgr_[0].transfer_offers.push_back({offer.player, offer.listed, offer.bidder, offer.amount});
         mgr_[0].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[0].team);
         configure_human_tactics(mgr_[0].squad, save_, 0);
+        // v10: the same fields of managers 1..N-1; a v1-9 checkpoint (one manager when written) rebuilds their offers
+        for (int m = 1; m < managers_; m++) {
+            ManagerState& mg = mgr_[size_t(m)];
+            for (int kind = 0; kind < 2; kind++) mg.squad.per_line[kind] = line_counts_[size_t(m)][size_t(kind)];
+            if (size_t(m) <= checkpoint.other_managers.size()) {
+                const CheckpointManager& x = checkpoint.other_managers[size_t(m - 1)];
+                mg.rotation = x.rotation;
+                mg.timers = x.timers;
+                mg.injured_role = x.injured_roles;
+                auto& squad = save_.squad_of(m);
+                for (size_t slot = 0; slot < squad.size() && slot < x.squad_status.size(); slot++)
+                    squad[slot].status = SquadStatus(x.squad_status[slot]);
+                mg.budget.team_strength = x.team_strength;
+                mg.budget.players = x.players;
+                mg.budget.squad_costs = x.squad_costs;
+                mg.budget.pool_costs = x.pool_costs;
+                for (const auto& offer : x.offers) mg.transfer_offers.push_back({offer.player, offer.listed, offer.bidder, offer.amount});
+            } else {
+                restore_offers(m);  // the interests saved in the native flags (no draws)
+            }
+            mg.squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mg.team);
+            configure_human_tactics(mg.squad, save_, m);
+        }
     } else {
-        restore_offers();
+        // the original's load runs the automatic lineup for every manager 0..N-1 (one manager: REAL-CODE as before)
+        for (int m = 0; m < managers_; m++) restore_offers(m);
         if(previous){
             //5CB4:27BF ->1D1D: live return keeps loaded A, count pairs and
             //cached team fields; only59B5:26DC automatic lineup is rerun.
             inherit_native_runtime(*previous);
-            auto_lineup(save_,0);
-            mgr_[0].squad.penalty_effort_adjustment=penalty_effort_adjustment(save_,mgr_[0].team);
-            configure_human_tactics(mgr_[0].squad,save_,0);
+            for (int m = 0; m < managers_; m++) {
+                auto_lineup(save_,m);
+                mgr_[size_t(m)].squad.penalty_effort_adjustment=penalty_effort_adjustment(save_,mgr_[size_t(m)].team);
+                configure_human_tactics(mgr_[size_t(m)].squad,save_,m);
+            }
         }else {
-            prepare_human_lineup();  // the original recomputes the club after loading (DOSBox FINEV_loaded: 321 -> 320)
-            // The cold club model already uses its active pair. Persist that
-            // same pair; otherwise a checkpoint would replace it with BSS0/0.
-            line_counts_[0]={uint8_t(mgr_[0].squad.per_line[0]),uint8_t(mgr_[0].squad.per_line[1])};
+            for (int m = 0; m < managers_; m++) {
+                prepare_human_lineup(true, m);  // the original recomputes the club after loading (DOSBox FINEV_loaded: 321 -> 320)
+                // The cold club model already uses its active pair. Persist that
+                // same pair; otherwise a checkpoint would replace it with BSS0/0.
+                line_counts_[size_t(m)]={uint8_t(mgr_[size_t(m)].squad.per_line[0]),uint8_t(mgr_[size_t(m)].squad.per_line[1])};
+            }
         }
     }
-    for (int m = 1; m < managers_; m++) restore_offers(m);  // the interests saved for managers 1.. (no draws)
 }
 
 Bytes Game::checkpoint_bytes() const {
@@ -377,12 +414,28 @@ Bytes Game::checkpoint_bytes() const {
     for (size_t slot = 0; slot < save_.squad.size(); slot++)
         checkpoint.squad_status.at(slot) = uint8_t(save_.squad[slot].status);
     checkpoint.seasons = seasons_;
+    checkpoint.daily_luck = daily_luck_;
     checkpoint.team_strength = mgr_[0].budget.team_strength;
     checkpoint.players = mgr_[0].budget.players;
     checkpoint.squad_costs = mgr_[0].budget.squad_costs;
     checkpoint.pool_costs = mgr_[0].budget.pool_costs;
     for (const auto& offer : mgr_[0].transfer_offers)
         checkpoint.offers.push_back({offer.player, offer.bidder, offer.listed, offer.amount});
+    for (int m = 1; m < managers_; m++) {  // v10
+        const ManagerState& mg = mgr_[size_t(m)];
+        CheckpointManager x;
+        x.rotation = mg.rotation;
+        x.timers = mg.timers;
+        x.injured_roles = mg.injured_role;
+        const auto& squad = save_.squad_of(m);
+        for (size_t slot = 0; slot < squad.size() && slot < x.squad_status.size(); slot++) x.squad_status[slot] = uint8_t(squad[slot].status);
+        x.team_strength = mg.budget.team_strength;
+        x.players = mg.budget.players;
+        x.squad_costs = mg.budget.squad_costs;
+        x.pool_costs = mg.budget.pool_costs;
+        for (const auto& offer : mg.transfer_offers) x.offers.push_back({offer.player, offer.bidder, offer.listed, offer.amount});
+        checkpoint.other_managers.push_back(std::move(x));
+    }
     return encode_game_checkpoint(checkpoint);
 }
 
@@ -1084,6 +1137,10 @@ void Game::injure(size_t slot, int kind, int m) {
     }
 }
 
+void Game::reload_squads() {
+    for (int m = 0; m < managers_; m++) save_.squad_of(m) = hok_squad(save_, m);
+}
+
 // 146e:1732: the summer uses healing without training injuries or training.
 void Game::heal_squad(bool weekly, int m) {
     for (size_t i = 0; i < save_.squad_of(m).size() && i < size_t(kHokSquadSlots); i++) {
@@ -1395,7 +1452,7 @@ void Game::restore_offers(int m) {
 // added to DS:97EA), his record goes (ovl09_25d6) and he is a free player (+0x1A = 6, no team)
 // for ovl16_0480. A player who accepts gets the years and the salary.
 void Game::expire_contracts(int m) {
-    contract_outcomes_.clear();
+    contract_manager_ = m;  // the outcomes of all managers collect in one list (cleared by new_season)
     constexpr int kMatchdays = 44;
     for (size_t slot = 0; slot < save_.squad_of(m).size();) {
         uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
@@ -1432,7 +1489,7 @@ void Game::expire_contracts(int m) {
                 sp.contract_years = years;
                 sp.salary = salary / 3;
                 log_.push_back(pl.name + text + std::to_string(salary / 3) + " DM");
-                contract_outcomes_.push_back({pl.name, true, false, 0});
+                contract_outcomes_.push_back({pl.name, true, false, 0, false, m});
                 slot++;
             };
             if (terms.years == 1 && (terms.salary == 0 || terms.salary == proposal)) {
@@ -1478,7 +1535,7 @@ void Game::expire_contracts(int m) {
                 uint8_t* praw = save_.state.data() + kPlayers + size_t(r[0x0F] - 1) * kPlayerRecord;
                 if (praw[0x1E] >= 1 && praw[0x1E] <= 24) native_delete_message(save_.state, praw[0x1E]);
             }
-            contract_outcomes_.push_back({pl.name, false, refused, 0, too_long});
+            contract_outcomes_.push_back({pl.name, false, refused, 0, too_long, m});
         }
         const long demand = std::getenv("EM_OLD_CONTRACTS") ? renewal_demand(contracts_, cp, 2, 100, kMatchdays, kMatchdays, 233, brng_) : 0;
         const int years = std::getenv("EM_OLD_CONTRACTS") ? (contract_decider_ ? contract_decider_(cp, demand) : 2) : 0;
@@ -1594,12 +1651,11 @@ bool Game::set_training_plan(const TrainingPlan& plan) {
     const int a = active_manager_;
     if (national_coach_ >= 0 || mgr_[a].team >= kFirstNationalTeam) return false;
     for (const auto& day : plan) for (uint8_t kind : day) if (kind >= kTrainingKinds) return false;
-    // The plan (state 0x070C) is one field so far; whether the original keeps one per manager is open
-    // (docs/MEHRSPIELER_PLAN.md). The recovery fee goes to the active manager.
-    plan_ = plan;
+    // One plan per manager: DS:A8A1 + 0x1C * manager (state 0x070C, seg002:015E reads it with the manager index).
+    mgr_[a].plan = plan;
     for (size_t day = 0; day < plan.size(); day++)
-        for (size_t unit = 0; unit < plan[day].size(); unit++) save_.state.at(0x070C + day * 4 + unit) = plan[day][unit];
-    mgr_[a].budget.open_97ee = training_recovery_cost(training_, plan_, mgr_[a].budget.league);
+        for (size_t unit = 0; unit < plan[day].size(); unit++) save_.state.at(0x070C + 0x1C * size_t(a) + day * 4 + unit) = plan[day][unit];
+    mgr_[a].budget.open_97ee = training_recovery_cost(training_, mgr_[a].plan, mgr_[a].budget.league);
     for (int byte = 0; byte < 4; byte++)
         save_.state.at(manager_block(a) + 0x193 + size_t(byte)) = uint8_t(uint32_t(mgr_[a].budget.open_97ee) >> (8 * byte));
     log_.push_back("training plan saved, recovery " + std::to_string(mgr_[a].budget.open_97ee * 2 / 3) + " DM per week");
@@ -1610,8 +1666,8 @@ StockResult Game::trade_shares(size_t company,uint32_t quantity,bool sell) {
     const int a=active_manager_;
     if(company>=kHokShares||quantity==0||quantity==UINT32_MAX)return StockResult::Invalid;
     if(national_coach_>=0||mgr_[a].team>=kFirstNationalTeam)return StockResult::Unavailable;
-    // The holdings (state 0x30) are one table so far; whether the original keeps them per manager is open.
-    const size_t holding=0x30+company*8;
+    // Four eight-byte holdings per manager (DS:D214 + 0x20 * manager + 8 * company, ovr033:29E9; cost basis, quantity).
+    const size_t holding=0x30+0x20*size_t(a)+company*8;
     const uint32_t old_quantity=le32(save_.state,holding+4),old_cost=le32(save_.state,holding);
     const uint32_t price=le16(save_.state,0xB0+company*72+70);
     if(!price)return StockResult::Invalid;
@@ -1634,8 +1690,10 @@ StockResult Game::trade_shares(size_t company,uint32_t quantity,bool sell) {
     const auto store=[&](size_t at,uint32_t value){for(int byte=0;byte<4;byte++)save_.state.at(at+size_t(byte))=uint8_t(value>>(8*byte));};
     store(holding,next_cost);store(holding+4,next_quantity);
     store(manager_block(a)+0x18F,uint32_t(mgr_[a].budget.balance));
-    save_.finance.shares[company]=next_quantity;save_.finance.share_cost[company]=int32_t(next_cost)/3;
-    if(a==0)save_.finance.balance=mgr_[0].budget.balance/3;  // HokFile::finance shows manager 0
+    if(a==0){  // HokFile::finance shows manager 0
+        save_.finance.shares[company]=next_quantity;save_.finance.share_cost[company]=int32_t(next_cost)/3;
+        save_.finance.balance=mgr_[0].budget.balance/3;
+    }
     log_.push_back(std::string(sell?"sold ":"bought ")+std::to_string(quantity)+" shares of company "+std::to_string(company));
     return StockResult::Traded;
 }
@@ -1814,7 +1872,7 @@ void Game::train_squad(int m) {
         p.exhaustion = r[0x13];
         p.morale = r[0x0E];
         p.trend = r[0x14];
-        train_week(training_, plan_, p, brng_);
+        train_week(training_, mgr_[size_t(m)].plan, p, brng_);
         morale_week(p, brng_);
         r[0x10] = uint8_t(p.condition);
         r[0x11] = uint8_t(p.technique);
@@ -2707,29 +2765,28 @@ void Game::begin_world_championship() {
     // ovl14_2e0f clears last season's achievement flags with a new WM appointment (below); its 0x40 achievement then survives
     // the following summer. Without an appointment the flags are cleared only when 13.04. is left (REAL-CODE period 57).
     if (std::getenv("EM_OLD_WMBEGIN")) save_.state.at(kManagerBlock + 0xF3) = 0;
-    if (mgr_[0].team < 0 || mgr_[0].team >= 12 || team_rank(mgr_[0].team) >= 5) return;
-    // ovl05_5239 appoints the first human manager in the top five, rather than
-    // every qualifying manager. Other human managers in an imported save retain their claim.
-    bool appointed = false;
-    for (int place = 0; place < 5; place++) {
+    // ovl05_5239 appoints the first human manager in the top five (the club's manager byte +0x16 = manager + 1), rather
+    // than every qualifying manager; a club of another kind of owner first ends the search.
+    int coach = -1;
+    for (int place = 0; place < 5 && coach < 0; place++) {
         int owner = 0;
         for (int team = 0; team < 12; team++)
             if (team_rank(team) == place) owner = save_.teams[size_t(team)].raw[0x16];
-        if (owner && owner != 1) return;
-        if (owner == 1) { appointed = true; break; }
+        if (owner >= 1 && owner <= managers_ && mgr_[size_t(owner - 1)].team >= 0 && mgr_[size_t(owner - 1)].team < 12) coach = owner - 1;
+        else if (owner) return;
     }
-    if (!appointed) return;
+    if (coach < 0) return;
     const int nation = save_.state.at(0x068C);
     if (nation < kFirstNationalTeam || nation >= kFirstNationalTeam + 12) return;
-    national_coach_ = 0;
+    national_coach_ = coach;
     const size_t block = kManagerBlock + 5 * 0x1AF;
-    std::copy_n(save_.state.begin() + long(kManagerBlock), 20, save_.state.begin() + long(block));
+    std::copy_n(save_.state.begin() + long(manager_block(coach)), 20, save_.state.begin() + long(block));
     save_.state.at(block + 0x14) = uint8_t(nation);
     save_.state.at(block + 0xE4) = 0;
     save_.state.at(block + 0xEB) = 0;
     const long budget = int32_t(le32(save_.state, block + 0x18F)) + national_team_grant(save_);
     for (int byte = 0; byte < 4; byte++) save_.state.at(block + 0x18F + size_t(byte)) = uint8_t(uint32_t(budget) >> (byte * 8));
-    save_.state.at(kManagerBlock + 0xF3) = 0x40;  // last season's flags cleared, the appointment mark set
+    save_.state.at(manager_block(coach) + 0xF3) = 0x40;  // last season's flags cleared, the appointment mark set
     const size_t team = size_t(save_.teams[size_t(nation)].raw - save_.state.data());
     save_.state.at(team + 0x16) = 6;
     save_.state.at(team + 0x34) |= 0x80;
@@ -3224,7 +3281,7 @@ void Game::redistribute_players(int mode) {
         if (p < r.first || p >= r.end) continue;
         c = p >= r.marker2 ? 2 : p >= r.marker1 ? 1 : 0;
         if (raw(pl)[0x1A] != 6) continue;
-        if (pl.team >= 0 && pl.team == mgr_[0].team) continue;  // a manager's club keeps its players
+        if (manager_team(pl.team)) continue;  // a manager's club keeps its players (every human manager)
         for (;;) {
             const int team = brng_.range(r.team_lo, r.team_hi);
             // ovr040:0585: the own nation (DS:06AC) gets no new players while no manager holds it (+0x16 = 0): redraw
@@ -3462,84 +3519,105 @@ void Game::swap_teams(int a, int b) {
     }
     if (save_.state.at(0x068C) == a) save_.state.at(0x068C) = uint8_t(b);
     else if (save_.state.at(0x068C) == b) save_.state.at(0x068C) = uint8_t(a);
-    for (int* t : {&mgr_[0].team, &champion_, &euro_champion_, &cup_winner_}) {  // titles stay with the club
+    for (int* t : {&champion_, &euro_champion_, &cup_winner_}) {  // titles stay with the club
         if (*t == a)
             *t = b;
         else if (*t == b)
             *t = a;
     }
-    save_.state.at(kManagerBlock + 0x14) = uint8_t(mgr_[0].team);
+    for (int m = 0; m < managers_; m++) {  // the managers stay with their club (manager block +0x14)
+        int& t = mgr_[size_t(m)].team;
+        if (t == a)
+            t = b;
+        else if (t == b)
+            t = a;
+        save_.state.at(manager_block(m) + 0x14) = uint8_t(t);
+    }
 }
 
 void Game::new_season() {
-    const int previous_division = mgr_[0].team >= 0 ? mgr_[0].team / kHokLeagueSize : 3;
-    CareerSeason history;
+    // Every manager 0..N-1 in index order (ovr038:39C0..3F3E: history, attendance, titles, cup prize; the loops after it
+    // follow the original's order too, docs/MEHRSPIELER_PLAN.md step 8). With one manager this is the former code.
+    const int n = managers_;
+    std::array<int, kMaxManagers> previous_division{};
+    std::array<CareerSeason, kMaxManagers> history{};
+    std::array<uint8_t, kMaxManagers> season_flags{};
+    std::array<bool, kMaxManagers> scorer_award{}, goalkeeper_award{};
+    std::array<SeasonReview, kMaxManagers> page{};  // the manager's own page; the overview below is shared
+    for (int m = 0; m < n; m++) previous_division[size_t(m)] = mgr_[size_t(m)].team >= 0 ? mgr_[size_t(m)].team / kHokLeagueSize : 3;
     // overview page "Saisonende" (ovl12_1657): titles by name before the clubs change places
     SeasonReview review;
-    {
-        const std::array<int, 4> titles{wm_champion_, cup_winner_, champion_, euro_champion_};
-        for (size_t k = 0; k < 4; k++) {
-            const int t = titles[k];
-            if (t >= 0 && t < int(save_.teams.size())) review.winners[k] = save_.teams[size_t(t)].name;
-            review.human_winner[k] = t >= 0 && t == mgr_[0].team;
-        }
+    const std::array<int, 4> title_holders{wm_champion_, cup_winner_, champion_, euro_champion_};
+    for (size_t k = 0; k < 4; k++) {
+        const int t = title_holders[k];
+        if (t >= 0 && t < int(save_.teams.size())) review.winners[k] = save_.teams[size_t(t)].name;
+        review.winner_manager[k] = manager_of_team(t);
     }
     auto team_name = [&](int t) { return t >= 0 && t < int(save_.teams.size()) ? save_.teams[size_t(t)].name : std::string(); };
-    history.league = std::clamp(mgr_[0].budget.league, 0, 2);
-    history.place = mgr_[0].team < 36
-        ? leagues_[size_t(mgr_[0].team / 12)].rows[size_t(mgr_[0].team % 12)].position + 1
-        : save_.table.at(size_t(mgr_[0].team)).position + 1;
-    if (history.league == 0 && history.place < 9) {
-        history.place = 53;
-        int slot = 13;
-        for (; slot > 7; slot--) {
-            if (slot == 11) history.place--;
-            if (save_.state.at(kPlayoffTeams + size_t(slot)) == mgr_[0].team) break;
-        }
-        if (slot == 7) history.place--;
-    }
-    history.champion = champion_ == mgr_[0].team;
-    history.cup_round = save_.state.at(kManagerBlock + 0xE6);
-    history.cup_winner = cup_winner_ == mgr_[0].team;
-    history.euro_phase = save_.state.at(kManagerBlock + 0xE7);
-    history.euro_winner = euro_champion_ == mgr_[0].team && history.euro_phase != 0 && history.euro_phase != 30;
-    append_career_season(save_.state, 0, le16(save_.state, kCareerYear), history);
-    // ovl14 clears the annual attendance totals before the new season's games.
-    mgr_[0].budget.home_games = 0;
-    mgr_[0].budget.attendance_total = mgr_[0].budget.attendance_record = 0;
-    mgr_[0].budget.attendance_min = 99999;
-    save_.state.at(kManagerBlock + 0xED) = 0;
-    for (size_t at = kManagerBlock + 0x183; at < kManagerBlock + 0x18F; at++) save_.state.at(at) = 0;
-    for (int byte = 0; byte < 4; byte++)
-        save_.state.at(kManagerBlock + 0x18B + size_t(byte)) = uint8_t(99999u >> (byte * 8));
     // ovl01_0000(1) runs before the club indices and player statistics change.
     std::vector<SeasonScorer> scorers;
     for (size_t i = 0; i < save_.players.size(); i++) {
         const auto& pl = save_.players[i];
         int goals = pl.league_goals;
-        for (const auto& sp : save_.squad)
-            if (sp.player == int(i)) { goals = sp.league_goals_byte; break; }
+        bool found = false;
+        for (int m = 0; m < n && !found; m++)
+            for (const auto& sp : save_.squad_of(m))
+                if (sp.player == int(i)) { goals = sp.league_goals_byte; found = true; break; }
         const size_t raw = size_t(pl.raw - save_.state.data());
         scorers.push_back({pl.team, pl.position, goals, int(le16(save_.state, raw + 0x1F)), pl.league_games});
     }
-    const auto scoring_winners = season_scoring_winners(scorers, previous_division * 12,
-                                                         previous_division * 12 + 11);
-    const bool scorer_award = scoring_winners[0] == mgr_[0].team;
-    const bool goalkeeper_award = scoring_winners[1] == mgr_[0].team;
-    // Native annual flags are rebuilt before licensing and promotion. The two
-    // title flags exempt a financially weak club from license withdrawal.
-    uint8_t season_flags = uint8_t((save_.state.at(kManagerBlock + 0xF3) & 0x40) |
-                                   (champion_ == mgr_[0].team ? 0x08 : 0) |
-                                   (cup_winner_ == mgr_[0].team ? 0x10 : 0) |
-                                   (history.euro_winner ? 0x20 : 0));
-    save_.state.at(kManagerBlock + 0xF3) = season_flags;
-    if (champion_ == mgr_[0].team) save_.state.at(kManagerBlock + 0x15)++;
-    if (history.euro_winner) save_.state.at(kManagerBlock + 0x17)++;
-    if (cup_winner_ == mgr_[0].team) {
-        // ovl14:3e43: booked before the strict -2,000,000 license threshold.
-        mgr_[0].budget.balance += kCupPrize;
-        save_.state.at(kManagerBlock + 0x16)++;
-        log_.push_back("cup prize money " + std::to_string(kCupPrize / 3) + " DM");
+    for (int m = 0; m < n; m++) {
+        ManagerState& mg = mgr_[size_t(m)];
+        const size_t block = manager_block(m);
+        CareerSeason& h = history[size_t(m)];
+        for (size_t k = 0; k < 4; k++) page[size_t(m)].human_winner[k] = title_holders[k] >= 0 && title_holders[k] == mg.team;
+        h.league = std::clamp(mg.budget.league, 0, 2);
+        h.place = mg.team < 36
+            ? leagues_[size_t(mg.team / 12)].rows[size_t(mg.team % 12)].position + 1
+            : save_.table.at(size_t(mg.team)).position + 1;
+        if (h.league == 0 && h.place < 9) {
+            h.place = 53;
+            int slot = 13;
+            for (; slot > 7; slot--) {
+                if (slot == 11) h.place--;
+                if (save_.state.at(kPlayoffTeams + size_t(slot)) == mg.team) break;
+            }
+            if (slot == 7) h.place--;
+        }
+        h.champion = champion_ == mg.team;
+        h.cup_round = save_.state.at(block + 0xE6);
+        h.cup_winner = cup_winner_ == mg.team;
+        h.euro_phase = save_.state.at(block + 0xE7);
+        h.euro_winner = euro_champion_ == mg.team && h.euro_phase != 0 && h.euro_phase != 30;
+        append_career_season(save_.state, m, le16(save_.state, kCareerYear), h);
+        // ovl14 clears the annual attendance totals before the new season's games.
+        mg.budget.home_games = 0;
+        mg.budget.attendance_total = mg.budget.attendance_record = 0;
+        mg.budget.attendance_min = 99999;
+        save_.state.at(block + 0xED) = 0;
+        for (size_t at = block + 0x183; at < block + 0x18F; at++) save_.state.at(at) = 0;
+        for (int byte = 0; byte < 4; byte++)
+            save_.state.at(block + 0x18B + size_t(byte)) = uint8_t(99999u >> (byte * 8));
+        const auto scoring_winners = season_scoring_winners(scorers, previous_division[size_t(m)] * 12,
+                                                             previous_division[size_t(m)] * 12 + 11);
+        scorer_award[size_t(m)] = scoring_winners[0] == mg.team;
+        goalkeeper_award[size_t(m)] = scoring_winners[1] == mg.team;
+        // Native annual flags are rebuilt before licensing and promotion. The two
+        // title flags exempt a financially weak club from license withdrawal.
+        uint8_t& flags = season_flags[size_t(m)];
+        flags = uint8_t((save_.state.at(block + 0xF3) & 0x40) |
+                        (champion_ == mg.team ? 0x08 : 0) |
+                        (cup_winner_ == mg.team ? 0x10 : 0) |
+                        (h.euro_winner ? 0x20 : 0));
+        save_.state.at(block + 0xF3) = flags;
+        if (champion_ == mg.team) save_.state.at(block + 0x15)++;
+        if (h.euro_winner) save_.state.at(block + 0x17)++;
+        if (cup_winner_ == mg.team) {
+            // ovl14:3e43: booked before the strict -2,000,000 license threshold.
+            mg.budget.balance += kCupPrize;
+            save_.state.at(block + 0x16)++;
+            log_.push_back("cup prize money " + std::to_string(kCupPrize / 3) + " DM");
+        }
     }
     // Return temporarily called players before any club/nation index is shuffled.
     release_national_squad(save_);
@@ -3556,14 +3634,16 @@ void Game::new_season() {
     // points won, goals scored, goals conceded, points lost, games, wins, losses and draws; his club's
     // league season is added at the season change (NEUSAIS: 37/16, 86/61, 40/95, 7/28, 22/22, 17/6,
     // 2/12, 3/4 = the 1993/94 season of Köln)
-    if (mgr_[0].team >= 0 && mgr_[0].team < 3 * kHokLeagueSize) {
-        const HokTableRow& r = leagues_[size_t(mgr_[0].team / kHokLeagueSize)].rows[size_t(mgr_[0].team % kHokLeagueSize)];
+    for (int m = 0; m < n; m++) {
+        const int team = mgr_[size_t(m)].team;
+        if (team < 0 || team >= 3 * kHokLeagueSize) continue;
+        const HokTableRow& r = leagues_[size_t(team / kHokLeagueSize)].rows[size_t(team % kHokLeagueSize)];
         for (int side = 0; side < 2; side++) {
             const int d = r.draws(side);
             const int add[8] = {2 * r.wins[side] + d, r.goals_for[side], r.goals_against[side], 2 * r.losses[side] + d,
                                 r.games[side], r.wins[side], r.losses[side], d};
             for (int k = 0; k < 8; k++) {
-                uint8_t* p = save_.state.data() + kManagerBalance + size_t(k) * 4 + size_t(side) * 2;
+                uint8_t* p = save_.state.data() + kManagerBalance + (manager_block(m) - kManagerBlock) + size_t(k) * 4 + size_t(side) * 2;
                 const int v = (p[0] | p[1] << 8) + add[k];
                 p[0] = uint8_t(v);
                 p[1] = uint8_t(v >> 8);
@@ -3585,19 +3665,26 @@ void Game::new_season() {
         swap_teams(a, b);
         std::swap(origin[size_t(a)], origin[size_t(b)]);
     };
-    if (financial_license_due(mgr_[0].budget.balance, previous_division, season_flags, 0)) {
-        const size_t group = size_t(previous_division);
-        auto work = relegation_[group].teams;
+    // ovr038:4076..425B: the license check of every manager 0..N-1; a second case in the same division sees the first
+    std::array<int, 2> withdrawals{};
+    std::array<std::array<int, 4>, 2> license_work{relegation_[0].teams, relegation_[1].teams};
+    for (int m = 0; m < n; m++) {
+        const int division = previous_division[size_t(m)];
+        if (!financial_license_due(mgr_[size_t(m)].budget.balance, division, season_flags[size_t(m)],
+                                   division >= 0 && division < 2 ? withdrawals[size_t(division)] : 0)) continue;
+        const size_t group = size_t(division);
+        auto& work = license_work[group];
         const auto order = relegation_[group].order();
-        insert_financial_relegation(work, order, previous_division, mgr_[0].team, 0);
+        insert_financial_relegation(work, order, division, mgr_[size_t(m)].team, withdrawals[group]);
+        withdrawals[group]++;
         for (size_t slot = 0; slot < work.size(); slot++) {
             // DS:CF20 is the first working schedule row, not DS:CFFC's
             // immutable list of the original relegation participants.
             save_.state.at(kGroupSchedule + 0x48 + group * 0x24 + slot) = uint8_t(work[slot]);
             relegation_upper_[group][slot] = work[size_t(order[slot])];
         }
-        season_flags |= 0x04;
-        log_.push_back("financial license withdrawn: " + save_.teams[size_t(mgr_[0].team)].name);
+        season_flags[size_t(m)] |= 0x04;
+        log_.push_back("financial license withdrawn: " + save_.teams[size_t(mgr_[size_t(m)].team)].name);
     }
     // promotion and relegation: the first two of each relegation group play in the upper division
     for (int g = 0; g < 2; g++) {
@@ -3632,28 +3719,34 @@ void Game::new_season() {
             while (up == previous);
             previous = up;
             review.promoted_into[2].push_back(team_name(up));
-            if (mgr_[0].team == down && (season_flags & 0x04) == 0) {
+            // ovl14:440d reads the club's manager byte (+0x16): any human manager's club
+            const int down_manager = manager_of_team(down);
+            if (down_manager >= 0 && (season_flags[size_t(down_manager)] & 0x04) == 0) {
                 // ovl14:440d..4467: a human Oberliga loser receives a
                 // replacement balance and an extra full club swap. The
                 // common swap below cancels it; both season flags remain.
-                season_flags |= 0x02;
-                mgr_[0].budget.balance = 1200000;
+                season_flags[size_t(down_manager)] |= 0x02;
+                mgr_[size_t(down_manager)].budget.balance = 1200000;
                 swap_clubs(down, up);
                 log_.push_back("Oberliga relegation review: account reset to 400000 DM");
             } else {
                 log_.push_back("promoted from the regional league: " + save_.teams[size_t(up)].name +
                                ", relegated: " + save_.teams[size_t(down)].name);
             }
-            if (mgr_[0].team == up && (season_flags & 0x04) == 0) season_flags |= 0x01;
+            const int up_manager = manager_of_team(up);
+            if (up_manager >= 0 && (season_flags[size_t(up_manager)] & 0x04) == 0) season_flags[size_t(up_manager)] |= 0x01;
             swap_clubs(down, up);
         }
     }
-    if ((season_flags & 0x04) == 0) {
-        const int division = mgr_[0].team / kHokLeagueSize;
-        if (division < previous_division) season_flags |= 0x01;
-        if (division > previous_division) season_flags |= 0x02;
+    for (int m = 0; m < n; m++) {  // ovr038:4522..458A
+        uint8_t& flags = season_flags[size_t(m)];
+        if ((flags & 0x04) == 0) {
+            const int division = mgr_[size_t(m)].team / kHokLeagueSize;
+            if (division < previous_division[size_t(m)]) flags |= 0x01;
+            if (division > previous_division[size_t(m)]) flags |= 0x02;
+        }
+        save_.state.at(manager_block(m) + 0xF3) = flags;
     }
-    save_.state.at(kManagerBlock + 0xF3) = season_flags;
     // ovl14_47ea, the eternal table (u32 per table row, travels with the club): after promotion and
     // relegation every club 0-41 gets 12 - final position (0 = first) + 20 in the first division
     // + 20 in the first or second division of its NEW class (nothing above team 35, DS:07CB),
@@ -3731,217 +3824,265 @@ void Game::new_season() {
     std::fill(st + kStateEntrants, st + kStateEntrants + 10, uint8_t(0));
     std::fill(st + kStateEntrantSlots, st + kStateEntrantSlots + 18, uint8_t(0x80));
     for (size_t i = 0; i < german.size(); i++) st[kStateEntrants + i] = st[kStateEntrantSlots + i] = uint8_t(german[i]);
-    // prizes of the season review (ovl02_0000)
-    const int league = team_class(finance_, mgr_[0].team);
+    // prizes of the season review (ovl02_0000), every manager 0..N-1
     // ovl04_0000(0) checks the fewest total league penalty minutes after club
     // swaps. The first club index wins an exact tie; tables have not reset yet.
-    int fair_play_winner = league * 12;
     auto penalty_minutes = [&](int team) {
         const int old = origin.at(size_t(team));
         return old < 36 ? leagues_[size_t(old / 12)].rows[size_t(old % 12)].penalty_minutes
                         : save_.table.at(size_t(old)).penalty_minutes;
     };
-    for (int team = league * 12 + 1; team < (league + 1) * 12; team++)
-        if (penalty_minutes(team) < penalty_minutes(fair_play_winner)) fair_play_winner = team;
-    const bool promoted = (season_flags & 3) == 1;
-    const long prize = season_prizes(promoted, league, scorer_award, goalkeeper_award,
-                                     fair_play_winner == mgr_[0].team);
-    // The manager's page of the season review (ovl02_0000): history line, symbols and prizes; the header shows the
-    // balance before the review prizes (ovl01_0f6a runs first).
-    review.date = date_of_season_day(int(calendar_.events.size()), save_.year);  // the closing day, 30.04.
-    review.balance = mgr_[0].budget.balance;
-    const size_t review_row = kManagerBlock + 0x18 + 4 * size_t(std::min<int>(le16(save_.state, kCareerYear), 49));
-    review.place = save_.state.at(review_row);
-    review.league = save_.state.at(review_row + 1);
-    for (int bit = 0; bit < 7; bit++)
-        if (season_flags & (1 << bit)) review.icons.push_back(kSeasonFlagIcons[bit]);
-    if (scorer_award) review.icons.push_back(kIconScorer);
-    if (goalkeeper_award) review.icons.push_back(kIconGoalkeeper);
-    if (fair_play_winner == mgr_[0].team) review.icons.push_back(kIconFairPlay);
-    if (std::find(german.begin(), german.end(), mgr_[0].team) != german.end()) review.icons.push_back(kIconEuroEntrant);
-    review.prizes = (cup_winner_ == mgr_[0].team ? kCupPrize : 0) + prize;
-    if (promoted)
-        for (auto& advert : mgr_[0].budget.adverts) advert.flags |= 0x80;
-    if (prize) {
-        mgr_[0].budget.balance += prize;
-        log_.push_back("prize money " + std::to_string(prize / 3) + " DM");
-    }
-    // 5396:076B precedes the review: intake uses the mixed junior quality.
-    youth_new_season(save_.state,0);
-    if(save_.state.at(0x025a)!=1){
-        const ContractRandomDraw draw=[&](int low,int high){return brng_.range(low,high);};
-        const int attempts=youth_review_attempts(date_of_season_day(day_+1,save_.year).year,draw);
-        for(int attempt=0;attempt<attempts;++attempt){
-            const auto intake=youth_intake(save_,contracts_,0,save_.state.at(0x06ba),draw);
-            if(!intake)continue;
-            review.icons.push_back(kIconYouth);
-            HokPlayer* player=player_by_exe_index(intake->player);
-            if(!player)throw FormatError("Season: youth player ID missing");
-            player->age=player->raw[0x14];player->skill_a=player->raw[0x15];
-            player->skill_b=player->raw[0x16];player->form=player->raw[0x17];
-            player->team=player->raw[0x1d];
-            if(intake->shifted)
-                for(size_t slot=mgr_[0].injured_role.size()-1;slot>size_t(intake->slot);--slot)
-                    mgr_[0].injured_role[slot]=mgr_[0].injured_role[slot-1];
-            mgr_[0].injured_role[size_t(intake->slot)]=0;
-            save_.squad=hok_squad(save_,0);
-            log_.push_back(player->name+" joins from the youth team");
-        }
-        refresh_budget_roster();
-    }
-    if (mgr_[0].team >= 0) season_review_ = std::move(review);
-    // 4184 first pass: byte birthdays and contract decrement precede the
-    // second-pass retirement gates. Zero-year contracts wrap to255.
-    for(int id=1;id<=kHokPlayers;++id){
-        HokPlayer* player=player_by_exe_index(id);
-        if(!player)continue;
-        const size_t global=size_t(player->raw-save_.state.data());
-        player->age=save_.state.at(global+0x14)=uint8_t(player->age+1);
-        native_clear_player_notification(save_,uint8_t(id));
-        if(const auto location=native_find_roster_player(save_,uint8_t(id))){
-            const size_t row=kSquad+size_t(location->manager)*0x618+size_t(location->slot)*kSquadRecord;
-            save_.state.at(row+9)&=0x3f;
-            save_.state.at(row+0x0b)=uint8_t(save_.state.at(row+0x0b)-1);
+    for (int m = 0; m < n; m++) {
+        ManagerState& mg = mgr_[size_t(m)];
+        SeasonReview& own = page[size_t(m)];
+        const uint8_t flags = season_flags[size_t(m)];
+        const int league = team_class(finance_, mg.team);
+        int fair_play_winner = league * 12;
+        for (int team = league * 12 + 1; team < (league + 1) * 12; team++)
+            if (penalty_minutes(team) < penalty_minutes(fair_play_winner)) fair_play_winner = team;
+        const bool promoted = (flags & 3) == 1;
+        const long prize = season_prizes(promoted, league, scorer_award[size_t(m)], goalkeeper_award[size_t(m)],
+                                         fair_play_winner == mg.team);
+        // The manager's page of the season review (ovl02_0000): history line, symbols and prizes; the header shows the
+        // balance before the review prizes (ovl01_0f6a runs first).
+        own.date = date_of_season_day(int(calendar_.events.size()), save_.year);  // the closing day, 30.04.
+        own.balance = mg.budget.balance;
+        const size_t review_row = manager_block(m) + 0x18 + 4 * size_t(std::min<int>(le16(save_.state, kCareerYear), 49));
+        own.place = save_.state.at(review_row);
+        own.league = save_.state.at(review_row + 1);
+        for (int bit = 0; bit < 7; bit++)
+            if (flags & (1 << bit)) own.icons.push_back(kSeasonFlagIcons[bit]);
+        if (scorer_award[size_t(m)]) own.icons.push_back(kIconScorer);
+        if (goalkeeper_award[size_t(m)]) own.icons.push_back(kIconGoalkeeper);
+        if (fair_play_winner == mg.team) own.icons.push_back(kIconFairPlay);
+        if (std::find(german.begin(), german.end(), mg.team) != german.end()) own.icons.push_back(kIconEuroEntrant);
+        own.prizes = (cup_winner_ == mg.team ? kCupPrize : 0) + prize;
+        if (promoted)
+            for (auto& advert : mg.budget.adverts) advert.flags |= 0x80;
+        if (prize) {
+            mg.budget.balance += prize;
+            log_.push_back("prize money " + std::to_string(prize / 3) + " DM");
         }
     }
-    save_.squad=hok_squad(save_,0);
-    // ovl02_0000 visits global player IDs in order and returns human-owned
-    // records from the pool before retirement/expiry review. They retain the
-    // full contract/insurance record and must not enter the CPU aging branch.
-    // The ordinary listing block and a temporary loan marker do not survive
-    // this annual return. Their already shortened contract is copied intact.
-    for (int id = 1; id <= kHokPlayers; id++) {
-        const HokPlayer* owned = player_by_exe_index(id);
-        if (!owned || owned->raw[0x1A] != 0) continue;
-        for (int slot = 0; slot < kTransferListSlots; slot++) {
-            const size_t record = kSquad + 4 * 0x618 + size_t(slot) * kSquadRecord;
-            if (save_.state.at(record + 15) != id) continue;
-            save_.state.at(record + 9) &= 0x3F;
-            save_.state.at(record + 0x18) &= 0x7F;
-            save_.state.at(record + 0x0C) = 0;
-            if (move_owned_player(size_t(slot), false, true) != TransferMoveResult::Moved)
-                throw FormatError("Season: unable to return own pool player");
-            break;
-        }
-    }
-    // 4184 second pass is global-ID ordered, with a fresh storage lookup after
-    // each removal. Every healthy own row consumes the age-threshold draw.
+    // ovl02_0000 (ovr026:0090..0ADA) runs once and loops over the managers 0..N-1 itself: the manager's page with the
+    // youth intake, then two passes over the global player IDs. The first pass (birthdays, contract years, the return of
+    // own pool players) is global and runs in manager 0's iteration only (ovr026:056E); the second pass handles the
+    // rows of the current manager and the players without a row (ovr026:07EC), and clears the season statistics in the
+    // last manager's iteration (ovr026:077E).
     int retired = 0;
     const ContractRandomDraw annual_draw=[&](int low,int high){return brng_.range(low,high);};
-    for (size_t p = 0; p < save_.players.size(); p++) {
-        HokPlayer& pl = save_.players[p];
-        const int id=int((pl.raw-save_.state.data()-kPlayers)/kPlayerRecord)+1;
-        pl.league_goals = pl.league_games = 0;
-        uint8_t* raw=save_.state.data()+(pl.raw-save_.state.data());
-        raw[0x1b]=raw[0x1c]=raw[0x1f]=raw[0x20]=0;
-        std::string native_name;for(size_t k=0;k<19&&raw[k];k++)native_name+=char(raw[k]);
-        const int age_before=raw[0x14];
-        const auto review=annual_owned_player(save_,uint8_t(id),0,annual_draw);
-        if(review.status==AnnualPlayerStatus::Retired||review.status==AnnualPlayerStatus::Disabled){
-            // ovr026:07F7..09F3: shown at once in the message field and deleted again (src/game/messages.cpp)
-            // the review is dated with the next day (REAL-CODE Köln period 37: "27. April 1994" on season day 216 + summer)
-            const GameDate d=date_of_season_day(std::getenv("EM_OLD_FLASHMSG")?day_:day_+1,save_.year);
-            const MessageDate md{d.day,d.month,d.year,day_+1};
-            if(review.status==AnnualPlayerStatus::Retired)
-                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::Retirement,{MessageArg::str(native_name),MessageArg::num(age_before)}));
-            else if(review.insurance_payment==0)
-                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::Invalid,{MessageArg::str(native_name)}));
-            else
-                immediate_messages_.push_back(native_message_text(review.notice_back,md,MessageKind::TwoLines,{MessageArg::str(native_name+" ist invalide."),
-                    MessageArg::str("Ein Fall f]r die Versicherung: Sie zahlt Ihnen "+std::to_string(review.insurance_payment/3)+" DM")}));
-            // the text stays in the first free message entry (REAL-CODE Köln period 37: LUPZIG ist Sportinvalide)
-            if(!std::getenv("EM_OLD_FLASHMSG"))native_flash_message(save_.state,"%%%"+immediate_messages_.back());  // "%%%": the message field's marker
-            mgr_[0].budget.balance+=review.insurance_payment;
-            if(review.insurance_payment)
-                log_.push_back(pl.name+" disability insurance payment "+std::to_string(review.insurance_payment/3)+" DM");
-            log_.push_back(pl.name+(review.status==AnnualPlayerStatus::Disabled?" leaves after permanent injury":" retires from ice hockey"));
-            std::move(mgr_[0].injured_role.begin()+review.slot+1,mgr_[0].injured_role.end(),mgr_[0].injured_role.begin()+review.slot);
-            mgr_[0].injured_role.back()=0;
-            ++retired;
-        }else if(review.status==AnnualPlayerStatus::Missing&&pl.team>=0&&player_retires(pl.age,brng_)){
-            // The no-row CPU/BIOS edge is still an approximation; keep its
-            // existing age-based replacement separate from proven own rows.
-            const NewPlayer n = new_player(brng_);
-            raw[0x14]=uint8_t(n.age);raw[0x15]=uint8_t(n.skill1);raw[0x16]=uint8_t(n.skill2);
-            raw[0x19]=0;
-            retired++;
+    for (int m = 0; m < n; m++) {
+        ManagerState& mg = mgr_[size_t(m)];
+        // 5396:076B precedes the review: intake uses the mixed junior quality.
+        youth_new_season(save_.state,m);
+        if(save_.state.at(0x025a)!=1){
+            const ContractRandomDraw draw=[&](int low,int high){return brng_.range(low,high);};
+            const int attempts=youth_review_attempts(date_of_season_day(day_+1,save_.year).year,draw);
+            for(int attempt=0;attempt<attempts;++attempt){
+                const auto intake=youth_intake(save_,contracts_,m,save_.state.at(0x06ba+0x15*size_t(m)),draw);
+                if(!intake)continue;
+                page[size_t(m)].icons.push_back(kIconYouth);
+                HokPlayer* player=player_by_exe_index(intake->player);
+                if(!player)throw FormatError("Season: youth player ID missing");
+                player->age=player->raw[0x14];player->skill_a=player->raw[0x15];
+                player->skill_b=player->raw[0x16];player->form=player->raw[0x17];
+                player->team=player->raw[0x1d];
+                if(intake->shifted)
+                    for(size_t slot=mg.injured_role.size()-1;slot>size_t(intake->slot);--slot)
+                        mg.injured_role[slot]=mg.injured_role[slot-1];
+                mg.injured_role[size_t(intake->slot)]=0;
+                save_.squad_of(m)=hok_squad(save_,m);
+                log_.push_back(player->name+" joins from the youth team");
+            }
+            refresh_budget_roster(m);
         }
-        pl.age=raw[0x14];pl.skill_a=raw[0x15];pl.skill_b=raw[0x16];
+        if (mg.team >= 0) {
+            SeasonReview own = std::move(page[size_t(m)]);
+            own.winners = review.winners;
+            own.winner_manager = review.winner_manager;
+            own.relegated_into = review.relegated_into;
+            own.promoted_into = review.promoted_into;
+            season_reviews_[size_t(m)] = std::move(own);
+        }
+        if (m == 0) {
+            // 4184 first pass: byte birthdays and contract decrement precede the
+            // second-pass retirement gates. Zero-year contracts wrap to255.
+            for(int id=1;id<=kHokPlayers;++id){
+                HokPlayer* player=player_by_exe_index(id);
+                if(!player)continue;
+                const size_t global=size_t(player->raw-save_.state.data());
+                player->age=save_.state.at(global+0x14)=uint8_t(player->age+1);
+                native_clear_player_notification(save_,uint8_t(id));
+                if(const auto location=native_find_roster_player(save_,uint8_t(id))){
+                    const size_t row=kSquad+size_t(location->manager)*0x618+size_t(location->slot)*kSquadRecord;
+                    save_.state.at(row+9)&=0x3f;
+                    save_.state.at(row+0x0b)=uint8_t(save_.state.at(row+0x0b)-1);
+                }
+            }
+            reload_squads();
+            // ovl02_0000 visits global player IDs in order and returns human-owned
+            // records from the pool before retirement/expiry review. They retain the
+            // full contract/insurance record and must not enter the CPU aging branch.
+            // The ordinary listing block and a temporary loan marker do not survive
+            // this annual return. Their already shortened contract is copied intact.
+            // The owner (+0x1A) is any human manager (ovr026:0633..06CB, owner < 4).
+            for (int id = 1; id <= kHokPlayers; id++) {
+                const HokPlayer* owned = player_by_exe_index(id);
+                if (!owned || owned->raw[0x1A] >= n) continue;
+                const int owner = owned->raw[0x1A];
+                for (int slot = 0; slot < kTransferListSlots; slot++) {
+                    const size_t record = kSquad + 4 * 0x618 + size_t(slot) * kSquadRecord;
+                    if (save_.state.at(record + 15) != id) continue;
+                    save_.state.at(record + 9) &= 0x3F;
+                    save_.state.at(record + 0x18) &= 0x7F;
+                    save_.state.at(record + 0x0C) = 0;
+                    const int active = active_manager_;
+                    active_manager_ = owner;
+                    const TransferMoveResult moved = move_owned_player(size_t(slot), false, true);
+                    active_manager_ = active;
+                    if (moved != TransferMoveResult::Moved) throw FormatError("Season: unable to return own pool player");
+                    break;
+                }
+            }
+        }
+        // 4184 second pass is global-ID ordered, with a fresh storage lookup after
+        // each removal. Every healthy own row consumes the age-threshold draw.
+        const bool last = m + 1 == n;
+        for (size_t p = 0; p < save_.players.size(); p++) {
+            HokPlayer& pl = save_.players[p];
+            const int id=int((pl.raw-save_.state.data()-kPlayers)/kPlayerRecord)+1;
+            uint8_t* raw=save_.state.data()+(pl.raw-save_.state.data());
+            if (last) {
+                pl.league_goals = pl.league_games = 0;
+                raw[0x1b]=raw[0x1c]=raw[0x1f]=raw[0x20]=0;
+            }
+            std::string native_name;for(size_t k=0;k<19&&raw[k];k++)native_name+=char(raw[k]);
+            const int age_before=raw[0x14];
+            const auto review_row=annual_owned_player(save_,uint8_t(id),m,annual_draw);
+            if(review_row.status==AnnualPlayerStatus::Retired||review_row.status==AnnualPlayerStatus::Disabled){
+                // ovr026:07F7..09F3: shown at once in the message field and deleted again (src/game/messages.cpp)
+                // the review is dated with the next day (REAL-CODE Köln period 37: "27. April 1994" on season day 216 + summer)
+                const GameDate d=date_of_season_day(std::getenv("EM_OLD_FLASHMSG")?day_:day_+1,save_.year);
+                const MessageDate md{d.day,d.month,d.year,day_+1};
+                auto& shown = immediate_messages_[size_t(m)];
+                if(review_row.status==AnnualPlayerStatus::Retired)
+                    shown.push_back(native_message_text(review_row.notice_back,md,MessageKind::Retirement,{MessageArg::str(native_name),MessageArg::num(age_before)}));
+                else if(review_row.insurance_payment==0)
+                    shown.push_back(native_message_text(review_row.notice_back,md,MessageKind::Invalid,{MessageArg::str(native_name)}));
+                else
+                    shown.push_back(native_message_text(review_row.notice_back,md,MessageKind::TwoLines,{MessageArg::str(native_name+" ist invalide."),
+                        MessageArg::str("Ein Fall f]r die Versicherung: Sie zahlt Ihnen "+std::to_string(review_row.insurance_payment/3)+" DM")}));
+                // the text stays in the first free message entry (REAL-CODE Köln period 37: LUPZIG ist Sportinvalide)
+                if(!std::getenv("EM_OLD_FLASHMSG"))native_flash_message(save_.state,"%%%"+shown.back());  // "%%%": the message field's marker
+                mg.budget.balance+=review_row.insurance_payment;
+                if(review_row.insurance_payment)
+                    log_.push_back(pl.name+" disability insurance payment "+std::to_string(review_row.insurance_payment/3)+" DM");
+                log_.push_back(pl.name+(review_row.status==AnnualPlayerStatus::Disabled?" leaves after permanent injury":" retires from ice hockey"));
+                std::move(mg.injured_role.begin()+review_row.slot+1,mg.injured_role.end(),mg.injured_role.begin()+review_row.slot);
+                mg.injured_role.back()=0;
+                ++retired;
+            }else if(review_row.status==AnnualPlayerStatus::Missing&&pl.team>=0&&player_retires(pl.age,brng_)){
+                // The no-row CPU/BIOS edge is still an approximation; keep its
+                // existing age-based replacement separate from proven own rows.
+                // (ovr026:07EC: it runs in every manager's iteration.)
+                const NewPlayer np = new_player(brng_);
+                raw[0x14]=uint8_t(np.age);raw[0x15]=uint8_t(np.skill1);raw[0x16]=uint8_t(np.skill2);
+                raw[0x19]=0;
+                retired++;
+            }
+            pl.age=raw[0x14];pl.skill_a=raw[0x15];pl.skill_b=raw[0x16];
+        }
     }
-    save_.squad=hok_squad(save_,0);
-    for (size_t i = 0; i < save_.squad.size(); i++) {
-        HokSquadPlayer& sp = save_.squad[i];
-        uint8_t* r = save_.state.data() + kSquad + i * kSquadRecord;
-        r[0x09] &= 0x3F;  // offer flags
-        // the season bytes start again; the u16 totals of games (+0x1C/+0x1E) and goals (+0x22/+0x24/+0x26) stay
-        // (REAL-CODE period 30)
-        sp.league_games = sp.cup_games = 0;
-        r[0x06] = r[0x07] = 0;  // so that the export leaves the u16 copies alone
-        sp.goals_against = sp.league_goals_byte = sp.cup_goals_byte = sp.other_goals_byte = 0;
-        sp.major_penalties = sp.minor_penalties = 0;
-        r[0x00] = r[0x01] = 0;
-        // ovl02_0000 clears +0x00, +0x01 and +0x03..+0x08 in the raw records before the contract dialogs, whose salary
-        // formula reads the goals and penalties (REAL-CODE period 58)
-        if (!std::getenv("EM_OLD_CONTRACTS")) r[0x03] = r[0x04] = r[0x05] = r[0x08] = 0;
+    reload_squads();
+    for (int m = 0; m < n; m++) {  // ovr026:0ADD..0B84
+        auto& squad = save_.squad_of(m);
+        for (size_t i = 0; i < squad.size(); i++) {
+            HokSquadPlayer& sp = squad[i];
+            uint8_t* r = save_.state.data() + squad_block(m) + i * kSquadRecord;
+            r[0x09] &= 0x3F;  // offer flags
+            // the season bytes start again; the u16 totals of games (+0x1C/+0x1E) and goals (+0x22/+0x24/+0x26) stay
+            // (REAL-CODE period 30)
+            sp.league_games = sp.cup_games = 0;
+            r[0x06] = r[0x07] = 0;  // so that the export leaves the u16 copies alone
+            sp.goals_against = sp.league_goals_byte = sp.cup_goals_byte = sp.other_goals_byte = 0;
+            sp.major_penalties = sp.minor_penalties = 0;
+            r[0x00] = r[0x01] = 0;
+            // ovl02_0000 clears +0x00, +0x01 and +0x03..+0x08 in the raw records before the contract dialogs, whose salary
+            // formula reads the goals and penalties (REAL-CODE period 58)
+            if (!std::getenv("EM_OLD_CONTRACTS")) r[0x03] = r[0x04] = r[0x05] = r[0x08] = 0;
+        }
     }
     log_.push_back(std::to_string(retired) + " players retired");
-    mgr_[0].transfer_offers.clear();  // the offer flags are cleared above (ovl02_0000)
-    // power play counters (manager block +0x177) start from 0 again (NEUSAIS); the series records stay
-    std::fill(save_.state.begin() + long(kSpecialTeams), save_.state.begin() + long(kSpecialTeams + 12), uint8_t(0));
+    for (int m = 0; m < n; m++) {
+        mgr_[size_t(m)].transfer_offers.clear();  // the offer flags are cleared above (ovl02_0000)
+        // power play counters (manager block +0x177) start from 0 again (NEUSAIS); the series records stay
+        const size_t special = kSpecialTeams + (manager_block(m) - kManagerBlock);
+        std::fill(save_.state.begin() + long(special), save_.state.begin() + long(special + 12), uint8_t(0));
+    }
     // the season change sorts the messages once before the contract talks (REAL-CODE period 92: the injury of 13.04. stands
     // first, the two contract wishes behind it are deleted by the talks; the exact call site in ovr026 is not located)
     if (!std::getenv("EM_OLD_WMEXIT")) native_sort_messages(save_.state);
     debug_pclub(save_.state, "before-expire");
-    expire_contracts();
+    contract_outcomes_.clear();
+    for (int m = 0; m < n; m++) expire_contracts(m);  // ovr026:0C47..: the talks of every manager in index order
     redistribute_players(0);
     redistribute_players(1);
     debug_pclub(save_.state, "redistribute");
-    mgr_[0].budget.league = team_class(finance_, mgr_[0].team);
-    mgr_[0].budget.team = mgr_[0].team;
-    refresh_budget_roster();
-    // ovr032:16B7 reads skill1 + skill2 of the club record at each booking. Open (REAL-CODE period 30): on 31.08. the
-    // original's record gives 256, the rerated record here 253 (6 bytes of finances, docs/DAYDIFF.md Stand 51).
-    const auto& summer_team = save_.teams.at(size_t(mgr_[0].team));
-    mgr_[0].budget.team_strength = summer_team.skill1[0] + summer_team.skill1[1] + summer_team.skill2[0] + summer_team.skill2[1];
+    for (int m = 0; m < n; m++) {
+        ManagerState& mg = mgr_[size_t(m)];
+        mg.budget.league = team_class(finance_, mg.team);
+        mg.budget.team = mg.team;
+        refresh_budget_roster(m);
+        // ovr032:16B7 reads skill1 + skill2 of the club record at each booking. Open (REAL-CODE period 30): on 31.08. the
+        // original's record gives 256, the rerated record here 253 (6 bytes of finances, docs/DAYDIFF.md Stand 51).
+        const auto& summer_team = save_.teams.at(size_t(mg.team));
+        mg.budget.team_strength = summer_team.skill1[0] + summer_team.skill1[1] + summer_team.skill2[0] + summer_team.skill2[1];
+    }
     // ovl14:462c..470b: May 1 (234) through September 9 (365).
     // There are no matches, transfer offers or normal training in this loop.
+    // Each summer day loops over the managers 0..N-1 (ovr038:4651..46D4): the stadium week (sub_24B25, day % 7 == 0), the
+    // daily finance sub_24B4D (refusal reset, share market, sponsors and the talent price coin, booking) and the healing of
+    // the manager's squad; unlike the playable day there is no image (sub_24B57).
     for (int summer_day = 234; summer_day <= 365; summer_day++) {
         const GameDate summer_date = date_of_season_day(summer_day, save_.year);
-        if (summer_day % 7 == 0) stadium_week(finance_, mgr_[0].budget, save_.state, 0, brng_, [&](const std::string& a, const std::string& b) {
-            native_add_message(save_.state, brng_, {summer_date.day, summer_date.month, summer_date.year, summer_day}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, 0, true);
-        });
         const int month_days = kMonthDays[size_t(summer_date.month - 1)];
-        stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
-        // the share market runs on every summer day as well, directly after the refusal reset (REAL-CODE period 30)
-        market_day(save_.state, brng_);
-        for (int c = 0; c < kHokShares; c++) {
-            save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
-            for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
-        }
-        if (summer_date.day == month_days / 2 || summer_date.day == month_days) {
-            // ovl08_1d61 calls 2ba7 with the stored image. Unlike the
-            // playable daily preparation, summer does not recompute it.
-            update_sponsors();
-            // the talent scout price coin of ovr032:1F0B follows in the summer too (REAL-CODE period 30)
-            if (brng_.range(0, 1) != 0) {
-                const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
-                for (int n = 0; n < 4; n++) save_.state.at(0x18 + size_t(n)) = uint8_t(price >> (8 * n));
+        for (int m = 0; m < n; m++) {
+            ManagerState& mg = mgr_[size_t(m)];
+            if (summer_day % 7 == 0) stadium_week(finance_, mg.budget, save_.state, m, brng_, [&](const std::string& a, const std::string& b) {
+                native_add_message(save_.state, brng_, {summer_date.day, summer_date.month, summer_date.year, summer_day}, MessageKind::TwoLines, {MessageArg::str(a), MessageArg::str(b)}, m, true);
+            });
+            stadium_daily_refusal_reset(stadium_refusals_,m,brng_);
+            // the share market runs on every summer day as well, directly after the refusal reset (REAL-CODE period 30)
+            market_day(save_.state, brng_);
+            for (int c = 0; c < kHokShares; c++) {
+                save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+                for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
             }
-        }
-        if (summer_date.day == month_days) clear_insurance_locks();
-        if (std::getenv("EM_DEBUG_SUMMER") && summer_date.day == month_days) {
-            long ads = 0;
-            for (const AdvertContract& a : mgr_[0].budget.adverts) ads += a.amount;
-            std::fprintf(stderr, "summer %02d.%02d.: strength %d players %d adverts %ld balance %ld accrued %ld human %d\n", summer_date.day, summer_date.month,
-                         int(mgr_[0].budget.team_strength), int(mgr_[0].budget.players), ads, mgr_[0].budget.balance, mgr_[0].budget.accrued, mgr_[0].team);
-            for (int t = 0; t < 36; t++) {
-                const HokTeam& x = save_.teams[size_t(t)];
-                const int sum = x.skill1[0] + x.skill1[1] + x.skill2[0] + x.skill2[1];
-                if (sum >= 250 && sum <= 262) std::fprintf(stderr, "  team %d (%s) sum %d\n", t, x.name.c_str(), sum);
+            if (summer_date.day == month_days / 2 || summer_date.day == month_days) {
+                // ovl08_1d61 calls 2ba7 with the stored image. Unlike the
+                // playable daily preparation, summer does not recompute it.
+                update_sponsors(m);
+                // the talent scout price coin of ovr032:1F0B follows in the summer too (REAL-CODE period 30), DS:020D + 4 * m
+                if (brng_.range(0, 1) != 0) {
+                    const uint32_t price = uint32_t(60000 + 10000 * brng_.range(0, 10)) * 3;
+                    for (int b = 0; b < 4; b++) save_.state.at(0x18 + 4 * size_t(m) + size_t(b)) = uint8_t(price >> (8 * b));
+                }
             }
+            if (summer_date.day == month_days) clear_insurance_locks(m);
+            if (std::getenv("EM_DEBUG_SUMMER") && summer_date.day == month_days) {
+                long ads = 0;
+                for (const AdvertContract& a : mg.budget.adverts) ads += a.amount;
+                std::fprintf(stderr, "summer %02d.%02d.: strength %d players %d adverts %ld balance %ld accrued %ld human %d\n", summer_date.day, summer_date.month,
+                             int(mg.budget.team_strength), int(mg.budget.players), ads, mg.budget.balance, mg.budget.accrued, mg.team);
+                for (int t = 0; t < 36; t++) {
+                    const HokTeam& x = save_.teams[size_t(t)];
+                    const int sum = x.skill1[0] + x.skill1[1] + x.skill2[0] + x.skill2[1];
+                    if (sum >= 250 && sum <= 262) std::fprintf(stderr, "  team %d (%s) sum %d\n", t, x.name.c_str(), sum);
+                }
+            }
+            finance_day(finance_, mg.budget, summer_date.day, month_days);
+            heal_squad(summer_day % 7 == 0, m);
         }
-        finance_day(finance_, mgr_[0].budget, summer_date.day, kMonthDays[size_t(summer_date.month - 1)]);
-        heal_squad(summer_day % 7 == 0);
     }
     // a fresh season: tables, schedule position, cup draw, competitions
     for (int l = 0; l < 3; l++) {
@@ -3982,7 +4123,7 @@ void Game::new_season() {
     // (the initial cup draw follows the EuroCup draw at the end of the season change, see below)
     // Native manager +0xE6: 1 = first-round participant, 30 = not in the draw.
     for (size_t manager = 0; manager < 6; manager++)
-        save_.state.at(kManagerBlock + manager * 0x1AF + 0xE6) = manager == 0 ? 1 : 30;
+        save_.state.at(kManagerBlock + manager * 0x1AF + 0xE6) = manager < size_t(n) ? 1 : 30;  // every human manager (one manager: 1, 30, ...)
     cup_day_ = 0;
     cup_round_ = 1;
     store_cup_participants(save_, cup_draw_, cup_round_);
@@ -4012,8 +4153,10 @@ void Game::new_season() {
     save_.state.at(kPlayoffStage) = 0;
     save_.state.at(kPlayoffCursor) = 0xFF;
     std::fill(save_.state.begin() + long(kLeagueResults), save_.state.begin() + long(kLeagueResults + 0x630), uint8_t(0));
-    mgr_[0].budget.league = team_class(finance_, mgr_[0].team);
-    mgr_[0].budget.team = mgr_[0].team;
+    for (int m = 0; m < n; m++) {
+        mgr_[size_t(m)].budget.league = team_class(finance_, mgr_[size_t(m)].team);
+        mgr_[size_t(m)].budget.team = mgr_[size_t(m)].team;
+    }
     save_.year++;
     const uint16_t career_year = uint16_t(le16(save_.state, kCareerYear) + 1);
     save_.state.at(kCareerYear) = uint8_t(career_year);
@@ -4044,7 +4187,9 @@ void Game::new_season() {
         draw += " /";
     }
     log_.push_back(draw);
-    cup_draw_ = draw_initial_cup({mgr_[0].team}, brng_);
+    std::vector<int> human_clubs;
+    for (int m = 0; m < n; m++) human_clubs.push_back(mgr_[size_t(m)].team);
+    cup_draw_ = draw_initial_cup(human_clubs, brng_);
     store_cup_participants(save_, cup_draw_, cup_round_);
     // 6AF8:47A1 ->146E:179E ->1238:13A1: all398 global skill draws
     // happen after review, redistribution, summer and competition resets.
@@ -4065,18 +4210,23 @@ void Game::new_season() {
     // REAL-CODE period 30: after the distribution the original computes the club image and renews the sponsor offers,
     // then books September 10 like a playable evening (refusal reset, share market, finances, image).
     debug_pclub(save_.state, "after-distribution");
-    mgr_[0].image = current_club_image();
-    update_sponsors();
-    // The first playable menu already includes September 10's booking.
-    stadium_daily_refusal_reset(stadium_refusals_,0,brng_);
-    market_day(save_.state, brng_);
-    for (int c = 0; c < kHokShares; c++) {
-        save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
-        for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+    // ovr038:47A6..47D1: image and sponsor offers of every manager 0..N-1
+    for (int m = 0; m < n; m++) {
+        mgr_[size_t(m)].image = current_club_image(m);
+        update_sponsors(m);
     }
-    refresh_budget_roster();  // the roster with the new skills before the booking
-    finance_day(finance_, mgr_[0].budget, 10, 30);
-    mgr_[0].image = current_club_image();
+    // The first playable menu already includes September 10's booking: the finance loop of the day for 0..N-1.
+    for (int m = 0; m < n; m++) {
+        stadium_daily_refusal_reset(stadium_refusals_,m,brng_);
+        market_day(save_.state, brng_);
+        for (int c = 0; c < kHokShares; c++) {
+            save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+            for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+        }
+        refresh_budget_roster(m);  // the roster with the new skills before the booking
+        finance_day(finance_, mgr_[size_t(m)].budget, 10, 30);
+        mgr_[size_t(m)].image = current_club_image(m);
+    }
     log_.push_back("new season " + std::to_string(save_.year) + "/" + std::to_string(save_.year + 1));
 }
 

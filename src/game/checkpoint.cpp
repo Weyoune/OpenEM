@@ -7,7 +7,7 @@
 namespace em {
 namespace {
 constexpr uint8_t kMagic[8] = {'O', 'P', 'E', 'N', 'E', 'M', 0x1A, 0};
-constexpr uint32_t kVersion = 9;
+constexpr uint32_t kVersion = 10;  // v10: managers 1..3 (docs/MEHRSPIELER_PLAN.md step 8)
 constexpr size_t kHeader = 20, kMaxSize = 1024 * 1024;
 
 uint32_t crc32(const Bytes& bytes, size_t first) {
@@ -130,6 +130,39 @@ GameCheckpoint decode_game_checkpoint(const Bytes& data) {
         const int slot=read.byte();if(slot>30)throw FormatError("OpenEM checkpoint: invalid penalty timer slot");
         t->slot[i]=slot-1;
     }
+    if(version>=10){
+        c.daily_luck=read.byte();
+        if(c.daily_luck<85||c.daily_luck>115)throw FormatError("OpenEM checkpoint: invalid daily factor");
+        const int others=read.byte();
+        if(others>3)throw FormatError("OpenEM checkpoint: invalid manager count");
+        for(int m=0;m<others;m++){
+            CheckpointManager x;
+            for(auto& kind:x.rotation.used)for(uint8_t& used:kind)used=read.byte();
+            for(int i=0;i<2;i++){
+                x.timers.role[i]=read.byte();
+                const int slot=read.byte();if(slot>30)throw FormatError("OpenEM checkpoint: invalid penalty timer slot");
+                x.timers.slot[i]=slot-1;
+            }
+            for(int& role:x.injured_roles)role=read.bounded(0,255);
+            for(uint8_t& status:x.squad_status){
+                status=read.byte();
+                if(status>uint8_t(SquadStatus::Team))throw FormatError("OpenEM checkpoint: invalid squad status");
+            }
+            x.team_strength=read.bounded(0,1020);
+            x.players=read.bounded(0,30);
+            x.squad_costs=read.i32();x.pool_costs=read.i32();
+            const int count=read.bounded(0,30);
+            for(int i=0;i<count;i++){
+                CheckpointOffer offer;
+                offer.player=read.bounded(0,kHokPlayers-1);
+                offer.bidder=read.bounded(0,kHokTeams-1);
+                offer.listed=read.bounded(0,1)!=0;
+                offer.amount=read.bounded(0,INT32_MAX);
+                x.offers.push_back(offer);
+            }
+            c.other_managers.push_back(std::move(x));
+        }
+    }
     read.end();
     return c;
 }
@@ -167,6 +200,23 @@ Bytes encode_game_checkpoint(const GameCheckpoint& c) {
     for(const PenaltyTimers* t:{&c.club_timers,&c.national_timers})for(int i=0;i<2;i++){
         bytes.push_back(uint8_t(t->role[i]));
         bytes.push_back(uint8_t(t->slot[i]+1));
+    }
+    if(c.daily_luck<85||c.daily_luck>115)throw FormatError("OpenEM checkpoint: invalid daily factor");
+    bytes.push_back(uint8_t(c.daily_luck));
+    if(c.other_managers.size()>3)throw FormatError("OpenEM checkpoint: invalid manager count");
+    bytes.push_back(uint8_t(c.other_managers.size()));
+    for(const CheckpointManager& x:c.other_managers){
+        for(const auto& kind:x.rotation.used)for(uint8_t used:kind)bytes.push_back(used);
+        for(int i=0;i<2;i++){bytes.push_back(uint8_t(x.timers.role[i]));bytes.push_back(uint8_t(x.timers.slot[i]+1));}
+        for(int role:x.injured_roles)put_signed(bytes,role);
+        bytes.insert(bytes.end(),x.squad_status.begin(),x.squad_status.end());
+        put_signed(bytes,x.team_strength);put_signed(bytes,x.players);
+        put_signed(bytes,x.squad_costs);put_signed(bytes,x.pool_costs);
+        put32(bytes,uint32_t(x.offers.size()));
+        for(const auto& offer:x.offers){
+            put_signed(bytes,offer.player);put_signed(bytes,offer.bidder);
+            put_signed(bytes,int(offer.listed));put_signed(bytes,offer.amount);
+        }
     }
     const uint32_t size = uint32_t(bytes.size() - kHeader), crc = crc32(bytes, kHeader);
     for (int b = 0; b < 4; b++) {

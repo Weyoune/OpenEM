@@ -21,8 +21,9 @@
 // relegation (relegation groups, Oberliga 11th/12th against regional clubs 36-41) swap team
 // indices like ovl06_0c29, a new European cup draw, prizes, ageing, contract years, retirement of
 // computer club players, cleared statistics, 132 summer finance/healing days and a new cup draw.
-// The day loop runs every human manager 0..N-1 in the order of the original's manager loops (docs/MEHRSPIELER_PLAN.md
-// step 7); the season change and the WM branch still book manager 0 only. Injuries: injuries.hpp (twice-weekly club
+// The day loop and the season change run every human manager 0..N-1 in the order of the original's manager loops
+// (docs/MEHRSPIELER_PLAN.md steps 7 and 8); the WM branch books the manager DS:A70E holds (146e:0c89 returns at once
+// for DS:A70E >= N). Injuries: injuries.hpp (twice-weekly club
 // preparation and after matches of the human club).
 #include <algorithm>
 #include <array>
@@ -246,11 +247,16 @@ public:
     void clear_message_flag(int manager);  // DS:5A50 + manager, src/game/messages.cpp
     // Messages for the manager from the last day step (talent scout), oldest first. They are not part
     // of a checkpoint: the UI reads them right after advancing.
-    const std::vector<std::string>& manager_news() const { return manager_news_; }
+    // Without an argument: those of the active manager.
+    const std::vector<std::string>& manager_news() const { return manager_news_[size_t(active_manager_)]; }
+    const std::vector<std::string>& manager_news(int m) const { return manager_news_.at(size_t(m)); }
     // Messages the original shows at once and deletes again (season review ovr026:09EB), native text, oldest first.
-    const std::vector<std::string>& immediate_messages() const { return immediate_messages_; }
+    const std::vector<std::string>& immediate_messages() const { return immediate_messages_[size_t(active_manager_)]; }
+    const std::vector<std::string>& immediate_messages(int m) const { return immediate_messages_.at(size_t(m)); }
     // The manager's season-review page (ovl02_0000) when the last step changed the season, not in a checkpoint.
-    const std::optional<SeasonReview>& season_review() const { return season_review_; }
+    // ovl02_0000 shows the page of every manager 0..N-1 in index order before the contract talks.
+    const std::optional<SeasonReview>& season_review() const { return season_reviews_[size_t(active_manager_)]; }
+    const std::optional<SeasonReview>& season_review(int m) const { return season_reviews_.at(size_t(m)); }
     // Third contract-dialog row: half a freshly computed salary per month.
     // New cover is locked through the next month-end; injured players cannot
     // change cover. Returns true if the requested state is already set or applied.
@@ -284,7 +290,7 @@ public:
     ManualLineupResult change_lineup(size_t slot,int selected_line,ManualLineupAction action,const bool* six_override=nullptr,
                                    const std::array<std::array<int,6>,5>* cells_override=nullptr);
     bool set_tactics(const TacticsPlan& plan);
-    const TrainingPlan& training_plan() const { return plan_; }
+    const TrainingPlan& training_plan() const { return mgr_[size_t(active_manager_)].plan; }  // state 0x070C + 0x1C * m
     // Commit a full club plan (kinds 0..8), including its native recovery fee.
     // Invalid plans/phases leave the game unchanged; no random draws or cash posting.
     bool set_training_plan(const TrainingPlan& plan);
@@ -309,7 +315,7 @@ public:
         brng_=previous.brng_;rng_=previous.rng_;
         line_counts_=previous.line_counts_;
         annual_distribution_cursors_=previous.annual_distribution_cursors_;
-        for(int kind=0;kind<2;++kind)mgr_[0].squad.per_line[kind]=line_counts_[0][size_t(kind)];
+        for(size_t m=0;m<mgr_.size();++m)for(int kind=0;kind<2;++kind)mgr_[m].squad.per_line[kind]=line_counts_[m][size_t(kind)];
     }
     bool set_ticket_price(int price);
     // 5396:087B: immediately edit one native monthly youth grant; no RNG.
@@ -333,8 +339,10 @@ public:
     using ContractTermsDecider = std::function<ContractTerms(const ContractPlayer& player, int slot, long proposal)>;
     void set_contract_terms_decider(ContractTermsDecider d) { contract_terms_decider_ = std::move(d); }
     int daily_luck() const { return daily_luck_; }  // DS:E1A4, the mood of the dialog (renewal_demand)
-    // Outcome of each contract talk of the last season change, in order (for the notices of the dialog).
-    struct ContractOutcome { std::string name; bool signed_on = false, refused = false; long fee = 0; bool too_long = false; };
+    // The manager whose contract talk the deciders above are asked for (the talks run for 0..N-1 in index order).
+    int contract_manager() const { return contract_manager_; }
+    // Outcome of each contract talk of the last season change, in order over all managers (notices of the dialog).
+    struct ContractOutcome { std::string name; bool signed_on = false, refused = false; long fee = 0; bool too_long = false; int manager = 0; };
     const std::vector<ContractOutcome>& contract_outcomes() const { return contract_outcomes_; }
     // Match display (ui/classic_match_view): observes the minute loops of league and cup days; never changes the game.
     void set_match_observer(MatchMinuteObserver o) { match_observer_ = std::move(o); }
@@ -392,6 +400,7 @@ private:
     void injure(size_t slot, int kind, int m = 0);
     void squad_injuries(bool weekly, bool no_match_today, int m = 0);
     void heal_squad(bool weekly, int m = 0);
+    void reload_squads();  // the decoded squads of managers 0..N-1 from their native rows
     void refresh_budget_roster(int m = 0);
     void clear_insurance_locks(int m = 0);
     void prepare_human_lineup(bool restore_saved_mode = true, int m = 0);
@@ -435,12 +444,13 @@ private:
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
     std::array<bool, kMaxManagers> idle_cup_day_{};  // a cup day with games, none of them this manager club's
     bool skip_refresh_once_ = false;  // the next prepare_human_lineup leaves the club record alone
-    std::vector<std::string> manager_news_;
+    std::array<std::vector<std::string>, kMaxManagers> manager_news_;
     long last_purchase_subsidy_ = 0;
     PurchaseResult insert_purchase(size_t slot,long fee,PurchaseDraft& draft);  // purchase.cpp: the squad row of a bought list player
     PurchaseResult insert_loan(size_t slot,long fee,int seller,bool accept_subsidy,bool prepare_lineup);  // loan.cpp
-    std::vector<std::string> immediate_messages_;
-    std::optional<SeasonReview> season_review_;
+    std::array<std::vector<std::string>, kMaxManagers> immediate_messages_;
+    std::array<std::optional<SeasonReview>, kMaxManagers> season_reviews_;
+    int contract_manager_ = 0;
     ContractDecider contract_decider_;
     ContractTermsDecider contract_terms_decider_;
     std::vector<ContractOutcome> contract_outcomes_;
@@ -448,7 +458,6 @@ private:
     long match_attendance_ = 0;
     bool match_sold_out_ = false;
     RatingBounds rating_;
-    TrainingPlan plan_{};
     GameRandom rng_;
     BorlandRandom brng_;
     std::array<League, 3> leagues_{};
@@ -466,6 +475,7 @@ private:
         PenaltyTimers timers;         // DS:D096 + 6 * manager (not saved; zero after loading)
         ManagerBudget budget;
         SponsorOffers offers{};
+        TrainingPlan plan{};          // state 0x070C + 0x1C * manager (DS:A8A1, seg002:015E)
         int image = 0;
         bool played = false;          // the club played today
         std::vector<ManagerOffer> transfer_offers;  // open interests of computer clubs in his players
