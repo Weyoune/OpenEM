@@ -694,3 +694,11 @@ if(TARGET em_editor)
     install(FILES docs/EDITOR.md DESTINATION docs)
 endif()
 install(FILES README.md DESTINATION .)
+
+# Release archive: cpack -G ZIP -C Release (in the build folder) packs the install layout above
+set(CPACK_PACKAGE_NAME "OpenEM")
+set(CPACK_PACKAGE_VENDOR "OpenEM")
+set(CPACK_PACKAGE_VERSION "0.9.0")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Nachbau des Eishockey Managers (1993); benötigt die Originaldaten")
+set(CPACK_GENERATOR "ZIP")
+include(CPack)
