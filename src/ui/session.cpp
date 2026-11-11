@@ -182,8 +182,11 @@ bool Session::advance_day() {
         q.index = int(question);
         q.luck = next->daily_luck();
         q.save = next->save_bytes();
-        q.review = next->season_review();
-        q.review_messages = next->immediate_messages();
+        q.manager = next->contract_manager();
+        for (int m = 0; m < next->managers(); m++) {
+            q.reviews[size_t(m)] = next->season_review(m);
+            q.review_messages[size_t(m)] = next->immediate_messages(m);
+        }
         q.outcomes = next->contract_outcomes();
         contract_question_ = std::move(q);
         throw NeedContract{};
@@ -217,7 +220,7 @@ bool Session::answer_contract(bool renew) {
     terms.years = renew ? 1 : 0;
     if (contract_question_ && renew) {
         const HokFile staged = decode_hok(contract_question_->save);
-        terms.insured = le32(staged.state, 0x696D + size_t(contract_question_->slot) * 52 + 0x30) != 0;
+        terms.insured = le32(staged.state, squad_block(contract_question_->manager) + size_t(contract_question_->slot) * 52 + 0x30) != 0;
     }
     return answer_contract(terms);
 }

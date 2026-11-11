@@ -33,8 +33,10 @@ struct ContractQuestion {
     int index = 0;            // contract talks already answered in this season change
     int luck = 100;           // the daily mood DS:E1A4 of the dialog (renewal_demand for changed years)
     Bytes save;               // the staged game as a native save at the question (the list behind the dialog)
-    std::optional<SeasonReview> review;           // the season review of the staged day (shown before the talks)
-    std::vector<std::string> review_messages;     // its immediate messages
+    int manager = 0;          // the manager whose talk this is (the talks run for 0..N-1 in index order)
+    // the season review of every manager of the staged day (shown before the talks, Game::season_review(m))
+    std::array<std::optional<SeasonReview>, kMaxManagers> reviews;
+    std::array<std::vector<std::string>, kMaxManagers> review_messages;  // their immediate messages
     std::vector<Game::ContractOutcome> outcomes;  // the talks answered so far
 };
 

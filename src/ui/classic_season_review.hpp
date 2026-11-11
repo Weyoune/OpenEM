@@ -19,6 +19,10 @@ std::pair<int, int> classic_season_review_slot(int n);
 // The overview "Saisonende" shown before the review (ovl12_1657). face/manager: the human manager, drawn under
 // the titles the manager's club won (human_winner).
 void draw_classic_season_overview(ClassicCanvas&, const SeasonReview&, int face, const std::string& manager);
+// With several human managers: under each title the face and name of the manager who holds it (winner_manager,
+// faces/names indexed by manager; a negative face draws nothing).
+void draw_classic_season_overview(ClassicCanvas&, const SeasonReview&, const std::array<int, 4>& faces,
+                                  const std::array<std::string, 4>& names);
 // A club name split at its first space into two lines, each cut until it is at most `width` pixels wide in the
 // small font (ovr036:18E6..19C3; 0x46, 0x3C for the European cup column).
 std::pair<std::string, std::string> classic_season_overview_lines(const ClassicCanvas&, const std::string& name, int width);

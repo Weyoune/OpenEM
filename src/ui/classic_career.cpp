@@ -17,6 +17,10 @@ struct ClassicCareerState {
     bool review_overview = true;  // ovl12_1657 first, then the manager's page
     bool review_cleared = false;
     std::vector<std::string> review_messages;
+    // Hot seat: ovl02_0000 shows the page of every manager 0..N-1 in index order; the pages after the current one.
+    struct Page { int manager = 0; SeasonReview review; std::vector<std::string> messages; };
+    std::vector<Page> next_pages;
+    int review_manager = 0;
 };
 
 bool ClassicApplication::main_menu_idle() const {
@@ -42,13 +46,22 @@ void ClassicApplication::open_messages() {
 void ClassicApplication::show_immediate_messages() {
     if (!session_.loaded()) return;
     const Game& game = session_.game();
-    if (game.season_review() && season_review_shown_) {  // shown before the contract talks of this day
+    bool any_review = false;
+    for (int m = 0; m < game.managers(); m++) any_review |= game.season_review(m).has_value();
+    if (any_review && season_review_shown_) {  // shown before the contract talks of this day
         season_review_shown_ = false;
         return;
     }
-    if (!game.season_review() && game.immediate_messages().empty()) return;
-    if (game.season_review()) show_review(*game.season_review(), game.immediate_messages());
-    else {
+    if (!any_review && game.immediate_messages().empty()) return;
+    if (any_review) {
+        std::array<std::optional<SeasonReview>, kMaxManagers> reviews;
+        std::array<std::vector<std::string>, kMaxManagers> messages;
+        for (int m = 0; m < game.managers(); m++) {
+            reviews[size_t(m)] = game.season_review(m);
+            messages[size_t(m)] = game.immediate_messages(m);
+        }
+        show_reviews(reviews, messages);
+    } else {
         if (!career_) career_ = std::make_shared<ClassicCareerState>();
         career_->messages.show_immediate(game.immediate_messages());
     }
@@ -61,6 +74,22 @@ void ClassicApplication::show_review(const SeasonReview& review, std::vector<std
     career_->review_overview = true;
     career_->review_cleared = false;
     career_->review_messages = std::move(messages);
+    career_->next_pages.clear();
+    career_->review_manager = active_manager();
+}
+
+// The pages of managers 0..N-1 (the overview before the first). Each page is shown with its manager at the menu
+// (header face, name and club); afterwards the manager of a pending contract talk, else manager 0, takes the seat.
+void ClassicApplication::show_reviews(const std::array<std::optional<SeasonReview>, kMaxManagers>& reviews,
+                                      const std::array<std::vector<std::string>, kMaxManagers>& messages) {
+    std::vector<ClassicCareerState::Page> pages;
+    for (int m = 0; m < kMaxManagers; m++)
+        if (reviews[size_t(m)]) pages.push_back({m, *reviews[size_t(m)], messages[size_t(m)]});
+    if (pages.empty()) return;
+    if (session_.game().managers() > 1) session_.select_manager(pages.front().manager);
+    show_review(pages.front().review, pages.front().messages);
+    career_->review_manager = pages.front().manager;
+    career_->next_pages.assign(pages.begin() + 1, pages.end());
 }
 
 // The review ends with its last message, or with the first click when there is none.
@@ -80,6 +109,19 @@ void ClassicApplication::advance_review() {
         }
     }
     s.review.reset();
+    if (!s.next_pages.empty()) {  // the next manager's page (no second overview)
+        auto page = std::move(s.next_pages.front());
+        s.next_pages.erase(s.next_pages.begin());
+        session_.select_manager(page.manager);
+        s.review = std::move(page.review);
+        s.review_manager = page.manager;
+        s.review_overview = false;
+        s.review_cleared = false;
+        s.review_messages = std::move(page.messages);
+    } else if (session_.game().managers() > 1) {
+        const auto& q = session_.contract_question();
+        session_.select_manager(q ? q->manager : 0);
+    }
     invalidate();
 }
 
@@ -129,7 +171,17 @@ void ClassicApplication::draw_career() {
     if (career_->review) {
         if (career_->review_overview) {
             const auto& h = snapshot();
-            draw_classic_season_overview(canvas_, *career_->review, h.state.at(0x01EE) % 12, h.manager);
+            if (session_.game().managers() > 1) {  // every human title holder with his face (DS:0178 + m) and name
+                std::array<int, 4> faces{-1, -1, -1, -1};
+                std::array<std::string, 4> names;
+                for (int m = 0; m < session_.game().managers(); m++) {
+                    faces[size_t(m)] = h.state.at(0x01EE + size_t(m)) % 12;
+                    names[size_t(m)] = manager_name(m);
+                }
+                draw_classic_season_overview(canvas_, *career_->review, faces, names);
+            } else {
+                draw_classic_season_overview(canvas_, *career_->review, h.state.at(0x01EE) % 12, h.manager);
+            }
             return;
         }
         // ovl01_0f6a: ice background, the main-menu header in its 0xFE form, title and panel; then ovr026

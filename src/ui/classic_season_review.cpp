@@ -74,6 +74,13 @@ std::pair<std::string, std::string> classic_season_overview_lines(const ClassicC
 }
 
 void draw_classic_season_overview(ClassicCanvas& c, const SeasonReview& review, int face, const std::string& manager) {
+    SeasonReview own = review;
+    for (size_t k = 0; k < 4; k++) own.winner_manager[k] = review.human_winner[k] ? 0 : -1;
+    draw_classic_season_overview(c, own, std::array<int, 4>{face, -1, -1, -1}, std::array<std::string, 4>{manager, "", "", ""});
+}
+
+void draw_classic_season_overview(ClassicCanvas& c, const SeasonReview& review, const std::array<int, 4>& faces,
+                                  const std::array<std::string, 4>& names) {
     constexpr auto mini = ClassicFontId::Mini;  // native font 3
     // ovr036:1673: ice background, panel 13 x 11 tiles at (4,1), title in font 1, two rules in colour 1
     c.background(22);
@@ -98,9 +105,11 @@ void draw_classic_season_overview(ClassicCanvas& c, const SeasonReview& review, 
         const auto [first, second] = classic_season_overview_lines(c, review.winners[size_t(k)], k == 3 ? 0x3C : 0x46);
         c.text(mini, k * 0x50 + 5, 0x48, first, 1, 0, k * 0x50 + 0x50);
         c.text(mini, k * 0x50 + 5, 0x50, second, 1, 0, k * 0x50 + 0x50);
-        if (review.human_winner[size_t(k)]) {
+        const int m = review.winner_manager[size_t(k)];
+        if (m >= 0 && m < 4 && faces[size_t(m)] >= 0) {
+            const int face = faces[size_t(m)];
             c.blit(0, k * 0x50 + 0x15, 0x54, 41 * (face % 3) + 1, 41 * (face / 3) + 1, 0x26, 0x26, true, kKey);
-            c.text(mini, k * 0x50 + 5, 0x7E, manager, 1, 0, k * 0x50 + 0x50);
+            c.text(mini, k * 0x50 + 5, 0x7E, names[size_t(m)], 1, 0, k * 0x50 + 0x50);
         }
     }
     // ovr036:1ADB and 1BC4: per league the clubs promoted into it ('@', colour 0x0C) from y 0xB0, the clubs

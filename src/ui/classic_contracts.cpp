@@ -54,7 +54,7 @@ void ClassicApplication::finish_numeric(bool cancel){
     if(editor.season){  // ovr035:481B..49F2: the demand is written into the record and never goes below its salary
         BorlandRandom unused;
         const auto& h=snapshot();
-        const long demand=season_change_demand(session_.contract_tables(),h,0,contract_player(h,0,editor.slot),editor.years,season_luck_,unused);
+        const long demand=season_change_demand(session_.contract_tables(),h,season_manager(),contract_player(h,season_manager(),editor.slot),editor.years,season_luck_,unused);
         editor.salary=editor.record_salary=std::max(demand,editor.record_salary);
         return;
     }
@@ -63,7 +63,7 @@ void ClassicApplication::finish_numeric(bool cancel){
     // consuming the simulation RNG. See the frontend limitations document.
     BorlandRandom unused;
     const int league=session_.game().budget().league;
-    editor.salary=renewal_demand(session_.contract_tables(),contract_player(snapshot(),0,editor.slot),
+    editor.salary=renewal_demand(session_.contract_tables(),contract_player(snapshot(),active_manager(),editor.slot),
         editor.years,100,session_.game().next_matchday(league),44,session_.game().season_day()+1,unused);
 }
 
@@ -129,7 +129,7 @@ void ClassicApplication::click_contract_editor(int x,int y,bool right){
     }
     if(x>2&&x<158&&y>s+52&&y<s+78){
         const int field=int(y>s+63)+int(y>s+71);
-        const size_t record=squad_block(e.season?0:active_manager())+size_t(e.slot)*52;
+        const size_t record=squad_block(e.season?season_manager():active_manager())+size_t(e.slot)*52;
         const auto& h=snapshot();
         if(field==2){
             if((h.state.at(record+0x2F)&0x80)||(h.state.at(record+9)&3)==2)return;
@@ -148,16 +148,20 @@ void ClassicApplication::open_season_talk(){
     season_view_=std::make_unique<HokFile>(decode_hok(q.save));
     season_luck_=q.luck;
     season_outcomes_seen_=q.outcomes.size();
-    if(q.index==0&&q.review&&!season_review_shown_){show_review(*q.review,q.review_messages);season_review_shown_=true;}
+    // the pages of all managers come first (ovl02_0000), then the talks of manager 0..N-1 with that manager at the seat
+    bool any_review=false;for(const auto& r:q.reviews)any_review|=r.has_value();
+    if(q.index==0&&any_review&&!season_review_shown_){show_reviews(q.reviews,q.review_messages);season_review_shown_=true;}
+    else if(session_.game().managers()>1&&!(career_modal()=="review"||career_modal()=="review-overview"))session_.select_manager(q.manager);
+    const int m=q.manager;
     ContractEditor editor;
     const auto& h=*season_view_;
-    const size_t at=0x696D+size_t(q.slot)*52;
-    editor.slot=q.slot;editor.player=h.squad_of(0).at(size_t(q.slot)).player;editor.offset=q.slot<12?80:0;
+    const size_t at=squad_block(m)+size_t(q.slot)*52;
+    editor.slot=q.slot;editor.player=h.squad_of(m).at(size_t(q.slot)).player;editor.offset=q.slot<12?80:0;
     editor.years=1;editor.salary=editor.record_salary=q.monthly_salary;editor.season=true;
     const long premium=int32_t(le32(h.state,at+0x30));
     editor.insured=editor.original_insured=premium!=0;
     BorlandRandom unused;
-    editor.premium=premium?premium:player_worth(session_.contract_tables(),contract_player(h,0,q.slot),Worth::Salary,unused)/2;
+    editor.premium=premium?premium:player_worth(session_.contract_tables(),contract_player(h,m,q.slot),Worth::Salary,unused)/2;
     contract_editor_=std::move(editor);
 }
 
@@ -194,6 +198,7 @@ void ClassicApplication::answer_season_talk(bool sign){
             return;
         }
         season_outcomes_seen_=0;
+        if(session_.game().managers()>1)session_.select_manager(0);  // the talks are over: manager 0 at the next menu
         if(notice_.empty())season_view_.reset();  // otherwise the old list stays behind the notices (draw)
         invalidate();show_manager_news();begin_match_view();invalidate();
     }catch(const std::exception& error){season_view_.reset();contract_editor_.reset();notice(error.what());}
@@ -202,10 +207,11 @@ void ClassicApplication::answer_season_talk(bool sign){
 void ClassicApplication::draw_season_talk(){
     const auto& h=snapshot();
     canvas_.background(22);  // ovl10_2bf6
-    const int team=h.state.at(0x0DCD+0x14);
+    const int m=session_.contract_question()?session_.contract_question()->manager:active_manager();
+    const int team=h.state.at(manager_block(m)+0x14);
     if(team>=0&&size_t(team)<h.teams.size())canvas_.text(flow,0,10,h.teams.at(size_t(team)).name,0x1E,0,0x13F);
     canvas_.frame(0x109,0xC3,2,2);
-    draw_classic_roster(canvas_,h,true,0);
+    draw_classic_roster(canvas_,h,true,m);
     // 146e:07ff with symbol 10 of KB13: the frame at (0x90,0), the symbol 3 pixels inside it
     canvas_.blit(13,0x112,200,0x90,0,0x1E,0x1B,true,0xC0);
     canvas_.blit(13,0x115,203,(10%6)*0x18,(10/6)*0x15,0x18,0x15,true,0xC0);
