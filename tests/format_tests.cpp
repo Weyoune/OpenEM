@@ -1282,10 +1282,10 @@ static void summer_healing_and_construction(const fs::path& em_dir, const fs::pa
     if (!fs::exists(ref_dir / "LICRICH1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
     HokFile source = decode_hok(read_file(ref_dir / "LICRICH1.HOK"));
-    // Two prepared healing/stadium dates remain in April, then nineteen
-    // multiples of seven in the native May 1..September 9 summer interval.
+    // Two prepared healing/stadium dates remain in April, two WM-branch healings (day % 7 == 0, REAL-CODE Köln period 146), then
+    // nineteen multiples of seven in the native May 1..September 9 summer interval.
     source.state[0x696D + 9] |= 2;
-    source.state[0x696D + 13] = 22;
+    source.state[0x696D + 13] = 24;
     source.state[0x696D + 0x34 + 9] |= 2;
     source.state[0x696D + 0x34 + 13] = 255;
     const int disabled_id = source.state[0x696D + 0x34 + 15];
@@ -1299,6 +1299,8 @@ static void summer_healing_and_construction(const fs::path& em_dir, const fs::pa
     }
     CHECK(game.seasons_completed() == 1);
     const HokFile saved = decode_hok(game.save_bytes());
+    if (!(saved.state[0x696D + 13] == 1 && (saved.state[0x696D + 9] & 2)))
+        std::fprintf(stderr, "summer healing: weeks %d status %02x\n", saved.state[0x696D + 13], saved.state[0x696D + 9]);
     CHECK(saved.state[0x696D + 13] == 1 && (saved.state[0x696D + 9] & 2));
     CHECK(saved.squad.size() == source.squad.size() - 1);
     for (size_t slot = 0; slot < saved.squad.size(); slot++) CHECK(saved.state[0x696D + slot * 0x34 + 15] != disabled_id);

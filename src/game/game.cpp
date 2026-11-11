@@ -4407,7 +4407,9 @@ g_draw_scope = "match-injuries";
     // the call stays with manager 0 (docs/MEHRSPIELER_PLAN.md step 7).
     if (world_phase && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
         if (national_coach_ >= 0) weekly_team_drift();
-        squad_injuries(false, event == 0);  // today's healing was already prepared
+        // today's healing was already prepared; on day % 7 == 0 the routine heals the week once more (REAL-CODE Köln period 146:
+        // an injury of 3 weeks on 13.04. is over by 28.04., the training-injury roll of 28.04. includes the player)
+        squad_injuries(day_ % 7 == 0 && !std::getenv("EM_OLD_WMHEAL"), event == 0);
         make_offers();
         train_squad();
     }
