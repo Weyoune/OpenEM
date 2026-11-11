@@ -2,6 +2,7 @@
 #include "game/world_generator.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 #include "formats/db.hpp"
@@ -1079,6 +1080,7 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
             for (int tries = 0; tries < 1000;) {
                 id = w.b(w.d(dsIdBound + g), w.d(dsIdBound + 1 + g) - 1);
                 tries++;
+                if (std::getenv("EM_DEBUG_DRAFT")) std::fprintf(stderr, "draft g%zu id %d owner %d club %d\n", g, id, id < 200 ? w.player(size_t(id))[0x1A] : -1, id < 200 ? w.player(size_t(id))[0x1D] : -1);
                 if (id < 0xB4 && w.player(size_t(id))[0x1A] == 6) break;
             }
             const int at = w.sign_player(id, 1, 0, 0x1D);  // sub_24BCC(ID, 1, 0, 15000, 0x1D)
