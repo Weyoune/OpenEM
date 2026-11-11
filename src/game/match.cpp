@@ -583,7 +583,10 @@ bool penalty_minute(PenaltySide& side, PenaltySide& other, bool may_pair, GameRa
     const bool pair = may_pair && !side.same_club && rng.range(0, 3) == 0 && running == 0;
     // The original books opportunities before attempting to select the player.
     // with the goalkeeper pulled (six skaters) the penalty brings him back: 4 skaters remain (REAL-CODE period 9)
-    const int token = side.stats ? side.stats->record(side.side, side.team.skaters == 6 ? 4 : side.team.skaters - 1,
+    // for the opportunity count a pulled goalkeeper counts as a skater: 6 - 1 = 5 (REAL-CODE Köln period 231: 6 against 3,
+    // no power play for the human side two men down)
+    const int count_skaters = side.team.skaters == 6 && std::getenv("EM_OLD_PPGOALIE") ? 4 : side.team.skaters - 1;
+    const int token = side.stats ? side.stats->record(side.side, count_skaters,
         other.team.skaters, side.human != nullptr, other.human != nullptr) : -1;
     int slot = -1;
     bool selection_failed = false;
