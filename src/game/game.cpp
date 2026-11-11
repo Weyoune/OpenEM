@@ -2289,7 +2289,12 @@ void Game::play_playoff_day(bool setup_only) {
     if (!human_today && games_today) {  // like a live cup day without the human club, the play-off day passes the menu routine (REAL-CODE period 28),
         // without a sort (REAL-CODE period 91: no swap on any of the play-off days without the human club)
         if (std::getenv("EM_OLD_POSORT")) native_sort_messages(save_.state);
-        native_message_step(save_.state);
+        // not while a manager's club is still in the relegation round (REAL-CODE Köln period 142: day 166 without Köln, which
+        // plays the relegation round, counts down only once, in the day loop)
+        bool in_relegation = false;
+        for (const GroupTable& g : relegation_)
+            for (int team : g.teams) in_relegation |= manager_team(team);
+        if (!in_relegation || std::getenv("EM_OLD_POMSGREL")) native_message_step(save_.state);
     }
     if (!human_today) {
         // the match load of the human squads is set like on a cup day without them, also on a day without games (REAL-CODE
