@@ -1242,6 +1242,12 @@ void Game::apply_phantom_pairs(int role) {
     ob[2].away &= ~1;
     ob[3].home = role;
     ob[4].away = 0;
+    // the working state holds the same cache (a checkpoint reloads the pairings from it)
+    for (size_t pair : {size_t(2), size_t(3), size_t(4)}) {
+        const size_t at = 0x8DFD + 2 * 12 + pair * 2;
+        save_.state.at(at) = uint8_t(ob[pair].home);
+        save_.state.at(at + 1) = uint8_t(ob[pair].away);
+    }
 }
 
 // 162c:2337 (league only, byte_32092 == 7) and 162c:068d: every goalkeeper (player +0x18 == 0) of the manager's squad with a
