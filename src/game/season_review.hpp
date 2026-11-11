@@ -30,6 +30,7 @@ struct SeasonReview {
     // (DS:D0E7, the champion in the first division) and promoted into it (DS:D0ED), at most two each (DS:07B9).
     std::array<std::string, 4> winners;
     std::array<bool, 4> human_winner{};  // the manager's face and name under that title
+    std::array<int, 4> winner_manager{-1, -1, -1, -1};  // the human manager (0..3) holding each title, -1 = none
     std::array<std::vector<std::string>, 3> relegated_into, promoted_into;
 };
 

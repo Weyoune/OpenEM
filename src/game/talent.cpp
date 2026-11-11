@@ -114,11 +114,11 @@ void Game::talent_search_step(int m) {
     if (brng_.range(0, 5 - level / 2) == 0) {
         if (talent_player(brng_.range(40, 90), 80, m)) {
             talent_message("Ihre Talentsuche war ein Erfolg.", "Ein junger Spieler st|~t zu Ihrem Kader.");
-            manager_news_.push_back("Ihre Talentsuche war ein Erfolg.\nEin junger Spieler stößt zu Ihrem Kader.");
+            manager_news_[size_t(m)].push_back("Ihre Talentsuche war ein Erfolg.\nEin junger Spieler stößt zu Ihrem Kader.");
         }
     } else {
         talent_message("Ihr Talentsp{her gibt die", "Suche ohne Erfolg auf... Pech...");
-        manager_news_.push_back("Ihr Talentspäher gibt die\nSuche ohne Erfolg auf... Pech...");
+        manager_news_[size_t(m)].push_back("Ihr Talentspäher gibt die\nSuche ohne Erfolg auf... Pech...");
     }
 }
 

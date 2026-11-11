@@ -4389,7 +4389,7 @@ static void checkpoint_format() {
     CHECK(encode_game_checkpoint(decoded) == bytes);
     // A genuine version1 layout ends directly after its offers. It remains
     // readable and gets the explicitly historical2/3 default without RNG.
-    Bytes legacy(bytes.begin(),bytes.end()-272); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1 + v8 table-copy flags2 + v9 penalty timers8
+    Bytes legacy(bytes.begin(),bytes.end()-274); // v2 counters12 + v3 gates44 + v4 history201 + v5 cursors3 + v6 scorer slot1 + v7 message flag1 + v8 table-copy flags2 + v9 penalty timers8 + v10 daily factor1 and manager count1
     const auto patch32=[&](size_t at,uint32_t value){for(int b=0;b<4;b++)legacy[at+size_t(b)]=uint8_t(value>>(8*b));};
     patch32(8,1);patch32(12,uint32_t(legacy.size()-20));
     uint32_t crc=0xFFFFFFFFu;
@@ -4400,49 +4400,76 @@ static void checkpoint_format() {
     CHECK(v1.borland_random==source.borland_random&&v1.game_random==source.game_random);
     CHECK(v1.stadium_refusals==(std::array<std::array<uint8_t,11>,4>{}));
     // Version2 includes row counters, but predates process-local stadium gates.
-    legacy.assign(bytes.begin(),bytes.end()-260);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-262);patch32(8,2);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v2=decode_game_checkpoint(legacy);
     CHECK(v2.line_counts==source.line_counts&&v2.stadium_refusals==v1.stadium_refusals);
     CHECK(v1.save_history==NativeSaveHistory{}&&v2.save_history==NativeSaveHistory{});
     // Version3 contains the construction gates, but has no identity history.
-    legacy.assign(bytes.begin(),bytes.end()-216);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-218);patch32(8,3);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v3=decode_game_checkpoint(legacy);
     CHECK(v3.line_counts==source.line_counts&&v3.stadium_refusals==source.stadium_refusals&&v3.save_history==NativeSaveHistory{});
     CHECK(v1.annual_distribution_cursors==(std::array<uint8_t,3>{})&&v2.annual_distribution_cursors==v1.annual_distribution_cursors&&v3.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version4 retains history but predates the three session cursors.
-    legacy.assign(bytes.begin(),bytes.end()-15);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-17);patch32(8,4);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v4=decode_game_checkpoint(legacy);
     CHECK(v4.save_history==source.save_history&&v4.annual_distribution_cursors==v1.annual_distribution_cursors);
     // Version5 has the cursors but not the scorer slot of the last pick.
-    legacy.assign(bytes.begin(),bytes.end()-12);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-14);patch32(8,5);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v5=decode_game_checkpoint(legacy);
     CHECK(v5.annual_distribution_cursors==source.annual_distribution_cursors&&v5.last_scorer_slot==0);
     // Version6 has the scorer slot but no message step flag (loads as due).
-    legacy.assign(bytes.begin(),bytes.end()-11);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-13);patch32(8,6);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v6=decode_game_checkpoint(legacy);
     CHECK(v6.last_scorer_slot==source.last_scorer_slot&&v6.message_step_pending);
     // Version7 has the message step flag but no table-copy flags (the copies follow the table).
-    legacy.assign(bytes.begin(),bytes.end()-10);patch32(8,7);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-12);patch32(8,7);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v7=decode_game_checkpoint(legacy);
     CHECK(v7.message_step_pending==source.message_step_pending&&!v7.table_copies_frozen&&!v7.league_since_refresh);
     // Version8 has the table-copy flags but no penalty timers (they load cleared, as after a native load).
-    legacy.assign(bytes.begin(),bytes.end()-8);patch32(8,8);patch32(12,uint32_t(legacy.size()-20));
+    legacy.assign(bytes.begin(),bytes.end()-10);patch32(8,8);patch32(12,uint32_t(legacy.size()-20));
     crc=0xFFFFFFFFu;
     for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
     patch32(16,~crc);const auto v8=decode_game_checkpoint(legacy);
     CHECK(v8.table_copies_frozen&&v8.club_timers.role[0]==0&&v8.club_timers.slot[1]==-1);
+    // Version9 has the timers but no further managers (a v9 game had one manager in the checkpoint).
+    legacy.assign(bytes.begin(),bytes.end()-2);patch32(8,9);patch32(12,uint32_t(legacy.size()-20));
+    crc=0xFFFFFFFFu;
+    for(size_t i=20;i<legacy.size();i++){crc^=legacy[i];for(int b=0;b<8;b++)crc=(crc>>1)^(0xEDB88320u&(0u-(crc&1u)));}
+    patch32(16,~crc);const auto v9=decode_game_checkpoint(legacy);
+    CHECK(v9.club_timers.role[0]==3&&v9.other_managers.empty()&&v9.daily_luck==100);
+    // Version10: the runtime fields of managers 1..3 round-trip.
+    {
+        GameCheckpoint multi=source;multi.daily_luck=113;
+        for(int m=1;m<=3;m++){
+            CheckpointManager x;
+            x.rotation.used[0][1]=uint8_t(10*m);x.timers.role[1]=m;x.timers.slot[0]=m+3;
+            x.injured_roles[size_t(m)]=7;x.squad_status[2]=uint8_t(SquadStatus::Team);
+            x.team_strength=200+m;x.players=20+m;x.squad_costs=1000*m;x.pool_costs=-m;
+            if(m==2)x.offers.push_back({55,17,false,9999});
+            multi.other_managers.push_back(x);
+        }
+        const Bytes encoded=encode_game_checkpoint(multi);
+        const auto back=decode_game_checkpoint(encoded);
+        CHECK(back.daily_luck==113&&back.other_managers.size()==3&&back.other_managers[1].offers.size()==1&&back.other_managers[1].offers[0].player==55);
+        CHECK(back.other_managers[2].rotation.used[0][1]==30&&back.other_managers[0].timers.slot[0]==4&&back.other_managers[2].pool_costs==-3);
+        CHECK(back.other_managers[0].injured_roles[1]==7&&back.other_managers[1].team_strength==202);
+        CHECK(encode_game_checkpoint(back)==encoded);
+        multi.other_managers.push_back(CheckpointManager{});bool too_many=false;
+        try{(void)encode_game_checkpoint(multi);}catch(const FormatError&){too_many=true;}
+        CHECK(too_many);
+    }
     const auto rejects = [](const Bytes& bad) {
         try { (void)decode_game_checkpoint(bad); return false; } catch (const FormatError&) { return true; }
     };
