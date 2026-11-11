@@ -4,8 +4,8 @@
 //
 // Where the original plays sound:
 //   - Title screen (ovr034:0758..07F3): KB\197 is shown, ovr034:007B loads KB\248.vga (CMF) and starts it through
-//     SBFMDRV, the program waits for a key or click (sub_1E26E), then stops the music (ovr034:0174). OpenEM has no
-//     title screen yet: the music starts with the window and stops at the first key or click.
+//     SBFMDRV, the program waits for a key or click (sub_1E26E), then stops the music (ovr034:0174). OpenEM shows
+//     the title (ClassicApplication::show_title); the music starts with the window and stops at the first key or click.
 //   - Goal scenes (ovl14_4938 = ovr038:4938): with the CT-VOICE driver present (DS:4A44) the scene starts KB\237 (an
 //     endless loop, crowd) and restarts it whenever the voice is idle (status word DS:59E4 == 0, ovr038:4E80/4EDB/4F07);
 //     a frame whose byte +3 is s = 1..4 stops the voice and plays KB\(237 + s) (ovr038:4EB5); the end of the scene

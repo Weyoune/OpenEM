@@ -26,6 +26,45 @@ std::string native_text(const Bytes& b, size_t at, size_t n) {
 }
 }  // namespace
 
+void step_new_game_option(NewGameOptions& o, int row, int direction) {
+    if (row < 0 || row > 3 || direction < -1 || direction > 1) throw FormatError("Neues Spiel: ungültige Einstellung");
+    auto& v = o.values;
+    v[size_t(row)] += direction;
+    if (v[1] == 0 && v[2] != 0) v[size_t(row)] -= direction;  // ovr027:08DE
+    else v[size_t(row)] = std::clamp(v[size_t(row)], 0, kNewGameOptionMax[size_t(row)]);
+}
+
+bool toggle_new_game_mode(NewGameOptions& o, int button, int named_managers) {
+    if (button == 0 && named_managers > 1) return false;  // ovr027:06E0..070E: back to the menu loop (var_2F = 0)
+    o.mode ^= button == 0 ? 1 : 2;
+    return true;
+}
+
+uint16_t new_game_highscore_file(const NewGameOptions& o) {
+    const auto& v = o.values;
+    const bool listed = o.mode == 2 || ((o.mode & 1) && v[0] > 2 && (v[3] == 1 || (v[1] == 0 && v[2] == 0)));
+    if (!listed) return 0;
+    if (o.mode == 2) return 30000;
+    return uint16_t(v[0] + (v[1] << 2) + (v[2] << 5) + (v[3] << 7) - 2);
+}
+
+void apply_new_game_options(HokFile& h, const NewGameOptions& o) {
+    Bytes& s = h.state;
+    for (size_t i = 0; i < 4; i++) {
+        if (o.values[i] < 0 || o.values[i] > kNewGameOptionMax[i]) throw FormatError("Neues Spiel: ungültige Einstellung");
+        s.at(0x28 + i) = uint8_t(o.values[i]);
+    }
+    if (o.mode < 0 || o.mode > 3) throw FormatError("Neues Spiel: ungültiger Spielmodus");
+    s.at(0x025A) = o.mode == 3 ? 4 : uint8_t((o.mode == 2 ? 1 : 0) + (o.mode == 1 ? 2 : 0));
+    const int end = o.values[1] == 3 ? 0x56CE : 0x7CA + 2 * o.values[1];
+    s.at(0xAEB5) = uint8_t(end);
+    s.at(0xAEB6) = uint8_t(end >> 8);
+    s.at(0xAEB4) = uint8_t(5 - o.values[0]);
+    const uint16_t file = new_game_highscore_file(o);
+    s.at(0x06AE) = uint8_t(file);
+    s.at(0x06AF) = uint8_t(file >> 8);
+}
+
 bool is_new_game_base(const HokFile& h) {
     return h.state.size() > kSquad + kSquadSlots * kSquadSize && h.date.year == 1993 && h.date.day_index == 1 &&
            h.state.at(kManagerCount) == 1;
@@ -93,7 +132,8 @@ HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSet
 }
 
 HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& base, const std::vector<NewGameSetup>& managers,
-                        uint16_t seed) {
+                        uint16_t seed, const NewGameOptions* options, std::vector<int>* cup_places,
+                        std::vector<int>* cup_reveal) {
     if (!is_new_game_base(base)) throw FormatError("Neues Spiel: kein frischer Startstand");
     if (managers.size() < 2 || managers.size() > 4) throw FormatError("Neues Spiel: zwei bis vier Manager");
     const Bytes& s = base.state;
@@ -101,6 +141,13 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
     settings.level = std::clamp(int(s.at(0x28)), 0, 5);       // DS:0118
     settings.end_choice = std::clamp(int(s.at(0x29)), 0, 3);  // DS:0119
     settings.squad_size = std::clamp(int(s.at(0x2A)), 0, 2);  // DS:011A
+    if (options) {
+        settings.level = options->values[0];
+        settings.end_choice = options->values[1];
+        settings.squad_size = options->values[2];
+        settings.start_mode = options->mode;
+        settings.cup_live = options->cup_live;
+    }
     const WorldSeeds seeds{seed, seed, seed};
     // The league shuffle runs before the start menu (ovl06_099d), so it does not depend on the managers:
     // a first run with a placeholder manager gives the club order the generated world will have.
@@ -119,7 +166,25 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
         settings.managers.push_back(WorldManager{m.name.substr(0, 18), m.face, team});
     }
     // youth teams, balances and reporting modes of the managers: generate_world (ovr027:1B27..1DE8)
-    return generate_world(exe, db_raw, settings, seeds).save;
+    WorldResult result = generate_world(exe, db_raw, settings, seeds);
+    if (cup_places) *cup_places = result.cup_places;
+    if (cup_reveal) *cup_reveal = result.cup_reveal;
+    HokFile world = std::move(result.save);
+    if (!options) return world;
+    // DS:011B (squad strength) and the highscore list DS:0256 of the menu; the generator does not write them
+    // (its new squads ignore the strength choice, see docs/DEVIATIONS.md)
+    apply_new_game_options(world, *options);
+    return decode_hok(encode_hok(world));
+}
+
+HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSetup& setup, const NewGameOptions& options) {
+    HokFile h = start_new_game(base, db, setup);
+    apply_new_game_options(h, options);
+    // ovr027:1B27..1DE8 gives the new manager the balance DS:0ED8 * 150000 + 1200000 (+0x18F); the start state has the
+    // one of its own level (choice 5: 1200000). Salaries and squads of the start state stay (docs/DEVIATIONS.md).
+    const uint32_t balance = uint32_t(5 - options.values[0]) * 150000u + 1200000u;
+    for (size_t b = 0; b < 4; b++) h.state.at(kManagers + 0x18F + b) = uint8_t(balance >> (8 * b));
+    return decode_hok(encode_hok(h));
 }
 
 }  // namespace em

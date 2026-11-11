@@ -17,6 +17,8 @@ key return
 click 150 60
 click 210 60
 click 280 213
+# the DEB cup question "An Alle:" (ovl05_4653) before the draw of the new game: "Kein Gedanke"
+click 190 172
 expect screen=Main
 expect date=09.09.1993
 render new-game.bmp

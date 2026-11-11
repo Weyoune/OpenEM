@@ -45,15 +45,18 @@ void ClassicApplication::open_highscore() {
     if (number == 0) return;  // ovr040:30ED returns at once: this game setting keeps no list
     try {
         if (!m.tables) m.tables = load_highscore_tables(read_file(data_ / "EM.EXE"));
-        HighscoreRecord record;
-        action([&](Game& game) { record = game.highscore_record(active_manager(), *m.tables); return ActionResult{}; });
         const fs::path own = saves_ / highscore_file_name(number), seed = data_ / highscore_file_name(number);
         std::error_code ec;
         m.highscore = fs::exists(own, ec) ? read_highscore_table(read_file(own))
                      : fs::exists(seed, ec) ? read_highscore_table(read_file(seed)) : HighscoreTable{};
         m.game = highscore_game_identity(session_.game().save());
         m.wm_only = session_.game().save().state.at(0x025A) == 1;
-        merge_highscore(m.highscore, record, m.game);
+        // ovr040:3131..3150: the score of every manager in turn (sub_698D2), each merged into the list (sub_69B4D)
+        for (int manager = 0; manager < session_.game().managers(); manager++) {
+            HighscoreRecord record;
+            action([&](Game& game) { record = game.highscore_record(manager, *m.tables); return ActionResult{}; });
+            merge_highscore(m.highscore, record, m.game);
+        }
         store(own, m.highscore);
         screen_ = ClassicScreen::Highscore;
     } catch (const std::exception& e) {
@@ -78,6 +81,7 @@ void ClassicApplication::draw_misc() {
 void ClassicApplication::click_misc(int x, int y, bool right) {
     if (!misc_ || screen_ == ClassicScreen::Highscore) {  // ovr040:33B8 waits for any click
         screen_ = ClassicScreen::Main;
+        if (game_end_ == 1) game_end_ = 2;  // the end of the game goes on with "Das wars..."
         return;
     }
     if (misc_->start_base) { click_start_menu(x, y, right); return; }
@@ -113,20 +117,29 @@ void ClassicApplication::click_start_menu(int x, int y, bool right) {
     for (const auto& r : m.setup.rows())
         if (r.face >= 0 && r.team >= 0 && r.name.size() >= 2) managers.push_back({r.name, r.face, r.team});
     if (managers.empty()) return;
-    const bool wm_only = m.setup.mode_bits() == kStartModeWm;  // "Nur WM" (game/wm_mode.hpp, classic_wm_mode.cpp)
-    if (wm_only && managers.size() > 1) return;               // the icon switches only for a single manager
-    try {
-        if (wm_only) session_.start_wm_game(managers.front());
-        else
-        session_.start_new_game(managers);
-        m.start_base.reset();
-        invalidate();
-        screen_ = ClassicScreen::Main;
-        table_order_ = session_.game().league(division_).ranking;
-        if (!wm_only) ask_cup_draw();  // ovl05_4c7b(0, 0) at the start of the game (classic_hotseat.cpp); ovr029:467B skips it in "Nur WM"
-    } catch (const std::exception& e) {
-        notice(e.what());
+    // "Nur WM" (game/wm_mode.hpp, classic_wm_mode.cpp): one manager, the national coach; ovr029:467B skips the cup question
+    if (m.setup.mode_bits() == kStartModeWm) {
+        if (managers.size() > 1) return;  // the icon switches only for a single manager
+        try {
+            session_.start_wm_game(managers.front());
+            m.start_base.reset();
+            invalidate();
+            screen_ = ClassicScreen::Main;
+            table_order_ = session_.game().league(division_).ranking;
+        } catch (const std::exception& e) {
+            notice(e.what());
+        }
+        return;
     }
+    // ovl05_4c7b(0, 0) during the set-up asks the DEB cup question (ovl05_4653) before its draw: with the display switch
+    // of the start state (DS:0227, state 0xA526) on and not in the WM-only mode (var_57 = 2 -> DS:D0B9 = 1) the game
+    // waits for the answer (classic_cup_draw.cpp finish_new_game), else it starts at once
+    pending_start_ = PendingStart{managers, m.setup.options()};
+    if (m.start_base->state.at(0xA526) && m.setup.options().mode != 2) {
+        ask_cup_draw();
+        return;
+    }
+    finish_new_game(false);
 }
 
 void ClassicApplication::key_misc(int key) {
@@ -135,6 +148,25 @@ void ClassicApplication::key_misc(int key) {
 
 void ClassicApplication::text_misc(std::string_view text) {
     if (misc_ && screen_ == ClassicScreen::NewManager) misc_->setup.text(text);
+}
+
+// The end year (Game::game_over, day loop 6af8 before 162c:1c5b): the highscore of all managers (ovl16_30ed, nothing
+// when the settings keep no list), then ovl14_00ad: the screen cleared to colour 0 (1902:0800), font 1, "Das wars..."
+// (DS:543D) centred in 8..0x13F at baseline 100 in colour 7 and "Carpe diem !" (DS:5449) at 0x8C in colour 0x1E, in the
+// palette of the page before; a press ends the program (ovl00_058a).
+void ClassicApplication::begin_game_end() {
+    advancing_ = false;
+    category_ = -1;
+    match_frames_.clear();
+    game_end_ = 2;
+    open_highscore();
+    if (screen_ == ClassicScreen::Highscore) game_end_ = 1;
+}
+
+void ClassicApplication::draw_game_end() {
+    canvas_.rect(0, 0, 0x13F, 0xEF, 0);
+    canvas_.text(ClassicFontId::NewBold, 8, 100, "Das wars...", 7, -1, 0x13F);
+    canvas_.text(ClassicFontId::NewBold, 8, 0x8C, "Carpe diem !", 0x1E, -1, 0x13F);
 }
 
 }  // namespace em::ui

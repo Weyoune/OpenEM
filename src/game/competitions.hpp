@@ -49,10 +49,15 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
                                      int* phantom_role = nullptr);  // set to the role of a phantom release (pair-table write), else unchanged
 
 // Native redraw: twenty random swaps, then home ice for the lower division.
-std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng);
+// places (optional): the clubs in place order after the swaps (DS:D04B), before the home rights.
+std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng, std::vector<int>* places = nullptr);
 
 // Native first round: 32 entrants from clubs 0..35; every human club is guaranteed a slot.
-std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng);
+std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng, std::vector<int>* places = nullptr);
+
+// The live draw ("Aber klar", ovl05_4c7b / ovl05_536d -> ovl05_492e): the n places are uncovered in the order
+// rand(0, n - 1), a place already open is drawn again. Returns the places in uncovering order.
+std::vector<int> cup_reveal_order(int places, BorlandRandom& rng);
 
 // ovl05_52bf: pairs a list of clubs two by two and gives the first home game to the lower division.
 std::vector<HokPairing> cup_home_rights(const std::vector<int>& pool);

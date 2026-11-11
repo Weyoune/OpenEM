@@ -42,6 +42,7 @@ struct WorldSettings {
     int end_choice = 0;  // DS:0119: 0..2 -> last season 1994/1996/1998 (DS:5A14 = 0x7CA + 2 x), 3 -> 22222
     int squad_size = 0;  // DS:011A: group sizes DS:0169 + 4 x: 0 = 2/10/13, 1 = 2/9/11, 2 = 2/8/10
     int start_mode = 0;  // menu variable var_57 (0..3): DS:D0B9 = 0, 2, 1, 4
+    bool cup_live = false;  // "Aber klar" to the DEB cup question of ovl05_4c7b(0, 0): the places are uncovered (Borland)
 };
 
 // The three srand(time()) seeds (low 16 bits of time(), _srand 1000:0B4A via ovl00_0571).
@@ -58,6 +59,7 @@ struct WorldResult {
     uint32_t game_random = 0;                        // DS:E017 after the generator
     uint32_t borland = 0;                            // Borland seed after the 90 market days
     uint32_t session_id = 0;                         // DS:02C4
+    std::vector<int> cup_places, cup_reveal;         // first DEB cup round: clubs per place, uncovering order (cup_live)
     std::vector<std::string> log;                    // steps and draw counts (for debugging)
 };
 

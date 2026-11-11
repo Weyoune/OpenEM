@@ -85,23 +85,38 @@ void Session::load(const std::filesystem::path& file, uint32_t seed) {
     contract_answers_.clear();
     contract_question_.reset();
     news_.clear();
+    start_cup_places_.clear();
+    start_cup_reveal_.clear();
     add_news("Spielstand geöffnet: " + path_text(file.filename()));
 }
 
 bool Session::can_start_new_game() const { return database_ && find_new_game_base(data_directory_).has_value(); }
 
-void Session::start_new_game(const NewGameSetup& setup, uint32_t seed) {
+void Session::start_new_game(const NewGameSetup& setup, uint32_t seed, const NewGameOptions* options) {
     const auto base = find_new_game_base(data_directory_);
-    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
-    start_from(encode_hok(em::start_new_game(decode_hok(read_file(*base)), *database_, setup)), seed);
+    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\23.vga gefunden.");
+    const HokFile start = decode_hok(read_file(*base));
+    start_from(encode_hok(options ? em::start_new_game(start, *database_, setup, *options) : em::start_new_game(start, *database_, setup)), seed);
+    // the stored first round (state 0x8E51: home, away per pair) and, for the live draw, an order from a copy of the
+    // Borland state: the start state was written after its draw, so the game does not take these draws
+    const Bytes& s = game_->save().state;
+    for (size_t i = 0; i < 32 && s.at(0x8E51 + i) != 0xFF; i++) start_cup_places_.push_back(s.at(0x8E51 + i));
+    if (options && options->cup_live) {
+        BorlandRandom copy(game_->borland_state());
+        start_cup_reveal_ = cup_reveal_order(int(start_cup_places_.size()), copy);
+    }
 }
 
-void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed) {
-    if (managers.size() == 1) return start_new_game(managers.front(), seed);
+void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed, const NewGameOptions* options) {
+    if (managers.size() == 1) return start_new_game(managers.front(), seed, options);
     const auto base = find_new_game_base(data_directory_);
-    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
+    if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\23.vga gefunden.");
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
-    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed))), seed);
+    std::vector<int> places, reveal;
+    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed), options, &places, &reveal)),
+               seed);
+    start_cup_places_ = std::move(places);
+    start_cup_reveal_ = std::move(reveal);
 }
 
 void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
@@ -124,6 +139,8 @@ void Session::start_from(const Bytes& bytes, uint32_t seed) {
     contract_answers_.clear();
     contract_question_.reset();
     news_.clear();
+    start_cup_places_.clear();
+    start_cup_reveal_.clear();
     add_news("Neues Spiel gestartet.");
 }
 
@@ -155,6 +172,8 @@ void Session::commit(std::unique_ptr<Game> next, const Bytes& before) {
     const bool changed = next->checkpoint_bytes() != before;
     next->set_contract_decider({});  // never retain callbacks referring to a staged stack frame
     next->set_match_observer({});
+    next->set_cup_draw_decider({});
+    next->set_cup_reveal_observer({});
     game_ = std::move(next);
     save_history_=game_->native_save_history();
     dirty_ = dirty_ || changed;
@@ -215,6 +234,13 @@ bool Session::advance_day() {
         ~LiveScope() { slot = nullptr; }
     } live_scope{live_game_};
     if (match_observer_) live_game_ = next.get();
+    if (cup_draw_decider_) next->set_cup_draw_decider(cup_draw_decider_);
+    if (cup_reveal_observer_) {
+        Game* staged = next.get();
+        next->set_cup_reveal_observer([this, staged](const std::vector<int>& order, const std::vector<int>& places) {
+            cup_reveal_observer_(*staged, order, places);
+        });
+    }
     try {
         next->advance_day();
     } catch (const NeedContract&) {

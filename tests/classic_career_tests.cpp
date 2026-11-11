@@ -189,6 +189,8 @@ int main(int argc, char** argv) {
             app.click(156, 60, false);  // crest column, row 0
             app.click(210, 60, false);  // second crest of the first page
             app.click(282, 212, false); // Los jetzt!
+            check(!app.session().loaded() && app.screen() == ClassicScreen::NewManager, "the cup question comes before the game");
+            app.click(190, 172, false); // "Kein Gedanke" (ovl05_4653 asks before the draw)
             require(app.session().loaded(), "Los jetzt! starts the game");
             check(app.screen() == ClassicScreen::Main, "main menu after the start");
             const HokFile& g = app.session().game().save();

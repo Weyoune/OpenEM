@@ -43,6 +43,10 @@ public:
     void text_input(std::string_view text);
     void request_exit();
     bool finished() const { return finished_; }
+    // Title screen (ovr034:0799..07E5): KB197 with its palette until the first key or click (sub_1E26E, sub_19B08),
+    // then the program goes on to the start menu or the loaded game. Only the interactive start shows it.
+    void show_title() { title_ = true; }
+    bool title() const { return title_; }
     const ClassicCanvas& canvas() const { return canvas_; }
     const Session& session() const { return session_; }
     ClassicScreen screen() const { return screen_; }
@@ -159,8 +163,30 @@ private:
     // A question to one manager at the same seat (FUN_00146858 with his index: his name as the title, -1 = "An Alle:"),
     // here the owner's answer to a bid of another manager (classic_hotseat.cpp).
     struct ManagerQuestion { int manager=-1; std::string line1,line2,yes,no; bool unfair=false; PurchaseDraft offer;
-                             std::string line3; bool cup_draw=false; };  // cup_draw: the DEB cup draw board (ovl05_4653)
+                             std::string line3; bool cup_draw=false; int cup_clubs=32; };  // cup_draw: the DEB cup draw board (ovl05_4653)
     void ask_cup_draw();
+    // The live DEB cup draw (classic_cup_draw.cpp): the answer of the cup question, a new game waiting for it, and the
+    // uncovering of the places (ovl05_492e) with "TASTE DR]CKEN" and the cup page (ovl05_4b97).
+    struct CupLiveDraw;
+    std::shared_ptr<CupLiveDraw> cup_live_;
+    std::optional<bool> cup_answer_;
+    bool in_day_pump_=false;  // the frontend loop runs inside Session::advance_day (cup question)
+    struct PendingStart { std::vector<NewGameSetup> managers; NewGameOptions options; };
+    std::optional<PendingStart> pending_start_;
+    void install_cup_draw_handlers();
+    bool cup_draw_question(int clubs);  // inside advance_day: the question, true for "Aber klar"
+    void start_cup_live(const HokFile& after, const std::vector<int>& places, const std::vector<int>& order, bool in_day);
+    void finish_new_game(bool cup_live);
+    void draw_cup_live();
+    void tick_cup_live();
+    void click_cup_live(int x,int y,bool right);
+    bool cup_live_waiting() const;
+    bool cup_live_page() const;
+    // End of the game at the end year (Game::game_over): 1 = the highscore page (ovl16_30ed), 2 = "Das wars..."
+    // (ovl14_00ad) until a press, then the program ends (classic_misc_input.cpp).
+    int game_end_ = 0;
+    void begin_game_end();
+    void draw_game_end();
     std::optional<ManagerQuestion> manager_question_;
     void draw_manager_question();
     void click_manager_question(int x,int y,bool right);
@@ -205,6 +231,7 @@ private:
     void open_statistics(int item);
     void draw_statistics();
     void click_statistics(int x,int y,bool right);
+    void open_stats_player(int x,int y);  // Statistiken -> Spieler: press on a listed player (ovr025:0CDA)
     bool render_statistics(std::string_view name);
     void open_tactics();
     void open_lineup();
@@ -241,7 +268,7 @@ private:
     ClassicScreen screen_ = ClassicScreen::Main;
     int category_=-1, division_=0, table_view_=1;
     std::array<int,12> table_order_{};
-    bool finished_=false, quit_question_=false, advancing_=false, advance_first_=false;
+    bool finished_=false, quit_question_=false, advancing_=false, advance_first_=false, title_=false;
     int advanced_days_=0;
     int strengths_league_=0,strengths_mode_=0;
     int euro_page_=3;

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "formats/hok.hpp"
+#include "game/new_game.hpp"
 #include "ui/classic_canvas.hpp"
 
 namespace em::ui {
@@ -37,7 +38,7 @@ public:
     void open_start(const HokFile& base);
     bool start_mode() const { return start_mode_; }
     // The two mode icons (menu variable var_57, game/wm_mode.hpp): bit 0 Liga/Cup, bit 1 WM; 2 = "Nur WM".
-    int mode_bits() const { return mode_; }
+    int mode_bits() const { return options_.mode; }
     void draw(ClassicCanvas& canvas, const HokFile& h, int mouse_x, int mouse_y) const;
     Result click(const HokFile& h, int x, int y, bool right);
     void key(int key);
@@ -48,6 +49,7 @@ public:
     int active_row() const { return row_; }
     bool editing_name() const { return editing_; }
     int club_page() const { return page_; }
+    const NewGameOptions& options() const { return options_; }
 
 private:
     void close_panel();
@@ -63,9 +65,8 @@ private:
     std::set<std::pair<int, int>> erased_;  // marks overdrawn in colour 8
     mutable std::pair<int, int> hover_{-1, -1};  // last framed board cell (stays when the pointer leaves the board)
     int pressed_arrow_ = 0;                  // scroll arrow held down: -1 up, +1 down
-    std::array<uint8_t, 4> options_{};       // state 0x28 (DS:0118): level, duration, league, strength
+    NewGameOptions options_{};               // state 0x28 (DS:0118): level, duration, squad size, strength; var_57
     bool highscore_ = false;                 // DS:0256 != 0: notepad instead of the bare nail
     bool start_mode_ = false;                // ovr027:0135 argument 1 (new game)
-    int mode_ = 3;                           // var_57, ovr027:0161
 };
 }  // namespace em::ui

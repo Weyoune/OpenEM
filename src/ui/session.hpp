@@ -62,11 +62,12 @@ public:
     void load(const std::filesystem::path& file, uint32_t seed = 1);
     // A new game from the fresh start state of the data directory (game/new_game.hpp, start menu "Los jetzt!").
     bool can_start_new_game() const;
-    void start_new_game(const NewGameSetup& setup, uint32_t seed = 1);
+    // options: the start menu settings (game/new_game.hpp NewGameOptions); nullptr keeps those of the start state.
+    void start_new_game(const NewGameSetup& setup, uint32_t seed = 1, const NewGameOptions* options = nullptr);
     // Two to four managers (hot seat): the world of the new-game generator (game/new_game.hpp start_new_world).
-    void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1);
     // The start menu with only the WM icon on ("Nur WM", game/wm_mode.hpp): one manager, the national coach.
     void start_wm_game(const NewGameSetup& setup, uint32_t seed = 1);
+    void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1, const NewGameOptions* options = nullptr);
     // The manager the UI acts for (Game::select_manager). It is not part of a checkpoint, so the session keeps it and
     // gives it to every staged game; loading or starting a game selects manager 0.
     bool select_manager(int manager);
@@ -78,6 +79,18 @@ public:
     // Observer of the minute loops of the next advance_day (match display); called with the staged game, read-only.
     using MatchObserver = std::function<void(const Game& game, int minute, const std::vector<LiveMatch>& matches)>;
     void set_match_observer(MatchObserver observer) { match_observer_ = std::move(observer); }
+    // The live DEB cup draw of later rounds (Game::set_cup_draw_decider / set_cup_reveal_observer), given to every staged
+    // game of advance_day; the observer also gets the staged game (read-only).
+    using CupRevealObserver = std::function<void(const Game& game, const std::vector<int>& order, const std::vector<int>& places)>;
+    void set_cup_draw_handlers(Game::CupDrawDecider decider, CupRevealObserver observer) {
+        cup_draw_decider_ = std::move(decider);
+        cup_reveal_observer_ = std::move(observer);
+    }
+    // The first DEB cup round of the last new game: clubs per place and, after "Aber klar" (NewGameOptions::cup_live),
+    // the uncovering order. A new game from the start state shows its stored pairs (home, away) and draws the order
+    // from a copy of the Borland state, so the game itself stays as without the live draw (docs/DEVIATIONS.md).
+    const std::vector<int>& start_cup_places() const { return start_cup_places_; }
+    const std::vector<int>& start_cup_reveal() const { return start_cup_reveal_; }
     bool answer_contract(bool renew);  // "Mach' ich!" on the unchanged proposal or "Abbruch"
     bool answer_contract(const Game::ContractTerms& terms);
     void cancel_advance();
@@ -103,6 +116,9 @@ private:
     // The staged game of a running advance_day while its minutes are shown (match display): game() and apply() act on it, so
     // the lineup, tactics and Einstellungen opened from the minute loop change the running day like in the original.
     Game* live_game_ = nullptr;
+    Game::CupDrawDecider cup_draw_decider_;
+    CupRevealObserver cup_reveal_observer_;
+    std::vector<int> start_cup_places_, start_cup_reveal_;
 };
 
 // Publish a complete new save atomically. Existing destinations are never
