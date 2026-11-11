@@ -208,7 +208,7 @@ namespace em {
 // watched list after a home game of the human club are the same (REAL-CODE whole-program test).
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
                                      const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer,
-                                     int* loop_minutes, bool playoff, size_t knockout_pairs) {
+                                     int* loop_minutes, bool playoff, size_t knockout_pairs, int* phantom_role) {
     struct Entry {
         int home, away;
         std::unique_ptr<MatchRun> run;
@@ -235,7 +235,12 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         more = false;
         if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
             for (auto& e : entries) e.run->overtime_break();
-        for (auto& e : entries) more = e.run->step() || more;
+        for (auto& e : entries) {
+            more = e.run->step() || more;
+            // a manager penalty without a bound player ending here writes through the slot -1 record into the pair table
+            // as in a league match (DEVIATIONS.md, REAL-CODE Köln period 143); only the stored table is affected
+            if (const int role = e.run->take_phantom_release(); role >= 0 && phantom_role) *phantom_role = role;
+        }
         if (observer) (*observer)(minute_number + 1, live);
         minute_number++;
         if (brng && (minute_number == 20 || minute_number == 40)) {

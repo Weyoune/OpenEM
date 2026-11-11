@@ -839,8 +839,9 @@ void Game::play_cup_day() {
             sq.on_shot = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, true, goal, &team, &working, m); };
             sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(1, goal, team); };
         }
-    int loop_minutes = 60;
-    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &loop_minutes) : play_cup_round(save_.teams, draw, rng_, side);
+    int loop_minutes = 60, phantom_role = -1;
+    const auto ties = live ? play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &loop_minutes, false, size_t(-1), &phantom_role) : play_cup_round(save_.teams, draw, rng_, side);
+    apply_phantom_pairs(phantom_role);
     if (live) injuries_in_minutes_ = true;  // the injury checks ran inside the minutes
     for (int m = 0; m < managers_; m++) {
         HumanSquad& sq = mgr_[size_t(m)].squad;
@@ -1230,6 +1231,17 @@ void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
         }
         break;
     }
+}
+
+// ovr030:0151 through the slot -1 record DS:5D8F (see season.cpp): in a cup or play-off round only the stored Oberliga row of
+// the pair table changes: the away team of pair 2 loses bit 0, the home team of pair 3 takes the role, the away team of pair 4
+// becomes 0 (REAL-CODE Köln period 143: both 0 after a live play-off day with Köln)
+void Game::apply_phantom_pairs(int role) {
+    if (role < 0 || std::getenv("EM_OLD_ROUNDPHANTOM")) return;
+    auto& ob = save_.pairings[2];
+    ob[2].away &= ~1;
+    ob[3].home = role;
+    ob[4].away = 0;
 }
 
 // 162c:2337 (league only, byte_32092 == 7) and 162c:068d: every goalkeeper (player +0x18 == 0) of the manager's squad with a
@@ -2389,7 +2401,9 @@ void Game::play_playoff_day(bool setup_only) {
             sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
         }
         g_draw_scope = "playoff-live";
-        const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &po_loop_minutes, true, knockout_pairs);
+        int po_phantom = -1;
+        const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr, &po_loop_minutes, true, knockout_pairs, &po_phantom);
+        apply_phantom_pairs(po_phantom);
         for (size_t k = knockout_pairs; k < ties.size(); k++) relegation_live.push_back(ties[k].result);
         injuries_in_minutes_ = true;
         for (int m = 0; m < managers_; m++) {

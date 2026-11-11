@@ -44,7 +44,8 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
                                      const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer = nullptr,
                                      int* loop_minutes = nullptr,  // the last minute of the round's minute loop (60..70)
                                      bool playoff = false,  // play-off mode DS:76B2 (halved goal points)
-                                     size_t knockout_pairs = size_t(-1));  // pairs from this index on play without overtime (relegation round)
+                                     size_t knockout_pairs = size_t(-1),  // pairs from this index on play without overtime (relegation round)
+                                     int* phantom_role = nullptr);  // set to the role of a phantom release (pair-table write), else unchanged
 
 // Native redraw: twenty random swaps, then home ice for the lower division.
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng);

@@ -397,6 +397,7 @@ private:
     void prepare_human_lineup(bool restore_saved_mode = true, int m = 0);
     void match_injuries(int m = 0);
     void injury_minute(int load, const HokTeam* on_ice = nullptr, int m = 0);  // ovl06_364f for one minute of the human club's match
+    void apply_phantom_pairs(int role);  // the pair-table write of a phantom release outside a league day (role < 0: none)
     void goalie_minute(int conceded, int m);  // 162c:068d / 162c:2337 at the end of a league match minute
     void make_offers(int m = 0);
     void restore_offers(int m = 0);
