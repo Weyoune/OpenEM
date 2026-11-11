@@ -1214,7 +1214,10 @@ void Game::injury_minute(int load, const HokTeam* on_ice, int m) {
         const HokSquadPlayer& sp = save_.squad_of(m)[slot];
         const uint8_t* r = save_.state.data() + squad_block(m) + slot * kSquadRecord;
         if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
-        if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury pick slot %zu line %d role %d lines on ice %d/%d\n", slot, sp.line, sp.role, on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
+        // the original's squad record is the running lineup: a player in the penalty box has role 0 there (REAL-CODE Köln
+        // period 196: two Köln players in the box, the pick of a penalised forward is rejected)
+        if (const auto* live = g_minute_lineup; live && slot < live->size() && (*live)[slot].role == 0 && !std::getenv("EM_OLD_INJBOX")) continue;
+        if (std::getenv("EM_DEBUG_INJ")) std::fprintf(stderr, "injury pick slot %zu line %d role %d live %d lines on ice %d/%d\n", slot, sp.line, sp.role, g_minute_lineup ? int((*g_minute_lineup)[slot].role) : -9, on_ice ? on_ice->current_line[0] : -1, on_ice ? on_ice->current_line[1] : -1);
         if (on_ice && (sp.line & 0x7F) != on_ice->current_line[(sp.line >> 7) & 1] + 1) continue;  // ovr030:2444: only players on the ice
         const bool weaker = r[0x11] < r[0x10];
         if (brng_.range(0, 10) <= (weaker ? 3 : 7)) continue;

@@ -82,6 +82,10 @@ LineValues line_strength(const HokTeam& team, int line, int kind, bool in_play, 
 //   the kind (level DS:0ED8 < 5); defence: s2 weighted 80 % (140 % goalkeeper, DS:4946);
 //   f += form. The sums are divided by 3. Without a goalkeeper the defence s2 drops by
 //   (45 - low nibbles) + 16 and is divided by 3, and in play s1 = s2 = 0 (empty net).
+// the running lineup of the manager match whose per-minute check (on_minute) is being called: the original reads the
+// squad record it plays with, in which penalised players have role 0 (REAL-CODE Köln period 196)
+extern const std::vector<HokSquadPlayer>* g_minute_lineup;
+
 struct HumanSquad {
     const std::vector<HokSquadPlayer>* squad = nullptr;
     const std::vector<HokPlayer>* players = nullptr;

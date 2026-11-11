@@ -11,6 +11,7 @@
 #include <cstdlib>
 
 namespace em {
+const std::vector<HokSquadPlayer>* g_minute_lineup = nullptr;
 
 namespace {
 // DS:4E99: share of defence / attack lines per strength mode (percent)
@@ -944,7 +945,9 @@ struct MatchRun::Impl {
             const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
             // no check in the overtime of a play-off game (REAL-CODE Köln period 34: minute 61 of Köln - Kaufbeuren without it)
             if (m && m->on_minute && !minute_check_off[side] && !(opts.playoff && minute > 60 && !std::getenv("EM_OLD_POOTCHECK"))) {
+                g_minute_lineup = side == 0 ? &hsq : &asq;
                 m->on_minute(minute, load, side == 0 ? h : a);
+                g_minute_lineup = nullptr;
                 // a player injured in this minute (ovr030:23B6) leaves the running lineup at once (REAL-CODE period 28: the
                 // original opens the lineup screen; confirmed unchanged, the place stays empty)
                 std::vector<HokSquadPlayer>& working = side == 0 ? hsq : asq;
