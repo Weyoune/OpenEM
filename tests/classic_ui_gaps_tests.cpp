@@ -47,15 +47,15 @@ bool is_permutation_of_places(const std::vector<int>& order, size_t n) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 3) throw std::runtime_error("usage: em_classic_ui_gaps_tests <EM data> <work>");
-        const fs::path data = argv[1], work = argv[2];
+        if (argc != 4) throw std::runtime_error("usage: em_classic_ui_gaps_tests <EM data> <reference saves> <work>");
+        const fs::path data = argv[1], ref = argv[2], work = argv[3];
         fs::remove_all(work);
         fs::create_directories(work);
         set_classic_clock(virtual_clock);
 
         // --- title screen ---------------------------------------------------------------------------------------
         {
-            ClassicApplication app(data, work, data / "START.HOK");
+            ClassicApplication app(data, work, ref / "START.HOK");
             ClassicCanvas plain(data);
             plain.background(197);
             app.show_title();
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
         // --- Statistiken -> Spieler: a listed player of a human squad opens the player page -----------------------
         {
             int opened = 0, ignored = 0;
-            for (const auto& entry : fs::directory_iterator(data)) {
+            for (const auto& entry : fs::directory_iterator(ref)) {
                 if (opened && ignored) break;
                 if (entry.path().extension() != ".HOK" || entry.path().filename() == "BACKUP.HOK") continue;
                 HokFile h;
@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
 
         // --- a later round: the decider and the uncovering order (Game, ovl05_536d) ----------------------------------
         {
-            const Bytes exe = read_file(data / "EM.EXE"), save = read_file(data / "START.HOK");
+            const Bytes exe = read_file(data / "EM.EXE"), save = read_file(ref / "START.HOK");
             Game quiet(exe, save), live(exe, save);
             int asked = 0, clubs = 0;
             std::vector<int> order, places;
@@ -230,9 +230,44 @@ int main(int argc, char** argv) {
             check(quiet.borland_state() != live.borland_state(), "\"Aber klar\" takes Borland draws");
         }
 
+        // --- a later round through the frontend: question inside the day, uncovering, TASTE, cup page ----------------
+        {
+            ClassicApplication app(data, work, ref / "START.HOK");
+            int questions = 0, revealed = 0, keys = 0, pages = 0;
+            // the frontend loop (classic_main.cpp frame): time, tick, draw, and the player's answers
+            app.set_pump([&] {
+                virtual_now += 55;
+                app.tick();
+                app.draw();
+                const std::string m = app.probe().modal;
+                if (m == "cup-question") { questions++; app.click(120, 172, false); }  // "Aber klar"
+                else if (m == "cup-draw") { if (++revealed == 3) app.click(10, 10, false); }  // fast after a while
+                else if (m == "cup-draw-key") { keys++; app.click(10, 10, false); }
+                else if (m == "cup-page") { pages++; app.click(10, 10, true); }
+                else if (m == "cup-table") app.click(160, 120, false);
+            });
+            for (int i = 0; i < 20000 && !pages; i++) {
+                const auto p = app.probe();
+                if (p.modal == "match" || p.modal == "banner" || p.modal == "timed-notice" || p.modal == "advancing") {
+                    virtual_now = std::max(virtual_now + 16, p.deadline.value_or(0));
+                    app.tick();
+                    app.draw();
+                } else if (p.modal == "notice") app.click(120, 171, false);
+                else if (p.modal == "cup-table" || p.modal.rfind("review", 0) == 0) app.click(160, 120, false);
+                else if (p.modal == "messages") app.key(SDLK_SPACE);
+                else if (!p.modal.empty()) app.click(190, 171, false);
+                else if (app.screen() != ClassicScreen::Main) app.click(316, 4, true);
+                else if (p.category >= 0) app.click(160, 20, true);
+                else app.click(293, 52, false);  // the crest
+            }
+            app.set_pump({});
+            check(questions == 1 && revealed > 0 && keys == 1 && pages == 1, "question, uncovering, TASTE and cup page inside the day");
+            check(app.probe().modal != "cup-draw" && app.probe().modal != "cup-question", "the day goes on after the draw");
+        }
+
         // --- the end year: the season change ends the game (highscore, "Das wars...", program end) -------------------
         {
-            HokFile h = decode_hok(read_file(data / "SAISEND.HOK"));
+            HokFile h = decode_hok(read_file(ref / "SAISEND.HOK"));
             const Bytes exe = read_file(data / "EM.EXE");
             int season_change = -1;
             {

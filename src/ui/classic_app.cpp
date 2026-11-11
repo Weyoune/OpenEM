@@ -209,6 +209,7 @@ void ClassicApplication::tick(){
         finish_timed_native_notice();
     }
     if(cup_live_){tick_cup_live();return;}  // the live DEB cup draw (classic_cup_draw.cpp)
+    if(in_day_pump_){tick_match_view();return;}  // a question inside advance_day: no further day may start
     if(!game_end_&&session_.loaded()&&session_.game().game_over()){begin_game_end();return;}  // the end year (classic_misc_input.cpp)
     if(live_day_){  // inside the minute observer: only the match display runs
         if(!live_screen_)tick_match_view();

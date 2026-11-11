@@ -53,7 +53,10 @@ void ClassicApplication::install_cup_draw_handlers() {
                                    [this](const Game& game, const std::vector<int>& order, const std::vector<int>& places) {
                                        if (!pump_) return;
                                        start_cup_live(decode_hok(game.save_bytes()), places, order, true);
+                                       const bool was = in_day_pump_;
+                                       in_day_pump_ = true;
                                        while (cup_live_ && !finished_ && pump_) pump_();
+                                       in_day_pump_ = was;
                                    });
 }
 
@@ -62,6 +65,11 @@ void ClassicApplication::install_cup_draw_handlers() {
 // answer is "Kein Gedanke".
 bool ClassicApplication::cup_draw_question(int clubs) {
     if (!pump_) return false;
+    struct Guard {  // tick() must not start another day while the frontend loop runs inside this one
+        bool& flag; bool was;
+        explicit Guard(bool& f) : flag(f), was(f) { flag = true; }
+        ~Guard() { flag = was; }
+    } guard(in_day_pump_);
     if (live_day_) match_frames_.clear();  // the minutes were shown while they were played
     else {
         begin_match_view();

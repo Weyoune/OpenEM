@@ -157,6 +157,7 @@ private:
     struct CupLiveDraw;
     std::shared_ptr<CupLiveDraw> cup_live_;
     std::optional<bool> cup_answer_;
+    bool in_day_pump_=false;  // the frontend loop runs inside Session::advance_day (cup question)
     struct PendingStart { std::vector<NewGameSetup> managers; NewGameOptions options; };
     std::optional<PendingStart> pending_start_;
     void install_cup_draw_handlers();

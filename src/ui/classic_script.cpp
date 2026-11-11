@@ -174,6 +174,7 @@ private:
         } else if (m == "player-detail") click(196, 214, false);
         else if (m == "title" || m == "cup-draw" || m == "cup-draw-key" || m == "game-end") click(160, 120, false);
         else if (m == "cup-page") click(160, 120, true);
+        else if (m == "cup-question") click(190, 172, false);  // "Kein Gedanke"
         else if (m == "club-info" || m == "team-schedule") click(160, 120, true);
         else if (m == "file-preview") { app().release(); settle_frame(); }
         else if (m == "fee-editor" || m == "contract-editor") key(SDLK_ESCAPE);

@@ -11,6 +11,7 @@ ClassicUiProbe ClassicApplication::probe() const {
     p.text = notice_;
     if (title_) { p.modal = "title"; return p; }
     if (game_end_ == 2) { p.modal = "game-end"; return p; }
+    if (manager_question_ && manager_question_->cup_draw) { p.modal = "cup-question"; return p; }
     if (cup_live_) { p.modal = cup_live_waiting() ? "cup-draw-key" : cup_live_page() ? "cup-page" : "cup-draw"; return p; }
     if (!match_frames_.empty()) {
         p.modal = match_frames_[match_frame_].cup_table ? "cup-table" : "match";
