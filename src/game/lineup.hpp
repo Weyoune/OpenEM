@@ -30,11 +30,14 @@ struct ManualLineupResult {
 // team-strength refresh. selectedLine:0 none,1..4 blocks,5 TW. Select is the
 // roster's left click; ReserveToggle its right click outside the details band.
 // RemoveNumber is a diagram-plate click, with its distinct duration/status check.
+// inMatch: the lineup opened from the board of a running match (ovl14_24bc, mode DS:02D6 = 5, ovr033 arg_0 != 0):
+// a player taken out of a line keeps his role byte (+0x0A = 1, 0D1D / 117F), the reserve toggle does nothing (0F55) and
+// only a squad member without a line (role != 0, block 0) can be placed into a line (12B8).
 // Native refusals return a message; malformed arguments/state throw FormatError.
 // Manager0's existing decoded squad mirror is synchronized after a mutation.
 ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
                                 int selectedLine, ManualLineupAction action,const bool* sixOverride=nullptr,
-                                const std::array<std::array<int,6>,5>* cellsOverride=nullptr);
+                                const std::array<std::array<int,6>,5>* cellsOverride=nullptr,bool inMatch=false);
 ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
                                 int selectedLine, bool reserveToggle);
 

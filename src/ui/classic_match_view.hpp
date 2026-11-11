@@ -42,8 +42,14 @@ struct ClassicBoardTeam {
     bool fourth_line[2] = {};  // FUN_162c_0d9f: a squad player with a role sits in line 4 (defence / attack)
     // The manager's club only: goal and assist counters of the squad players (squad goals of all competitions,
     // player record +0x1F). The board message of a goal names the players whose counters rose in that minute.
-    struct Scorer { std::string name; int goals = 0, assists = 0; };
+    struct Scorer { std::string name; int goals = 0, assists = 0; bool injured = false; };  // injured: squad +0x09 status 2
     std::vector<Scorer> scorers;
+    // The manager's club: the scorer / assist picks of ovl14_2349 for its chances and shoot-out shots of the day so far, in order
+    // (Game::chance_credits); the board message of a chance names them, also for a missed chance.
+    struct Credit { bool goal = false, shot = false; std::string scorer, assist; };
+    std::vector<Credit> credits;
+    std::string penalized;    // the player penalised in this minute (manager's club, message draws only)
+    int penalty_reason = -1;  // ovl14_0690 rand(0, 12) of a two-minute penalty in this minute (table DS:05CC), -1 none
 };
 
 struct ClassicBoard {
@@ -55,8 +61,9 @@ struct ClassicBoard {
     int arena = 2;              // goal scene rink: 4 * attendance / capacity at the manager's home (ovl14_2630), else 2
     // The goal scenes the simulation drew in this minute (MatchProgress::scenes, ovl15_0143), in chance order: home before
     // away, the shots of a shoot-out last. Empty without goal scenes; the view then picks the scenes itself.
-    struct Scene { int side = 0; bool goal = false; int number = 2; char variant = 0; bool penalty = false; };
+    struct Scene { int side = 0; bool goal = false; int number = 2; char variant = 0; bool penalty = false; bool shown = false; };
     std::vector<Scene> scenes;
+    std::vector<std::pair<int, bool>> shots;  // the shoot-out shots of this minute (side, goal): board messages kind 5 / 6
 };
 
 // Live result of one pair of a cup round for the table after minute 60 / 65 / 70 (ovl07_0eba).
@@ -87,7 +94,8 @@ struct ClassicGoalFlash {
 // The board message of ovl14_0690 (only at speed < 70, DS:0262): an event of a match with a board, shown in the message
 // panel through a 0x6F x 0x20 work buffer copied to (0xC7, 0xB7) over the panel restored from the background page.
 //   kind (ovl14_0690 argument 2): 0 / 1 chance missed / goal ("Chance:" DS:5456, "Vergeben" / "TOR!"),
-//   2 / 3 penalty ("Strafzeit:" DS:545E, "2 Minuten" / "5 Minuten"), 5 / 6 penalty shot ("Penalty:" DS:5473).
+//   2 / 3 penalty ("Strafzeit:" DS:545E, "2 Minuten" / "5 Minuten"), 4 injury ("Verletzt:" DS:5469, no result), 5 / 6
+//   penalty shot ("Penalty:" DS:5473). The reason of a penalty is "wegen " + DS:05CC[rand(0, 12)], fixed 5 for five minutes.
 // Steps (ovl14_0690 without goal scenes; with goal scenes, DS:0226, only the final lines):
 //   Caption  the caption in font 1 (colour 0x18, black shadow) on baseline 0x14, blinking 4 times (2 at speed 60);
 //   Team     plus the club name in font 3 (colour 7) on baseline 0x1E;
@@ -141,6 +149,7 @@ struct ClassicMatchFrame {
     std::optional<ClassicGoalScene> after_scene; // the delay(20) after a scene: r / w replays this chance
     int hold_ms = -1;                 // how long a message step stays (-1: classic_match_frame_ms decides)
     bool settings_lamp = false;       // DS:878A, the switch bottom left (opens the Einstellungen)
+    bool live_scene = false;          // a scene shown at its chance (g_scene_replay): r / w after it answers the simulation
     bool blink = false;               // ovl14_045c: reporter eyes closed (KB38 0x80) instead of open (KB38 0x50)
     int cup_table = 0;                // 60 / 65 / 70: the DEB-Pokal table of the round, waits for a click
     std::vector<ClassicCupLive> cup;  // live results for cup_table
@@ -183,6 +192,8 @@ std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::
 // The replay of a chance (ovl14_1dc7: a typed 'r' or 'w' after the scene, at most three plays): the original calls
 // ovl15_0143 again and so rolls a new scene; OpenEM takes the next script number. Empty after the third play.
 std::vector<ClassicMatchFrame> classic_goal_scene_replay(const std::filesystem::path& data, const ClassicMatchFrame& after);
+// The scene of a chance on board b (ovl14_4938): rink fill, shirt colours after the clash rule, names, score, info line, minute.
+ClassicGoalScene classic_goal_scene_of(const ClassicBoard& b, int minute);
 
 // ovl07_0eba with the DEB-Pokal (after ovl06_2522 minutes 41-60, 61-65, 66-70): the page of Tabellen -> DEB-Pokal
 // (draw_classic_cup, 4996:38F3) with the caption "<round>   <minute>.Minute" and the running game as the newest score column.
@@ -233,7 +244,8 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
                                       long attendance, bool sold_out);
 
 // Whether the original shows the minute display for this day (ovl06_161d): always when the human club plays, otherwise only
-// with the display switch of the competition (Ergebnisse of any league / DEB-Pokal).
-bool classic_match_display_wanted(const Game& game, bool human_plays, bool cup);
+// with the display switch of the competition (Ergebnisse of any league, DEB-Pokal, Europapokal, WM-Spiele). `event` is the
+// calendar byte of the day (SeasonCalendar::event).
+bool classic_match_display_wanted(const Game& game, bool human_plays, uint8_t event);
 
 }  // namespace em::ui

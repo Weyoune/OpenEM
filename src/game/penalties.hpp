@@ -48,7 +48,7 @@ public:
         entries_[0] = o.entries_[0]; entries_[1] = o.entries_[1];
         local_ = o.local_;
         timers_ = o.timers_ == &o.local_ ? &local_ : o.timers_;
-        started_ = o.started_; assessed_ = o.assessed_; phantom_role_ = o.phantom_role_; finishing_ = o.finishing_;
+        started_ = o.started_; assessed_ = o.assessed_; phantom_role_ = o.phantom_role_; finishing_ = o.finishing_; last_player_ = o.last_player_;
         return *this;
     }
     int running() const;
@@ -59,6 +59,7 @@ public:
     int started() const { return started_; }
     int code() const;  // team record byte +0x33 for the running penalties
     int minutes_assessed() const { return assessed_; }
+    int last_player() const { return last_player_; }  // the squad slot passed to the last start() (display only)
     // A manager penalty without a bound player ended during the game (ovr030:0151 then writes through the slot -1 record
     // DS:5D8F into the pair table, DEVIATIONS.md); returns the saved role it writes there (the role of the last player
     // penalised in that timer, it is never cleared) or -1; reading clears the mark.
@@ -72,6 +73,7 @@ private:
     PenaltyTimers* timers_ = &local_;
     int started_ = 0, assessed_ = 0;
     int phantom_role_ = -1;
+    int last_player_ = -1;
     bool finishing_ = false;
     void release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* squad);
     void release_slot(int entry, std::vector<HokSquadPlayer>& squad);

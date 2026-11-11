@@ -370,6 +370,22 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
     return out;
 }
 
+ClassicGoalScene classic_goal_scene_of(const ClassicBoard& b, int minute) {
+    std::array<int, 2> colour{b.team[0].colour, b.team[1].colour};
+    int distance = 0;  // ovl14 1D69: sum of the nibble differences
+    for (int shift = 0; shift < 12; shift += 4) distance += std::abs((colour[0] >> shift & 15) - (colour[1] >> shift & 15));
+    if (distance < 6) colour[1] = colour[0] ^ 0xFFF;
+    ClassicGoalScene s;
+    s.arena = b.arena;
+    s.colour = colour;
+    s.names = {b.team[0].name, b.team[1].name};
+    s.goals = {b.goals[0] % 30, b.goals[1] % 30};
+    // DS:54BE / DS:54C9: the attendance of the manager's home game, else "AUSWÄRTS"
+    s.info = b.team[0].human ? std::to_string(b.attendance) + " ZUSCHAUER" : "AUSWÄRTS";
+    s.minute = minute;
+    return s;
+}
+
 std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, int goal_scenes,
                                                       const std::filesystem::path& data) {
     const bool scenes = goal_scenes && !data.empty();
@@ -385,24 +401,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
     const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {  // the match ovl06_161d opens (first board)
         return f.boards.empty() ? nullptr : &f.boards.front();
     };
-    const auto shirt_colours = [](const ClassicBoard& b) {
-        std::array<int, 2> colour{b.team[0].colour, b.team[1].colour};
-        int distance = 0;  // ovl14 1D69: sum of the nibble differences
-        for (int shift = 0; shift < 12; shift += 4) distance += std::abs((colour[0] >> shift & 15) - (colour[1] >> shift & 15));
-        if (distance < 6) colour[1] = colour[0] ^ 0xFFF;
-        return colour;
-    };
-    const auto scene_of = [&](const ClassicBoard& b, int minute) {
-        ClassicGoalScene s;
-        s.arena = b.arena;
-        s.colour = shirt_colours(b);
-        s.names = {b.team[0].name, b.team[1].name};
-        s.goals = {b.goals[0] % 30, b.goals[1] % 30};
-        // DS:54BE / DS:54C9: the attendance of the manager's home game, else "AUSWÄRTS"
-        s.info = b.team[0].human ? std::to_string(b.attendance) + " ZUSCHAUER" : "AUSWÄRTS";
-        s.minute = minute;
-        return s;
-    };
+    const auto scene_of = [](const ClassicBoard& b, int minute) { return classic_goal_scene_of(b, minute); };
     for (ClassicMatchFrame& frame : frames) {
         if (rink_stays && frame.flash) continue;  // no goal flashes without a board
         // cup tables and goal flashes (classic_goal_flashes runs first) pass unchanged
@@ -457,7 +456,9 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                     const auto emit = [&](ClassicBoardMessage m) {
                         if (scene_board && m.kind <= 1) {
                             std::string script;
+                            bool scene_skip = false;
                             if (const ClassicBoard::Scene* d = drawn(side, m.kind == 1, false)) {
+                                if (d->shown) scene_skip = true;  // the live display already showed it (and its replays)
                                 script = classic_goal_scene_script(d->number, side, d->goal, d->variant == 'e', d->variant == 'j');
                             } else {
                                 // without drawn scenes (a view built without the simulation): a fixed pick;
@@ -466,34 +467,91 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                                 script = classic_goal_scene_script(2 + (frame.minute * 7 + chance_count * 3 + side) % 10, side,
                                                                    m.kind == 1, false, t.skaters + penalties == 6);
                             }
-                            play(script, side, m.kind == 1, frame.minute);
+                            if (!scene_skip) play(script, side, m.kind == 1, frame.minute);
                         }
                         if (m.kind == 1) running[size_t(side)]++;
                         if (speed >= 70 || rink_stays) return;
                         m.team = t.name;
                         for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, goal_scenes != 0)) out.push_back(std::move(f));
                     };
+                    // the picks of ovl14_2349 made in this minute (manager's club): chances first, then shoot-out shots
+                    std::vector<const ClassicBoardTeam::Credit*> chance_credits;
+                    for (size_t i = p.credits.size(); i < t.credits.size(); i++)
+                        if (!t.credits[i].shot) chance_credits.push_back(&t.credits[i]);
+                    size_t next_credit = 0;
+                    // ovl06_364f -> ovl14_1dc7 (kind 4): a player of the manager's club injured in this minute
+                    for (size_t i = 0; i < t.scorers.size() && i < p.scorers.size(); i++)
+                        if (t.scorers[i].injured && !p.scorers[i].injured) {
+                            ClassicBoardMessage m{4};
+                            m.player = t.scorers[i].name;
+                            emit(m);
+                        }
                     const int minutes = t.penalty_minutes - p.penalty_minutes;
-                    if (minutes == 2 || minutes == 5) emit(ClassicBoardMessage{minutes == 2 ? 2 : 3});
+                    if (minutes == 2 || minutes == 5) {
+                        // ovl06_02d8 -> ovl14_0690: the penalised player and "wegen " + DS:05CC[rand(0, 12)] (5 minutes: fixed 5)
+                        static const char* const reasons[13] = {
+                            "Stockschlags.", "Ellbogenchecks.", "hohem Stocks.", "Haltens.", "Hakens.", "Übertr. Härte.",
+                            "Cross-Checks.", "Faustschlags.", "Bandenchecks.", "Reklamierens.", "Beinstellen.",
+                            "Torverschiebens.", "Stockstichs."};
+                        ClassicBoardMessage m{minutes == 2 ? 2 : 3};
+                        m.player = t.penalized;
+                        const int reason = minutes == 5 ? 5 : t.penalty_reason;
+                        if (reason >= 0 && reason < 13) m.second = std::string("wegen ") + reasons[reason];
+                        emit(m);
+                    }
                     int chances = 0;
                     for (int k = 0; k < 3; k++) chances += t.chances[k] - p.chances[k];
                     const int goals = (now.goals[side] - t.shootout_goals) - (before.goals[side] - p.shootout_goals);
                     for (int g = 0; g < goals; g++) {
                         ClassicBoardMessage m{1};
-                        for (size_t i = 0; i < t.scorers.size() && i < p.scorers.size(); i++) {
-                            if (t.scorers[i].goals > p.scorers[i].goals && m.player.empty()) m.player = t.scorers[i].name;
-                            if (t.scorers[i].assists > p.scorers[i].assists && m.second.empty()) m.second = t.scorers[i].name;
+                        if (next_credit < chance_credits.size()) {
+                            const ClassicBoardTeam::Credit& c = *chance_credits[next_credit++];
+                            m.player = c.scorer;
+                            m.second = c.assist;
+                        } else {
+                            for (size_t i = 0; i < t.scorers.size() && i < p.scorers.size(); i++) {
+                                if (t.scorers[i].goals > p.scorers[i].goals && m.player.empty()) m.player = t.scorers[i].name;
+                                if (t.scorers[i].assists > p.scorers[i].assists && m.second.empty()) m.second = t.scorers[i].name;
+                            }
                         }
                         emit(m);
                     }
-                    for (int miss = goals; miss < chances; miss++) emit(ClassicBoardMessage{0});
+                    for (int miss = goals; miss < chances; miss++) {
+                        ClassicBoardMessage m{0};
+                        if (next_credit < chance_credits.size()) {  // a missed chance of the manager's club names the shooter
+                            const ClassicBoardTeam::Credit& c = *chance_credits[next_credit++];
+                            m.player = c.scorer;
+                            m.second = c.assist;
+                        }
+                        emit(m);
+                    }
                 }
-                // ovl06_3adb: every shot of a shoot-out plays its scene (penalty = 1, variant e, minute 0x78); the board
-                // messages of the shots (kinds 5 / 6) are not drawn
-                if (scene_board)
+                // ovl06_3adb: every shot of a shoot-out plays its scene (penalty = 1, variant e, minute 0x78), then its board
+                // message (kind 5 / 6; with goal scenes the shoot-out runs at DS:5A56 = 0, so there is none)
+                size_t shot_credit[2] = {before.team[0].credits.size(), before.team[1].credits.size()};
+                for (const auto& [side, goal] : now.shots) {
+                    if (scene_board)
+                        for (size_t i = 0; i < now.scenes.size(); i++) {
+                            const ClassicBoard::Scene& d = now.scenes[i];
+                            if (used[i] || !d.penalty || d.side != side || d.goal != goal) continue;
+                            used[i] = true;
+                            if (!d.shown) play(classic_goal_scene_script(d.number, d.side, d.goal, true, false), d.side, d.goal, 0x78);
+                            break;
+                        }
+                    if (goal) running[size_t(side)]++;
+                    if (speed >= 70 || goal_scenes || rink_stays) continue;
+                    const ClassicBoardTeam& t = now.team[size_t(side)];
+                    ClassicBoardMessage m{goal ? 6 : 5};
+                    m.team = t.name;
+                    size_t& c = shot_credit[size_t(side)];
+                    while (c < t.credits.size() && !t.credits[c].shot) c++;
+                    if (c < t.credits.size()) { m.player = t.credits[c].scorer; m.second = t.credits[c].assist; c++; }
+                    for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, false)) out.push_back(std::move(f));
+                }
+                if (scene_board)  // shots without a record (a view built without the simulation)
                     for (size_t i = 0; i < now.scenes.size(); i++) {
                         const ClassicBoard::Scene& d = now.scenes[i];
-                        if (used[i] || !d.penalty) continue;
+                        if (used[i] || !d.penalty || d.shown) continue;
                         used[i] = true;
                         play(classic_goal_scene_script(d.number, d.side, d.goal, true, false), d.side, d.goal, 0x78);
                         if (d.goal) running[size_t(d.side)]++;
@@ -538,7 +596,9 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         b.goals[0] = p.score.home;
         b.goals[1] = p.score.away;
         for (int k = 0; k < 3; k++) for (int s = 0; s < 2; s++) b.period_goals[k][s] = p.period_goals[k][s];
-        for (const GoalScene& g : p.scenes) b.scenes.push_back({g.side, g.goal, g.number, g.variant, g.penalty});
+        for (const GoalScene& g : p.scenes) b.scenes.push_back({g.side, g.goal, g.number, g.variant, g.penalty, g.shown});
+        b.shots = p.shots;
+        if (p.reporter == 0) frame.blink = true;  // ovl06_2522: rand(0, 4) = 0 closes the reporter's eyes (ovl14_045c)
         for (int side = 0; side < 2; side++) {
             const int team = side == 0 ? m.home : m.away;
             const HokTeam& live = side == 0 ? m.run->home_state() : m.run->away_state();
@@ -565,16 +625,28 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
                     if (sp.role && (sp.line & 0x7F) == 4) t.fourth_line[(sp.line & 0x80) ? 1 : 0] = true;
                 // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
                 // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
-                for (const HokSquadPlayer& sp : h.squad) {
+                for (size_t slot = 0; slot < h.squad.size(); slot++) {
+                    const HokSquadPlayer& sp = h.squad[slot];
                     if (sp.player < 0 || size_t(sp.player) >= h.players.size()) continue;
                     const HokPlayer& player = h.players[size_t(sp.player)];
                     ClassicBoardTeam::Scorer s;
                     s.name = player.name;
                     s.goals = sp.league_goals + sp.cup_goals + sp.other_goals;
                     s.assists = player.raw ? player.raw[0x1F] | player.raw[0x20] << 8 : 0;
+                    s.injured = (h.state.at(0x696D + slot * 52 + 9) & 3) == 2;  // squad +0x09 status 2 (injured)
                     t.scorers.push_back(std::move(s));
                 }
+                // the picks of ovl14_2349 name the players of every chance and shot (also a missed one) and the penalty
+                const auto name_of = [&](int slot) -> std::string {
+                    if (slot < 0 || size_t(slot) >= h.squad.size()) return {};
+                    const int player = h.squad[size_t(slot)].player;
+                    return player >= 0 && size_t(player) < h.players.size() ? h.players[size_t(player)].name : std::string();
+                };
+                for (const Game::ChanceCredit& c : game.chance_credits())
+                    if (c.team == team) t.credits.push_back({c.goal, c.shot, name_of(c.scorer), name_of(c.assist)});
+                t.penalized = name_of(p.penalty_slot[side]);
             }
+            t.penalty_reason = p.penalty_reason[side];
         }
         if (m.home == game.human_team()) {
             b.attendance = attendance;
@@ -618,10 +690,13 @@ std::optional<ClassicBoardOrder> classic_board_click(const ClassicMatchFrame& fr
     return order;
 }
 
-bool classic_match_display_wanted(const Game& game, bool human_plays, bool cup) {
+bool classic_match_display_wanted(const Game& game, bool human_plays, uint8_t event) {
     if (human_plays) return true;
     const GameSettings s = game.settings();
-    if (cup) return s.flags[10] != 0;
+    if (event == kEventSectionEnd) return false;
+    if (event & kEventEuroCup) return s.flags[11] != 0;           // Europapokal (DS:0228)
+    if (event & kEventWorldChampionship) return s.flags[12] != 0;  // WM-Spiele (DS:0229)
+    if (!(event & kEventLeagueMask)) return s.flags[10] != 0;     // DEB-Pokal, play-offs
     return s.flags[1] != 0 || s.flags[4] != 0 || s.flags[7] != 0;
 }
 

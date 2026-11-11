@@ -126,7 +126,13 @@ int main(int argc,char**argv){
                 }
                 if(event.type==SDL_KEYDOWN||event.type==SDL_MOUSEBUTTONDOWN)sound.stop_title_music();
                 if(event.type==SDL_QUIT)app.request_exit();
-                else if(event.type==SDL_MOUSEBUTTONDOWN)app.click(event.button.x,event.button.y,event.button.button==SDL_BUTTON_RIGHT);
+                else if(event.type==SDL_MOUSEBUTTONDOWN){
+                    // both buttons (state 3 of the original, e.g. tactics from the match board): the second button while the
+                    // first is held, or the middle button
+                    const Uint32 held=SDL_GetMouseState(nullptr,nullptr);const Uint8 b=event.button.button;
+                    if(b==SDL_BUTTON_MIDDLE||(b==SDL_BUTTON_RIGHT&&(held&SDL_BUTTON_LMASK))||(b==SDL_BUTTON_LEFT&&(held&SDL_BUTTON_RMASK)))app.click_both(event.button.x,event.button.y);
+                    else app.click(event.button.x,event.button.y,b==SDL_BUTTON_RIGHT);
+                }
                 else if(event.type==SDL_MOUSEBUTTONUP)app.release();
                 else if(event.type==SDL_MOUSEMOTION)app.motion(event.motion.x,event.motion.y);
                 else if(event.type==SDL_KEYDOWN)app.key(event.key.keysym.sym);

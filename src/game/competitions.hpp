@@ -37,7 +37,8 @@ struct Tie {
 
 // One cup round: plays every pair once, knock-out.
 std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw,
-                                GameRandom& rng, const HumanSide& human = {});
+                                GameRandom& rng, const HumanSide& human = {},
+                                const MatchMinuteObserver* observer = nullptr);  // the WM display: the minute games one after another
 
 // The same round with the cup display on: all pairs minute by minute (see competitions.cpp); updates the computer teams' records.
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,

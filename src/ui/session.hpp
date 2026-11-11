@@ -98,6 +98,9 @@ private:
     std::vector<Game::ContractTerms> contract_answers_;
     std::optional<ContractQuestion> contract_question_;
     MatchObserver match_observer_;
+    // The staged game of a running advance_day while its minutes are shown (match display): game() and apply() act on it, so
+    // the lineup, tactics and Einstellungen opened from the minute loop change the running day like in the original.
+    Game* live_game_ = nullptr;
 };
 
 // Publish a complete new save atomically. Existing destinations are never

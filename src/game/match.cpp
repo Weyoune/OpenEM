@@ -37,6 +37,13 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 }  // namespace
 
 int g_goal_scenes = 0;
+int g_match_speed = 70;
+std::array<uint8_t, 14> g_display_flags{};
+
+int reporter_minute_draw(GameRandom& rng, bool display) {
+    if (!display || g_match_speed >= 70 || std::getenv("EM_OLD_NOMSGDRAWS")) return -1;  // ovr030:272B: display on, DS:01DB = 0 (normal play), speed < 70
+    return int(rng.range(0, 4));
+}
 
 // ovl15_0143: the scene of one chance on Borland rand (docs/logic/TORSZENEN_HOOK.md): number rand(2, 11), then
 // rand(0, goal ? 0xD2 : 0xFF) whose 0 forces the penalty variant e, then for e (or else for six skaters, j) rand(2, 2)
@@ -49,6 +56,21 @@ GoalScene draw_goal_scene(BorlandRandom& b, int side, bool goal, bool penalty, b
     else if (six_skaters) { s.variant = 'j'; s.number = int(b.range(2, 2)); }
     return s;
 }
+
+std::function<int(const SceneCall&, const GoalScene&, int)> g_scene_replay;
+namespace {
+SceneCall g_scene_call;  // the chance of the scene being drawn (set by MatchRun before the draw)
+// draw_goal_scene with the replays of ovl14_1dc7 (g_scene_replay): every play draws again; all plays go to the log
+void log_goal_scene(BorlandRandom& b, int side, bool goal, bool penalty, bool six_skaters, std::vector<GoalScene>* log) {
+    for (int play = 1;; play++) {
+        GoalScene s = draw_goal_scene(b, side, goal, penalty, six_skaters);
+        const int answer = g_scene_replay ? g_scene_replay(g_scene_call, s, play) : -1;
+        s.shown = answer >= 0;
+        if (log) log->push_back(s);
+        if (answer != 1 || play >= 3) break;
+    }
+}
+}  // namespace
 
 std::vector<std::pair<long, long>>* g_game_log = nullptr;
 std::vector<const char*>* g_game_scopes = nullptr;
@@ -663,8 +685,8 @@ void shootout(MatchResult& r, GameRandom& rng, bool minute_game = false, bool hu
         auto shot = [&](int side) {
             const bool hit = draw(0, 10) > 6;
             if (scenes && rng.borland) {
-                const GoalScene s = draw_goal_scene(*rng.borland, side, hit, true, false);
-                if (scene_log) scene_log->push_back(s);
+                g_scene_call.goals[0] = r.home + goals[0]; g_scene_call.goals[1] = r.away + goals[1]; g_scene_call.minute = 0x78;
+                log_goal_scene(*rng.borland, side, hit, true, false, scene_log);
             }
             goals[side] += hit;
             // the players of a managed side are picked after each of its shots (REAL-CODE Köln periods 10 and 55: goal
@@ -790,6 +812,7 @@ struct MatchRun::Impl {
     const HumanSquad* hp = nullptr;
     const HumanSquad* ap = nullptr;
     const std::vector<HokSquadPlayer>* outer_squad[2] = {nullptr, nullptr};  // the squads of the game (an injury in the minute changes them)
+    const HumanSquad* outer_human[2] = {nullptr, nullptr};  // the managers' squads of the game (tactics set during the match)
     LineRotation hlocal, alocal;
     PenaltyBox hbox, abox;
     BorlandRandom fallback_selection{1};
@@ -832,6 +855,8 @@ struct MatchRun::Impl {
         }
         if (hh) outer_squad[0] = hh->squad;
         if (ha) outer_squad[1] = ha->squad;
+        outer_human[0] = hh;
+        outer_human[1] = ha;
         hp = hh ? &hh2 : nullptr;
         ap = ha ? &ha2 : nullptr;
         // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
@@ -884,6 +909,16 @@ struct MatchRun::Impl {
     // a match with a board (team byte +0x34 bit 7 at home or away) draws goal scenes when they are switched on
     bool board() const { return (h.raw && (h.raw[0x34] & 0x80)) || (a.raw && (a.raw[0x34] & 0x80)); }
     bool scenes_on() const { return g_goal_scenes != 0 && rng.borland && board() && !std::getenv("EM_OLD_NOSCENES"); }
+    // DS:5A56 (set_messages) and speed < 70: ovl14_0690 draws for the board messages (docs/logic/TORSZENEN_HOOK.md section 2)
+    bool messages = false;
+    bool message_draws() const { return messages && g_match_speed < 70 && !std::getenv("EM_OLD_NOMSGDRAWS"); }
+    // ovl14_0690 before the blinking caption and before the blinking result (not for an injury): rand(0, 1) of the game
+    // stream each, both only without goal scenes (DS:0226)
+    void message_coins(bool injury) {
+        if (g_goal_scenes) return;
+        rng.range(0, 1);
+        if (!injury) rng.range(0, 1);
+    }
     int kinds_h[2] = {0, 0}, kinds_a[2] = {0, 0};
     bool idle_next = false;  // MatchRun::idle_next_minute
     // the player picks after each shot of a managed side in the shoot-out (a chance without a goal)
@@ -892,6 +927,8 @@ struct MatchRun::Impl {
         return [this](int side, bool hit) {
             if (side == 0 && hp && hp->on_shot) hp->on_shot(hit, h, hsq);
             if (side == 1 && ap && ap->on_shot) ap->on_shot(hit, a, asq);
+            shown.shots.push_back({side, hit});
+            if (message_draws() && board()) message_coins(false);  // ovl14_1dc7 -> ovl14_0690 (kind 5 / 6) after the pick
         };
     }
     // MatchRun::take_lineup: the lineup screen of ovl14_24bc changed the manager's squad between two minutes. The working
@@ -913,9 +950,30 @@ struct MatchRun::Impl {
             if (changed) apply_effort(side == 0 ? h : a, 0, 0, &working, m->effort_control, 2);
         }
     }
+    // MatchRun::take_tactics: the tactics screen of ovl14_24bc (both buttons on the board) changed the manager's controls
+    // and the tactic bytes of his team record (commit_tactics); the original plays on the record itself, so the next
+    // minute uses them. No draws.
+    void take_tactics(int side, const HokTeam& record) {
+        const HumanSquad* outer = outer_human[side];
+        if (!outer) return;
+        HumanSquad& own = side == 0 ? hh2 : ha2;
+        own.effort_control = outer->effort_control;
+        own.offence_control = outer->offence_control;
+        own.line_control = outer->line_control;
+        own.line_quotas = outer->line_quotas;
+        own.penalty_effort_adjustment = outer->penalty_effort_adjustment;
+        HokTeam& t = side == 0 ? h : a;
+        t.effort_current = record.effort_current;
+        t.effort_base = record.effort_base;
+        t.offence_base = record.offence_base;
+        for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = record.effort[i]; t.offence[i] = record.offence[i]; }
+    }
     bool step() {
         if (forfeit || minute >= last) return false;
         shown.scenes.clear();
+        shown.penalty_reason[0] = shown.penalty_reason[1] = -1;
+        shown.penalty_slot[0] = shown.penalty_slot[1] = -1;
+        shown.shots.clear();
         minute++;
         static std::set<std::string> scope_pool;
         const bool scope_dbg = std::getenv("EM_DEBUG_SCOPE") != nullptr;
@@ -937,7 +995,7 @@ struct MatchRun::Impl {
             if (minute == 60 && opts.knockout && score.home == score.away) { last = 70; score.decision_marker = 30; }
             const bool more = minute < last;
             if (!more && opts.knockout && !shootout_done && score.home == score.away) {
-                { const std::function<void(int, bool)> picks = shootout_picks(); shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
+                { const std::function<void(int, bool)> picks = shootout_picks(); g_scene_call = {&h, &a, {score.home, score.away}, 0x78}; shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
                 shootout_done = true;
             }
             return more;
@@ -961,6 +1019,7 @@ struct MatchRun::Impl {
                         if ((*outer)[s].role == 0 && working[s].role != 0) { working[s].role = 0; removed = true; }
                 // leaving the lineup screen sets the effort again as in a drawn game (situation 2), the offence stays (REAL-CODE: period
                 // 28 at 0:0 and period 41 at 3:2 -> 60 + 20 = 80; the minute loop calls of 162c:12da are not the ones used here)
+                if (removed && message_draws() && board()) message_coins(true);  // ovl06_364f -> ovl14_1dc7 -> ovl14_0690 (kind 4)
                 if (removed) {
                     HokTeam& team = side == 0 ? h : a;
                     const int before = team.effort_current;
@@ -977,9 +1036,13 @@ struct MatchRun::Impl {
         for (int k = 0; k < 2; k++) { kinds_h[k] = g_goal_kinds[0][k]; kinds_a[k] = g_goal_kinds[1][k]; }  // the mode update reads the cached values
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
-        if ((events & 1) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 0, home_goal, false, h.skaters + hbox.running() == 6));
+        if ((events & 1) && scenes_on()) {
+            g_scene_call = {&h, &a, {score.home, score.away}, minute};
+            log_goal_scene(*rng.borland, 0, home_goal, false, h.skaters + hbox.running() == 6, &shown.scenes);
+        }
         if ((events & 1) && hp && hp->on_chance && !(minute_check_off[0] && !std::getenv("EM_OLD_DROPCREDIT"))) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
         if ((events & 1) && ap && ap->on_opponent_chance) ap->on_opponent_chance(home_goal, h);
+        if ((events & 1) && message_draws() && board()) message_coins(false);  // ovl14_1dc7 -> ovl14_0690 (kind 0 / 1)
         if ((events & 1) && minute <= 60) { shown.period_chances[(minute - 1) / 20][0]++; if (home_goal) shown.period_goals[(minute - 1) / 20][0]++; }
         if (home_goal) {
             score.home++;
@@ -992,9 +1055,13 @@ struct MatchRun::Impl {
             if (stats) stats->after_goal(0, equal, h.skaters, a.skaters, hp != nullptr, ap != nullptr);
         }
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
-        if ((events & 2) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 1, away_goal, false, a.skaters + away_penalties().running() == 6));
+        if ((events & 2) && scenes_on()) {
+            g_scene_call = {&h, &a, {score.home, score.away}, minute};
+            log_goal_scene(*rng.borland, 1, away_goal, false, a.skaters + away_penalties().running() == 6, &shown.scenes);
+        }
         if ((events & 2) && ap && ap->on_chance && !(minute_check_off[1] && !std::getenv("EM_OLD_DROPCREDIT"))) ap->on_chance(away_goal, a, asq);  // a club that left the pair by the pair-table error is no longer looked up (REAL-CODE Köln period 262)
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
+        if ((events & 2) && message_draws() && board()) message_coins(false);
         if ((events & 2) && minute <= 60) { shown.period_chances[(minute - 1) / 20][1]++; if (away_goal) shown.period_goals[(minute - 1) / 20][1]++; }
         // both sides score in the same overtime minute: the away goal decides, the home goal of the minute is withdrawn (REAL-CODE
         // period 39: cup game 2 ends 6:7 with the marker 30, series 1:1; neither 7:7 and a later winner nor a home win)
@@ -1050,8 +1117,23 @@ struct MatchRun::Impl {
         scope("penalty");
         if (minute > 59 && std::getenv("EM_DEBUG_OT")) std::fprintf(stderr, "ot %s-%s minute %d score %d:%d knockout %d last %d events %d\n", h.name.c_str(), a.name.c_str(), minute, score.home, score.away, int(opts.knockout), last, events);
         if (minute != 60 && minute != 70 && !(opts.knockout && minute > 60 && score.home != score.away)) {  // no penalties in the minute of the golden goal (REAL-CODE)
+            // ovl06_02d8 calls ovl14_0690 (kind 2 / 3) after the player of a penalty is booked, when a manager plays in the match
+            const auto penalty_message = [&](int before_home, int before_away) {
+                if (!message_draws() || !(hp || ap)) return;
+                for (int side = 0; side < 2; side++) {
+                    const int added = (side == 0 ? hbox.minutes_assessed() - before_home : away_penalties().minutes_assessed() - before_away);
+                    if (added <= 0) continue;
+                    message_coins(false);
+                    shown.penalty_slot[side] = (side == 0 ? hbox : away_penalties()).last_player();
+                    if (added % 5 != 0 && rng.borland) shown.penalty_reason[side] = rng.borland->range(0, 12);  // 2 minutes: the reason (DS:05CC)
+                }
+            };
+            int before_home = hbox.minutes_assessed(), before_away = away_penalties().minutes_assessed();
             penalty_minute(swap_sides ? *apen : *hpen, swap_sides ? *hpen : *apen, true, rng);
+            penalty_message(before_home, before_away);
+            before_home = hbox.minutes_assessed(); before_away = away_penalties().minutes_assessed();
             penalty_minute(swap_sides ? *hpen : *apen, swap_sides ? *apen : *hpen, true, rng);
+            penalty_message(before_home, before_away);
             sync_away();
         }
         if (stats)
@@ -1066,7 +1148,7 @@ struct MatchRun::Impl {
         const bool more = minute < last;
         // a knock-out game that is still level after its last minute goes to the shoot-out at once (the other games go on)
         if (!more && opts.knockout && !shootout_done && score.home == score.away) {
-            { const std::function<void(int, bool)> picks = shootout_picks(); shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
+            { const std::function<void(int, bool)> picks = shootout_picks(); g_scene_call = {&h, &a, {score.home, score.away}, 0x78}; shootout(score, rng, true, hp || ap, scenes_on(), &shown.scenes, &picks); }
             shootout_done = true;
         }
         return more;
@@ -1101,6 +1183,11 @@ MatchRun::~MatchRun() = default;
 bool MatchRun::step() { return p_->step(); }
 void MatchRun::idle_next_minute() { p_->idle_next = true; }
 void MatchRun::take_lineup() { p_->take_lineup(); }
+void MatchRun::set_messages(bool on) { p_->messages = on; }
+bool MatchRun::has_board() const { return p_->board(); }
+bool MatchRun::minutes_left() const { return !p_->forfeit && p_->minute < p_->last; }
+void MatchRun::set_reporter(int value) { p_->shown.reporter = value; }
+void MatchRun::take_tactics(int side, const HokTeam& record) { if (side == 0 || side == 1) p_->take_tactics(side, record); }
 void MatchRun::set_watched(bool on) { p_->watched = on; }
 void MatchRun::set_display(bool on) { p_->display_override = on ? 1 : 0; }
 MatchProgress MatchRun::progress() const {
@@ -1137,6 +1224,19 @@ const HokTeam& MatchRun::away_state() const { return p_->a; }
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
                          const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts) {
     MatchRun run(home, away, rng, level, hh, ha, stats, opts);
+    return run.finish();
+}
+
+MatchResult observed_league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level, const HumanSquad* hh,
+                                  const HumanSquad* ha, MatchStats* stats, const MatchOptions& opts,
+                                  const MatchMinuteObserver* observer, int home_id, int away_id) {
+    MatchRun run(home, away, rng, level, hh, ha, stats, opts);
+    if (observer && *observer) {
+        const std::vector<LiveMatch> live{{home_id, away_id, &run}};
+        (*observer)(0, live);
+        // step() also plays the last minute, it returns false there
+        for (int minute = 1, more = 1; more; minute++) { more = run.step(); (*observer)(minute, live); }
+    }
     return run.finish();
 }
 

@@ -34,6 +34,7 @@ public:
     void draw();
     void tick();
     void click(int x, int y, bool right);
+    void click_both(int x, int y);  // both mouse buttons (button state 3 of the original), or the middle button
     void release();
     void motion(int x,int y);
     void key(int key);
@@ -264,6 +265,7 @@ private:
     uint64_t match_frame_until_=0;
     bool replay_key_=false;  // 'r' / 'w' typed during a goal scene
     bool pending_human_match_=false, pending_league_day_=false;
+    uint8_t pending_event_=0;  // calendar byte of the day being played (EuroCup / WM: no cup table)
     std::unique_ptr<HokFile> match_before_; // state before the day: draw and series for the cup table (ovl07_0eba)
     void prepare_match_view(bool human_match);
     void begin_match_view();
@@ -277,6 +279,12 @@ private:
     bool live_screen_=false;  // a screen opened during the minutes (Einstellungen, Aufstellung) takes the input until it is left
     bool live_idle_=false;    // space key: the next minute passes without play
     bool live_lineup_=false;  // the lineup screen was opened: the matches take the squad before the next minute
+    bool live_tactics_=false; // the tactics were committed from the board: the match takes them before the next minute
+    std::optional<uint64_t> live_centre_until_;  // a left click on the board middle, waiting for the second button
+    void open_live_board_screen(bool tactics);
+    bool live_replay_=false;  // r / w during a scene shown at its chance
+    bool live_in_scene_=false;  // live_scene runs inside a minute: no board clicks, no Einstellungen
+    int live_scene(const SceneCall& call,const GoalScene& drawn,int play);
     ClassicScreen live_screen_before_=ClassicScreen::Main;
     void rebase_live();
     int post_tables_=0;       // leagues whose table follows the match day (switch Tabelle, ovl13_249d)

@@ -11,6 +11,7 @@ void ClassicApplication::finish_tactics(ClassicScreen target){
     if(tactics_plan_){
         const auto plan=*tactics_plan_;
         action([&](Game& game){const bool ok=game.set_tactics(plan);return ActionResult{ok?"":"Taktik ist in dieser Phase nicht verfügbar.",ok};});
+        if(live_day_&&live_screen_)live_tactics_=true;  // the running match takes them before the next minute
         tactics_plan_.reset();tactics_view_.reset();
     }
     selected_line_=0;screen_=target;
