@@ -196,7 +196,7 @@ int main(int argc, char** argv) {
             const HokFile& g = app.session().game().save();
             check(g.manager == "HANS" && g.state.at(0x01EE) == 6, "manager name and face");
             const HokFile base = decode_hok(read_file(*find_new_game_base(data)));
-            check(g.state.at(0x0DCD + 0x14) == 0 && app.session().game().human_team() == 0, "chosen club (first crest = team 0)");
+            check(g.teams.at(size_t(app.session().game().human_team())).name == base.teams.at(0).name && g.state.at(0x0DCD + 0x14) == app.session().game().human_team(), "chosen club (first crest = team 0 of the menu, placed by the club draw ovr027:1C0B)");
             (void)base;
             app.draw();
             check(app.session().dirty(), "a new game is unsaved");

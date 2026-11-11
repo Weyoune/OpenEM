@@ -70,6 +70,7 @@ add_library(em_game STATIC
     src/game/sale_quote.cpp
     src/game/save_history.cpp
     src/game/game.cpp
+    src/game/redistribution.cpp
     src/game/lineup.cpp
     src/game/match.cpp
     src/game/national_team.cpp
@@ -289,7 +290,7 @@ target_link_libraries(em_classic_tests PRIVATE em_classic)
 set(EM_REFERENCE "${CMAKE_CURRENT_SOURCE_DIR}/work/EM" CACHE PATH "Directory with reference savegames (START/TAG1/MONAT1.HOK)")
 if(IS_DIRECTORY "${EM_DATA}")
     add_test(NAME formats_original_kb COMMAND em_format_tests "${EM_DATA}" "${EM_REFERENCE}")
-    add_test(NAME world_generator COMMAND em_world_generator_tests "${EM_DATA}")
+    add_test(NAME world_generator COMMAND em_world_generator_tests "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin")
     add_test(NAME ui_session COMMAND em_ui_tests "${EM_DATA}" "${EM_REFERENCE}" "${CMAKE_CURRENT_BINARY_DIR}/ui-test-work")
     add_test(NAME multimanager_career COMMAND em_multimanager_tests "${EM_DATA}")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/work/exp/day_20261103/nativepurchase-cancel.hok")

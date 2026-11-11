@@ -11,6 +11,8 @@
 #include "formats/binary.hpp"
 #include "formats/hok.hpp"
 #include "game/world_generator.hpp"
+#include "game/match.hpp"
+#include "game/scorers.hpp"
 
 int main(int argc, char** argv) {
     using namespace em;
@@ -32,7 +34,22 @@ int main(int argc, char** argv) {
         seeds.start = uint16_t(std::strtoul(argv[3], nullptr, 0));
         seeds.menu = uint16_t(std::strtoul(argv[4], nullptr, 0));
         seeds.after = uint16_t(std::strtoul(argv[5], nullptr, 0));
+        if (const char* intro = std::getenv("EM_WORLD_INTRO"))  // the intro's draws "7,27,27,..." (upper bounds, see WorldSeeds)
+            for (const char* p = intro; *p;) {
+                seeds.intro_draws.push_back(std::atoi(p));
+                while (*p && *p != ',') p++;
+                if (*p == ',') p++;
+            }
+        std::vector<std::pair<long, long>> blog, glog;
+        const char* draws = std::getenv("EM_WORLD_DRAWS");  // the argument sequences of both streams (compare with DRAWLOG)
+        if (draws) { g_borland_log = &blog; g_game_log = &glog; }
         const WorldResult world = generate_world(exe, db, settings, seeds);
+        if (draws) {
+            g_borland_log = nullptr; g_game_log = nullptr;
+            std::ofstream d(draws);
+            for (const auto& [lo, hi] : blog) d << "B " << lo << " " << hi << '\n';
+            for (const auto& [lo, hi] : glog) d << "G " << lo << " " << hi << '\n';
+        }
         const Bytes hok = encode_hok(world.save);
         std::ofstream(argv[2], std::ios::binary).write(reinterpret_cast<const char*>(hok.data()), std::streamsize(hok.size()));
         for (const auto& line : world.log) std::printf("%s\n", line.c_str());

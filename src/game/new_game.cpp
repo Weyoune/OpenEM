@@ -135,16 +135,18 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
                         uint16_t seed, const NewGameOptions* options, std::vector<int>* cup_places,
                         std::vector<int>* cup_reveal) {
     if (!is_new_game_base(base)) throw FormatError("Neues Spiel: kein frischer Startstand");
-    if (managers.size() < 2 || managers.size() > 4) throw FormatError("Neues Spiel: zwei bis vier Manager");
+    if (managers.empty() || managers.size() > 4) throw FormatError("Neues Spiel: ein bis vier Manager");
     const Bytes& s = base.state;
     WorldSettings settings;
     settings.level = std::clamp(int(s.at(0x28)), 0, 5);       // DS:0118
     settings.end_choice = std::clamp(int(s.at(0x29)), 0, 3);  // DS:0119
     settings.squad_size = std::clamp(int(s.at(0x2A)), 0, 2);  // DS:011A
+    settings.squad_strength = std::clamp(int(s.at(0x2B)), 0, 2);  // DS:011B
     if (options) {
         settings.level = options->values[0];
         settings.end_choice = options->values[1];
         settings.squad_size = options->values[2];
+        settings.squad_strength = options->values[3];
         settings.start_mode = options->mode;
         settings.cup_live = options->cup_live;
     }
@@ -152,7 +154,9 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
     // The league shuffle runs before the start menu (ovl06_099d), so it does not depend on the managers:
     // a first run with a placeholder manager gives the club order the generated world will have.
     settings.managers = {WorldManager{"x", 0, 0}};
+    settings.menu_order_only = true;
     const HokFile order = generate_world(exe, db_raw, settings, seeds).save;
+    settings.menu_order_only = false;
     settings.managers.clear();
     for (const NewGameSetup& m : managers) {
         if (m.name.size() < 2 || m.name.size() > 19) throw FormatError("Neues Spiel: Name mit 2 bis 19 Buchstaben");
@@ -171,8 +175,7 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
     if (cup_reveal) *cup_reveal = result.cup_reveal;
     HokFile world = std::move(result.save);
     if (!options) return world;
-    // DS:011B (squad strength) and the highscore list DS:0256 of the menu; the generator does not write them
-    // (its new squads ignore the strength choice, see docs/DEVIATIONS.md)
+    // the highscore list DS:0256 of the menu (the generator writes DS:0118..011B itself)
     apply_new_game_options(world, *options);
     return decode_hok(encode_hok(world));
 }

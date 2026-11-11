@@ -42,22 +42,32 @@ std::string db_player(const Bytes& db, int c, int slot) { return db_raw(db, 0x4A
 void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, const WorldSeeds& seeds, const std::string& tag) {
     const WorldResult r = generate_world(exe, db, s, seeds);
     const HokFile& h = r.save;
+    // the manager loop moves a chosen club (name, owner, class) to a drawn place of its start division (ovr027:1C0B)
+    auto club_of = [&](size_t m) { return int(h.state.at(0x0DCD + m * 0x1AF + 0x14)); };
+    // (with an end in 1994 and one manager the one-manager branch moves the club again, into a division-0 EuroCup team)
+    const bool one_branch = s.end_choice == 0 && s.managers.size() == 1;
+    for (size_t m = 0; m < s.managers.size(); m++) {
+        const int c = club_of(m), v = one_branch ? 0 : s.squad_size;
+        check(c >= 12 * v && c < 12 * v + 12, tag + ": the club of manager " + std::to_string(m) + " lies in its start division");
+    }
     check(h.state.size() == 0xBA91, tag + ": state size");
     check(h.header[0x0E] == s.managers.size() && h.state.at(0x0DC6) == s.managers.size(), tag + ": manager count");
     check(h.date.year == 1993 && h.date.day_index == 1 && h.date.day == 10 && h.date.month == 9, tag + ": season start date");
-    // teams: each division keeps its database clubs, the regional pool and the European clubs stay in place
-    for (int l = 0; l < 3; l++) {
-        std::set<std::string> want, have;
-        for (int t = l * 12; t < l * 12 + 12; t++) {
+    // teams: the 52 German clubs are permuted among themselves (the league shuffle keeps each division, the club draw of
+    // the manager loop moves a manager's club into its start division); the European clubs stay in place
+    {
+        std::multiset<std::string> want, have;
+        for (int t = 0; t < 52; t++) {
             want.insert(db_club(db, t));
             have.insert(raw_name(team(h, t), 22));
         }
-        check(want == have, tag + ": division " + std::to_string(l) + " holds its clubs");
+        check(want == have, tag + ": German clubs permuted among themselves");
+    }
+    for (int l = 0; l < 3; l++) {
         std::set<int> order;
         for (int i = 0; i < 12; i++) order.insert(h.state.at(0x8EDC + size_t(l * 12 + i)));
         check(order.size() == 12 && *order.begin() == l * 12 && *order.rbegin() == l * 12 + 11, tag + ": league list DS:5CCB");
     }
-    for (int t = 36; t < 52; t++) check(raw_name(team(h, t), 22) == db_club(db, t), tag + ": regional pool / LEER in place");
     std::set<std::string> nations_want, nations_have;
     for (int t = 52; t < 64; t++) {
         nations_want.insert(db_club(db, t));
@@ -68,9 +78,9 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
     for (int t = 0; t < 150; t++) {
         const uint8_t* rec = team(h, t);
         check(rec[0x17] >= 47 && rec[0x17] <= 53, tag + ": team bonus +0x17");
-        check(rec[0x1C] >= 40 && rec[0x1C] <= 55 && rec[0x1D] >= 40 && rec[0x1D] <= 55, tag + ": team form");
+        check(rec[0x1C] >= 40 && rec[0x1C] <= 60 && rec[0x1D] >= 40 && rec[0x1D] <= 60, tag + ": team form");
     }
-    for (size_t m = 0; m < s.managers.size(); m++) check(team(h, s.managers[m].team)[0x16] == m + 1, tag + ": human club +0x16");
+    for (size_t m = 0; m < s.managers.size(); m++) check(team(h, club_of(m))[0x16] == m + 1, tag + ": human club +0x16");
     // ovr027:1B27..1DE8 for every manager of a new game; the original's fresh states (BACKUP.HOK: 50 50 50 / 5 5 5 / 0 0 0,
     // +0x18B = 99999; its two-manager game HOT2 at level 3: balance 1500000) agree
     for (size_t m = 0; m < s.managers.size(); m++) {
@@ -80,7 +90,7 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
                   tag + ": youth teams of manager " + std::to_string(m));
         check(int32_t(le32(h.state, block + 0x18F)) == (5 - s.level) * 150000 + 1200000, tag + ": balance (DS:0ED8 * 150000 + 1200000)");
         check(le32(h.state, block + 0x18B) == 99999, tag + ": +0x18B = 99999");
-        check((team(h, s.managers[m].team)[0x34] >> 6) == 2, tag + ": the manager's club is reported on a board (mode 2)");
+        check((team(h, club_of(m))[0x34] >> 6) == 2, tag + ": the manager's club is reported on a board (mode 2)");
     }
     for (size_t m = s.managers.size(); m < 4; m++) check(h.state.at(0x06B8 + m * 0x15) == 0, tag + ": no youth teams for unused managers");
     // players
@@ -92,7 +102,7 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
         names.insert(n);
         check(p[0x14] >= 18 && p[0x14] <= 33, tag + ": age of player " + std::to_string(id));
         check(p[0x15] >= 10 && p[0x15] <= 99 && p[0x16] >= 10 && p[0x16] <= 99, tag + ": skills of player " + std::to_string(id));
-        check(p[0x17] >= 45 && p[0x17] <= 55, tag + ": form of player " + std::to_string(id));
+        check(p[0x17] >= 40 && p[0x17] <= 60, tag + ": form of player " + std::to_string(id));  // squads: 40..60
         const int pos = p[0x18];
         const bool pos_ok = (id <= 20 || (id >= 180 && id <= 183)) ? pos == 0
                             : ((id >= 21 && id <= 96) || (id >= 184 && id <= 190)) ? pos >= 25 && pos <= 41
@@ -106,7 +116,7 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
     static const int bound[3] = {21, 97, 200};
     int counter[3] = {20, 76, 103};
     for (size_t m = 0; m < s.managers.size(); m++) {
-        const int club = s.managers[m].team;
+        const int club = club_of(m);
         const std::string club_name = raw_name(team(h, club), 22);
         int dbc = -1;
         for (int c = 0; c < 64; c++)
@@ -134,10 +144,10 @@ void check_world(const Bytes& exe, const Bytes& db, const WorldSettings& s, cons
     check(cup.size() == 32 && h.state.at(0x8ED1) == 1, tag + ": cup draw");
     for (int t : cup) {
         bool human = false;
-        for (const auto& m : s.managers) human |= m.team == t;
+        for (size_t m = 0; m < s.managers.size(); m++) human |= club_of(m) == t;
         check(t <= 35 || human, tag + ": cup club from 0..35 or human");
     }
-    for (const auto& m : s.managers) check(cup.count(m.team) == 1, tag + ": human club in the cup");
+    for (size_t m = 0; m < s.managers.size(); m++) check(cup.count(club_of(m)) == 1, tag + ": human club in the cup");
     // transfer list: ten draws of a slot rand(0, 9); repeated slots replace their player, so the list holds
     // 1..10 players from slot 0 on, all owned by block 4
     int listed = 0;
@@ -191,6 +201,65 @@ int main(int argc, char** argv) {
             for (size_t k = 0; k < 0x16; k++) same_teams &= team(a.save, t)[k] == team(c.save, t)[k];
         check(same_teams, "after seed keeps the league order");
         check(a.game_random == c.game_random, "GameRandom does not depend on the after seed");
+
+        // Manager -> Neuer in a running game: a second manager joins the one-manager world
+        {
+            const HokFile& base = a.save;
+            int free_club = -1;
+            for (int t = 0; t < 36 && free_club < 0; t++)
+                if (team(base, t)[0x16] == 0) free_club = t;
+            BorlandRandom rng(777);
+            const HokFile two = add_manager_to_game(exe, db, base, {"NEU", 4, free_club}, rng);
+            check(two.state.at(0x0DC6) == 2 && two.header[0x0E] == 2, "add manager: count 2");
+            const int club = two.state.at(0x0DCD + 0x1AF + 0x14);
+            check(team(two, club)[0x16] == 2, "add manager: club owned by manager 2");
+            check(club < 12, "add manager: club drawn into the start division (DS:011A = 0)");
+            int signed_players = 0;
+            for (int slot = 0; slot < 29; slot++) {
+                const int id = squad(two, 1, slot)[0x0F];
+                if (!id) break;
+                signed_players++;
+                check(player(two, id)[0x1A] == 1 && player(two, id)[0x1D] == club, "add manager: owner and club of the draft");
+                check(squad(two, 1, slot)[0x0B] == 1, "add manager: one-season contracts");
+            }
+            check(signed_players == 25, "add manager: 2 + 10 + 13 players drafted");
+            check(le32(two.state, 0x0DCD + 0x1AF + 0x18B) == 99999, "add manager: +0x18B");
+            for (int slot = 0; slot < 11; slot++) {
+                const int id = squad(two, 4, slot)[0x0F];
+                if (id) check(player(two, id)[0x1A] != 1, "add manager: no own player on the transfer list");
+            }
+            check(squad(two, 0, 0)[0x0F] == squad(base, 0, 0)[0x0F], "add manager: manager 0 keeps his squad");
+            BorlandRandom again(777);
+            check(add_manager_to_game(exe, db, base, {"NEU", 4, free_club}, again).state == two.state && again.state() == rng.state(),
+                  "add manager: deterministic");
+        }
+
+        // REAL-CODE new game of 11.11.2026 (docs/logic/WELTGENERATOR.md): club mode, "hans", face 0, menu club 0,
+        // settings 3/3/0/1, mode 3, all seeds 0x4880, the intro's draws replayed. The recorded state already contains the
+        // share market step of the first game day (state 0xB0..0x1E9); DS:0256 (0x6AE) comes from the start menu.
+        if (argc > 2 && std::filesystem::exists(argv[2])) {
+            const Bytes want = read_file(argv[2]);
+            WorldSettings rec;
+            rec.managers = {{"hans", 0, 0}};
+            rec.level = 3;
+            rec.end_choice = 3;
+            rec.squad_size = 0;
+            rec.squad_strength = 1;
+            rec.start_mode = 3;
+            WorldSeeds seeds{0x4880, 0x4880, 0x4880};
+            seeds.intro_draws = {7, 27, 27, 27, 27, 27, 27, 27, 27, 27};
+            const WorldResult got = generate_world(exe, db, rec, seeds);
+            check(got.save.state.size() == want.size(), "recorded new game: state size");
+            int diff = 0;
+            size_t first = 0;
+            for (size_t i = 0; i < want.size() && i < got.save.state.size(); i++) {
+                if ((i >= 0xB0 && i < 0x1EA) || i == 0x6AE) continue;
+                if (got.save.state[i] != want[i] && diff++ == 0) first = i;
+            }
+            if (diff) std::printf("recorded new game: %d bytes differ, first at state 0x%zx\n", diff, first);
+            check(diff == 0, "recorded new game: state equal to the original");
+            check(got.game_random == 783127, "recorded new game: GameRandom end state");
+        }
 
         // the shipped start state (BACKUP.HOK, written by the original) has the same fixed parts
         const auto backup_file = data / "BACKUP.HOK";

@@ -2,8 +2,10 @@
 #include "ui/session.hpp"
 #include "game/checkpoint.hpp"
 #include "game/wm_mode.hpp"
+#include "game/world_generator.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cctype>
 #include <cstdio>
 #include <stdexcept>
@@ -108,7 +110,7 @@ void Session::start_new_game(const NewGameSetup& setup, uint32_t seed, const New
 }
 
 void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed, const NewGameOptions* options) {
-    if (managers.size() == 1) return start_new_game(managers.front(), seed, options);
+    if (managers.size() == 1 && std::getenv("EM_OLD_SHIPPEDSTART")) return start_new_game(managers.front(), seed, options);
     const auto base = find_new_game_base(data_directory_);
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\23.vga gefunden.");
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
@@ -123,6 +125,25 @@ void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
     const auto base = find_new_game_base(data_directory_);
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
     start_from(encode_hok(em::start_wm_only_game(decode_hok(read_file(*base)), *database_, setup)), seed);
+}
+
+void Session::add_manager(const NewGameSetup& setup) {
+    if (!game_ || !database_) throw FormatError("Kein laufendes Spiel.");
+    if (contract_question_) throw FormatError("Zuerst die Vertragsentscheidung abschließen oder abbrechen.");
+    const Game& current = *game_;
+    BorlandRandom rng(current.borland_state());
+    const uint32_t game_random = current.game_rng_state();
+    const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
+    const HokFile next = add_manager_to_game(exe_, db, decode_hok(current.save_bytes()), WorldManager{setup.name, setup.face, setup.team}, rng);
+    auto game = std::make_unique<Game>(exe_, encode_hok(next), 1, nullptr);
+    game->set_native_save_history(save_history_);
+    game->set_database(*database_);
+    game->set_game_rng_state(game_random);
+    game->set_borland_state(rng.state());
+    game_ = std::move(game);
+    dirty_ = true;
+    revision_++;
+    add_news("Neuer Manager: " + setup.name);
 }
 
 void Session::start_from(const Bytes& bytes, uint32_t seed) {

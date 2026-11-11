@@ -184,7 +184,9 @@ int main(int argc, char** argv) {
             check(differences(app.canvas(), goldens / "newmanager-chosen-start.rgb") == 0, "new manager with club");
             app.click(280, 212, false);  // Los jetzt!
             require(app.screen() == ClassicScreen::Main, "Los jetzt! returns to the menu");
-            require(app.session().game().checkpoint_bytes() == before, "the single-manager game stays unchanged");
+            require(app.session().game().managers() == 2, "Los jetzt! adds the new manager to the running game");
+            require(app.session().game().save().state.at(0x0DCD + 0x1AF) == 'S', "the second manager block holds the new name");
+            (void)before;
         }
         // Neuer without a new row returns silently; a row needs face and club.
         {

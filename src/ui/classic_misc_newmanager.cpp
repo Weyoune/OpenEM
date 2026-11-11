@@ -43,7 +43,7 @@ std::pair<int, int> board_cell(ClassicNewManager::Panel panel, int x, int y) {
 void ClassicNewManager::open(const HokFile& h) {
     *this = ClassicNewManager{};
     const Bytes& s = h.state;
-    const int managers = 1;  // OpenEM plays manager 0 only (DS:0386)
+    const int managers = std::clamp(int(s.at(0x0DC6)), 1, 4);  // DS:0386
     for (int m = 0; m < managers; m++) {
         auto& r = rows_[size_t(m)];
         r.face = s.at(kFaces + size_t(m)) == 0xFF ? -1 : s.at(kFaces + size_t(m));

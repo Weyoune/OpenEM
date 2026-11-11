@@ -88,8 +88,15 @@ void ClassicApplication::click_misc(int x, int y, bool right) {
     const auto result = misc_->setup.click(snapshot(), x, y, right);
     if (result == ClassicNewManager::Result::Leave) screen_ = ClassicScreen::Main;
     else if (result == ClassicNewManager::Result::LeaveWithManager) {
+        // ovr027 with var_64 = old manager count: every complete new row joins the running game in menu order
         screen_ = ClassicScreen::Main;
-        notice("Weitere Manager werden noch nicht\nunterstützt.");
+        try {
+            for (const auto& r : misc_->setup.rows())
+                if (!r.existing && r.face >= 0 && r.team >= 0 && r.name.size() >= 2) session_.add_manager({r.name, r.face, r.team});
+            invalidate();
+        } catch (const std::exception& e) {
+            notice(e.what());
+        }
     }
 }
 

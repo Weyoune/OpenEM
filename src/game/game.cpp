@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "game/game.hpp"
+#include "game/redistribution.hpp"
 #include "game/manager_layout.hpp"
 #include "game/market.hpp"
 #include "game/messages.hpp"
@@ -3273,50 +3274,7 @@ void Game::play_wm_day() {
 // rand. The original checks DS:06AC (a manager's nation) as well; only club managers exist here.
 void Game::redistribute_players(int mode) {
     if (db_.clubs.empty()) return;
-    struct Range {
-        int first, end, marker1, marker2, team_lo, team_hi;
-    };
-    static constexpr Range kRanges[2] = {{178, 199, 183, 190, 52, 63}, {0, 179, 20, 96, 0, 23}};
-    static constexpr int kSlotFrom[3] = {0, 2, 12}, kSlotTo[3] = {1, 11, 24};  // DS:55F0..55F3
-    const Range& r = kRanges[mode];
-    // record number of a player (decode_hok skips vacant records, so it is not the vector index)
-    auto record = [&](const HokPlayer& pl) { return int((pl.raw - save_.state.data() - kPlayers) / kPlayerRecord); };
-    auto raw = [&](const HokPlayer& pl) { return save_.state.data() + (pl.raw - save_.state.data()); };
-    auto db_club = [&](int team) -> const DbClub* {  // ovl16_0214: by name
-        for (const DbClub& c : db_.clubs)
-            if (c.name == save_.teams[size_t(team)].name) return &c;
-        return nullptr;
-    };
-    int c = 0, renamed = 0;
-    for (HokPlayer& pl : save_.players) {
-        const int p = record(pl);
-        if (p < r.first || p >= r.end) continue;
-        c = p >= r.marker2 ? 2 : p >= r.marker1 ? 1 : 0;
-        if (raw(pl)[0x1A] != 6) continue;
-        if (manager_team(pl.team)) continue;  // a manager's club keeps its players (every human manager)
-        for (;;) {
-            const int team = brng_.range(r.team_lo, r.team_hi);
-            // ovr040:0585: the own nation (DS:06AC) gets no new players while no manager holds it (+0x16 = 0): redraw
-            if (team == save_.state.at(0x068C) && save_.teams[size_t(team)].raw && save_.teams[size_t(team)].raw[0x16] == 0) continue;
-            int slot = brng_.range(kSlotFrom[c], kSlotTo[c]);
-            if (brng_.range(0, 15) == 0) slot = brng_.range(0, 1);
-            const DbClub* club = db_club(team);
-            if (!club || size_t(slot) >= club->players.size() || club->players[size_t(slot)].name.empty()) continue;
-            const DbPlayer& name = club->players[size_t(slot)];
-            bool taken = false;
-            for (const HokPlayer& other : save_.players) {
-                const int q = record(other);
-                if (q >= r.first && q < r.end && other.name == name.name && (raw(other)[0x1A] != 6 || q < p)) taken = true;
-            }
-            if (taken) continue;
-            std::copy(name.copy.begin(), name.copy.end(), raw(pl));
-            pl.name = name.name;
-            pl.foreigner = name.copy[19] != 0;
-            pl.team = team;
-            renamed++;
-            break;
-        }
-    }
+    const int renamed = redistribute_free_players(save_, db_, brng_, mode, [&](int team) { return manager_team(team); });
     log_.push_back(std::to_string(renamed) + (mode ? " club players" : " national players") + " redistributed");
 }
 
