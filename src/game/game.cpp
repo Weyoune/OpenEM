@@ -1033,7 +1033,13 @@ void Game::play_cup_day() {
                 if (save_.state.at(0x8E51 + pair * 2) != uint8_t(winners[pair])) save_.state.at(0x8E51 + pair * 2) = uint8_t(winners[pair]);
             cup_draw_ = draw_cup_round(winners, brng_);
             // the draw of the final ends with two coins (REAL-CODE period 54, after the 20 swaps; with the cup display on)
-            if (winners.size() == 2 && live && !std::getenv("EM_OLD_FINALCOINS")) { brng_.range(0, 1); brng_.range(0, 1); }
+            // the second coin is tossed again until it differs from the first (two distinct values; REAL-CODE Köln period 244:
+            // 1, 1, 0 - three coins; all earlier finals had two different coins)
+            if (winners.size() == 2 && live && !std::getenv("EM_OLD_FINALCOINS")) {
+                const int first = brng_.range(0, 1);
+                if (std::getenv("EM_OLD_FINALCOINS2")) brng_.range(0, 1);
+                else while (brng_.range(0, 1) == first) {}
+            }
             cup_series_.clear();
             cup_round_++;
             save_.state.at(0x8F84) = uint8_t(cup_round_);
