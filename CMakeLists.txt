@@ -649,6 +649,9 @@ if(TARGET em_realcode)
     # fourth season change of the Köln chain (13.04. -> 09.09.1997): WM-branch healing; only the head-to-head bytes
     add_test(NAME realcode_daydiff_koeln146 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff_koeln/mid145.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff_koeln/day146.bin" 1145)
     set_tests_properties(realcode_daydiff_koeln146 PROPERTIES ENVIRONMENT "GSTATE=1145;FORCEDAYS=16;DAYDIFF_IGNORE=91c8,91e4,9206")
+    # fifth season change of the Köln chain (13.04. -> 09.09.1998): only the head-to-head bytes
+    add_test(NAME realcode_daydiff_koeln178 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff_koeln/mid177.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff_koeln/day178.bin" 1177)
+    set_tests_properties(realcode_daydiff_koeln178 PROPERTIES ENVIRONMENT "GSTATE=1177;FORCEDAYS=16;DAYDIFF_IGNORE=91a2,91c8,91de")
     # goal scenes on (state 0xA525 = 1, PATCHSTATE of mid58): every chance of a board match draws its scene (docs/logic/TORSZENEN_HOOK.md)
     add_test(NAME realcode_daydiff_scenes COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid_scenes.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day_scenes.bin" 51)
     set_tests_properties(realcode_daydiff_scenes PROPERTIES ENVIRONMENT "GSTATE=51;FORCEDAYS=3")
