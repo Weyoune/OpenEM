@@ -115,8 +115,11 @@ void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\23.vga gefunden.");
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
     std::vector<int> places, reveal;
-    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed), options, &places, &reveal)),
+    std::array<uint32_t, 2> streams{};
+    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), managers, uint16_t(seed), options, &places, &reveal,
+                                              &streams)),
                seed);
+    continue_generator_streams(streams);
     start_cup_places_ = std::move(places);
     start_cup_reveal_ = std::move(reveal);
 }
@@ -132,7 +135,18 @@ void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
     NewGameOptions options;
     options.mode = kStartModeWm;
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
-    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), {setup}, uint16_t(seed), &options)), seed);
+    std::array<uint32_t, 2> streams{};
+    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), {setup}, uint16_t(seed), &options, nullptr, nullptr,
+                                              &streams)),
+               seed);
+    continue_generator_streams(streams);
+}
+
+void Session::continue_generator_streams(const std::array<uint32_t, 2>& streams) {
+    if (!game_ || std::getenv("EM_OLD_GENSTREAMS")) return;
+    game_->set_borland_state(streams[0]);
+    game_->set_game_rng_state(streams[1]);
+    game_->enter_first_menu();  // September 10 up to the first menu, as the original (REAL-CODE 11.11.2026)
 }
 
 void Session::add_manager(const NewGameSetup& setup) {

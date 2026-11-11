@@ -152,6 +152,8 @@ public:
     uint32_t game_rng_state() const { return rng_.state(); }
     void set_game_rng_state(uint32_t s) { rng_ = GameRandom(s); rng_.borland = &brng_; }  // differential tests
     void set_borland_state(uint32_t s) { brng_ = BorlandRandom(s); }  // Manager -> Neuer (Session::add_manager)
+    // a world just built by the generator (game/world_generator.hpp): the part of September 10 before the first menu
+    void enter_first_menu();
     // The name database KB/23.vga; without it the season change keeps the player names.
     void set_database(const Database& db) { db_ = db; }
     // The three cursors of the annual distribution live only in the original's process (not in a HOK); the REAL-CODE

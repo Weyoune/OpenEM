@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -69,6 +70,8 @@ public:
     void start_wm_game(const NewGameSetup& setup, uint32_t seed = 1);
     // Manager -> Neuer in a running game (game/world_generator.hpp add_manager_to_game): the game goes on with one more manager
     void add_manager(const NewGameSetup& setup);
+    // after a generator start: Borland and GameRandom go on from the generator's end states, as in the original
+    void continue_generator_streams(const std::array<uint32_t, 2>& streams);
     void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1, const NewGameOptions* options = nullptr);
     // The manager the UI acts for (Game::select_manager). It is not part of a checkpoint, so the session keeps it and
     // gives it to every staged game; loading or starting a game selects manager 0.

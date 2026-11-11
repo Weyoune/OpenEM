@@ -133,7 +133,7 @@ HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSet
 
 HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& base, const std::vector<NewGameSetup>& managers,
                         uint16_t seed, const NewGameOptions* options, std::vector<int>* cup_places,
-                        std::vector<int>* cup_reveal) {
+                        std::vector<int>* cup_reveal, std::array<uint32_t, 2>* random_states) {
     if (!is_new_game_base(base)) throw FormatError("Neues Spiel: kein frischer Startstand");
     if (managers.empty() || managers.size() > 4) throw FormatError("Neues Spiel: ein bis vier Manager");
     const Bytes& s = base.state;
@@ -173,6 +173,7 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
     WorldResult result = generate_world(exe, db_raw, settings, seeds);
     if (cup_places) *cup_places = result.cup_places;
     if (cup_reveal) *cup_reveal = result.cup_reveal;
+    if (random_states) *random_states = {result.borland, result.game_random};
     HokFile world = std::move(result.save);
     if (!options) return world;
     // the highscore list DS:0256 of the menu (the generator writes DS:0118..011B itself)

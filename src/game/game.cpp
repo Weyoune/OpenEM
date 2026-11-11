@@ -4420,6 +4420,34 @@ void Game::menu_pass(bool menu) {
     }
 }
 
+// The original's day loop after the new-game generator, up to the first menu "Vor dem ersten Spieltag" (REAL-CODE new game
+// of 11.11.2026, the 90 Borland draws after the generator): the image of every manager (ovl08_2893), September 10's finance
+// loop (refusal reset, share market, booking, image), the lineup and team refresh, then the menu pass (transfer-list roll,
+// daily factor) - like the end of the season change. In the WM-only mode the club days are skipped: only the image and the
+// daily factor (30 draws, REAL-CODE WM-only new game).
+void Game::enter_first_menu() {
+    if (wm_only()) {
+        for (int m = 0; m < managers_; m++) mgr_[size_t(m)].image = current_club_image(m);
+        daily_luck_ = brng_.range(85, 115);
+        return;
+    }
+    for (int m = 0; m < managers_; m++) mgr_[size_t(m)].image = current_club_image(m);
+    for (int m = 0; m < managers_; m++) {
+        stadium_daily_refusal_reset(stadium_refusals_, m, brng_);
+        market_day(save_.state, brng_);
+        for (int c = 0; c < kHokShares; c++) {
+            save_.finance.shares[c] = le32(save_.state, 0x30 + size_t(c) * 8 + 4);
+            for (int e = 0; e < kHokShareHistory; e++) save_.finance.share_price[c][e] = le16(save_.state, 0xB0 + size_t(c) * 72 + size_t(e) * 2) / 3;
+        }
+        refresh_budget_roster(m);
+        finance_day(finance_, mgr_[size_t(m)].budget, 10, 30);
+        mgr_[size_t(m)].image = current_club_image(m);
+    }
+    for (int m = 0; m < managers_; m++) prepare_human_lineup(true, m);
+    menu_pass(true);
+    message_step_pending_ = true;
+}
+
 void Game::advance_day() {
     g_goal_scenes = save_.state.at(0xA525);  // DS:0226 goal scenes (docs/logic/TORSZENEN_HOOK.md)
     g_match_speed = le16(save_.state, 0xB94F);  // DS:0262 speed: below 70 the match display draws (TORSZENEN_HOOK.md section 2)

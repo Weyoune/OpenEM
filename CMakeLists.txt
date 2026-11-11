@@ -653,7 +653,11 @@ if(TARGET em_realcode)
     # WM-only new game (REAL-CODE 11.11.2026, docs/logic/WELTGENERATOR.md): generator world (em_world, seeds 0x4880, mode 2), the
     # jump to the WM appointment (Game::wm_only_prepare) against the original's state on 14.04.1994; DS:0256 comes from the menu
     add_test(NAME realcode_wm_only_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_orig_4880.bin" 3934523008)
-    set_tests_properties(realcode_wm_only_start PROPERTIES ENVIRONMENT "GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    set_tests_properties(realcode_wm_only_start PROPERTIES ENVIRONMENT "GENSTART=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # club-mode new game: the generator world plus September 10 up to the first menu (Game::enter_first_menu) against the
+    # original's state in the menu "Vor dem ersten Spieltag" (share market, finances, image, menu pass)
+    add_test(NAME realcode_new_game_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin" 3934523008)
+    set_tests_properties(realcode_new_game_start PROPERTIES ENVIRONMENT "GENSTART=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
     # fourth season change (13.04. -> 10.09.1996): the same head-to-head deviation as period 58 (docs/DEVIATIONS.md)
     add_test(NAME realcode_daydiff_period92 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid91.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day92.bin" 84)
     set_tests_properties(realcode_daydiff_period92 PROPERTIES ENVIRONMENT "GSTATE=84;FORCEDAYS=16;DAYDIFF_IGNORE=919c,91aa,91bc")

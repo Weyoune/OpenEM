@@ -79,6 +79,7 @@ HokFile start_new_game(const HokFile& base, const Database& db, const NewGameSet
 // choice, squad size, mode; DS:011B and DS:0256 are written afterwards), else DS:0118..011A of `base`. `db_raw` = KB\23.vga.
 HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& base, const std::vector<NewGameSetup>& managers,
                         uint16_t seed, const NewGameOptions* options = nullptr, std::vector<int>* cup_places = nullptr,
-                        std::vector<int>* cup_reveal = nullptr);
+                        std::vector<int>* cup_reveal = nullptr, std::array<uint32_t, 2>* random_states = nullptr);
+// random_states: Borland and GameRandom at the end of the generator; the original's day loop goes on with both (REAL-CODE)
 
 }  // namespace em

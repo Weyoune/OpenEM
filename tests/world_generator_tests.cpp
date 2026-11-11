@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
             check(got.game_random == 783127, "recorded new game: GameRandom end state");
             // Manager -> Neuer in the same recorded game (REAL-CODE 11.11.2026): main menu of the first day, Manager -> Neuer,
             // row 1 "neu", face 6, ESC Frankfurt (state club 12); the Borland state is the generator's end state plus the 90
-            // draws of the first day and 24 direct rand() steps of the menus. Draws and state equal to the original.
+            // draws of the first day (3934523008 advanced 90 steps). Draws and state equal to the original.
             if (argc > 3 && std::filesystem::exists(argv[3])) {
                 HokFile base = decode_hok(encode_hok(got.save));
                 base.state = want;
