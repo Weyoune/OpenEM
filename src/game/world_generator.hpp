@@ -43,8 +43,8 @@ struct WorldSettings {
     std::vector<WorldManager> managers;  // 1..4 human managers, in menu order
     int level = 3;       // DS:0118: DS:0ED8 (game level for salaries) = 5 - level
     int end_choice = 0;  // DS:0119: 0..2 -> last season 1994/1996/1998 (DS:5A14 = 0x7CA + 2 x), 3 -> 22222
-    int squad_size = 0;  // DS:011A: group sizes DS:0169 + 4 x: 0 = 2/10/13, 1 = 2/9/11, 2 = 2/8/10
-    int squad_strength = 1;  // DS:011B: strength of the new squads, DS:4B42 + 3 x DS:011A + choice (dseg default 1)
+    int squad_size = 0;  // DS:011A "Start-Liga" (0 Bundesliga, 1, 2): the start division of the club draw; also the squad group sizes DS:0169 + 4 x: 0 = 2/10/13, 1 = 2/9/11, 2 = 2/8/10
+    int squad_strength = 1;  // DS:011B "Start-Stärke" (1 = Mittelfeld): strength of the new squads, DS:4B42 + 3 x DS:011A + choice
     int start_mode = 0;  // menu variable var_57 (0..3): DS:D0B9 = 0, 2, 1, 4
     bool cup_live = false;  // "Aber klar" to the DEB cup question of ovl05_4c7b(0, 0): the places are uncovered (Borland)
     bool menu_order_only = false;  // skip the manager loop (its club draw swaps names): the club order of the start menu

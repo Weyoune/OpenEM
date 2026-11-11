@@ -3,6 +3,7 @@
 #include "game/wm_mode.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "game/game.hpp"
 #include "game/manager_layout.hpp"
@@ -143,7 +144,8 @@ void Game::wm_only_prepare() {
     const int first = calendar_.nth_day(kEventWorldChampionship, 1);
     if (first < 1) return;
     if (day_ < first - 1) {
-        if (day_ == 0)  // the first-step initialisation of a fresh game (advance_day) happens before the jump
+        // REAL-CODE WM-only new game (11.11.2026): the energies keep the values of the new world on the way to the WM
+        if (day_ == 0 && std::getenv("EM_OLD_WMENERGY"))
             for (HokTeam& team : save_.teams)
                 for (auto& kind : team.energy)
                     for (auto& e : kind) e = 90;

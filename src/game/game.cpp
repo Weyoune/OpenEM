@@ -2838,6 +2838,9 @@ bool Game::select_national_player(size_t player, bool selected) {
 void Game::refresh_national_team() {
     if (national_coach_ < 0) return;
     const auto squad = national_squad();
+    // without nominated players the record keeps its values (REAL-CODE WM-only new game 11.11.2026: team record 57 after the
+    // appointment still holds the generator values)
+    if (squad.empty() && !std::getenv("EM_OLD_NATIONALEMPTY")) return;
     HumanSquad human{&squad, &save_.players};
     for(int kind=0;kind<2;kind++)human.per_line[kind]=line_counts_[5][size_t(kind)];
     human.level = finance_.level;

@@ -928,7 +928,9 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
         st.at(state_of(0xA969)) = 1;
         st.at(state_of(0xA8A0)) = 8;
     }
-    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDLOOP")) {  // the managers' clubs are rated from their squads again
+    // the first day step rates the managers' clubs from their squads again (162c:146c, no draws; the recorded club-mode state
+    // holds it); the WM-only mode skips the club days, its clubs keep the values of 162c:1c5b (REAL-CODE 11.11.2026)
+    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDLOOP") && w.d(dsMode) != 1) {
         HokFile h = make_hok(std::move(st));
         for (size_t m = 0; m < managers.size(); m++) refresh_menu_team(h, int(m));
         st = std::move(h.state);

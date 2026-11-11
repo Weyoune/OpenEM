@@ -647,6 +647,10 @@ if(TARGET em_realcode)
     # periods with documented deviations (DEVIATIONS.md): the listed state bytes are not counted
     add_test(NAME realcode_daydiff_period58 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid57.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day58.bin" 50)
     set_tests_properties(realcode_daydiff_period58 PROPERTIES ENVIRONMENT "GSTATE=50;FORCEDAYS=16;DAYDIFF_IGNORE=91cc,91d6,91e2,af2c")
+    # WM-only new game (REAL-CODE 11.11.2026, docs/logic/WELTGENERATOR.md): generator world (em_world, seeds 0x4880, mode 2), the
+    # jump to the WM appointment (Game::wm_only_prepare) against the original's state on 14.04.1994; DS:0256 comes from the menu
+    add_test(NAME realcode_wm_only_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_orig_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_only_start PROPERTIES ENVIRONMENT "GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
     # fourth season change (13.04. -> 10.09.1996): the same head-to-head deviation as period 58 (docs/DEVIATIONS.md)
     add_test(NAME realcode_daydiff_period92 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid91.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day92.bin" 84)
     set_tests_properties(realcode_daydiff_period92 PROPERTIES ENVIRONMENT "GSTATE=84;FORCEDAYS=16;DAYDIFF_IGNORE=919c,91aa,91bc")

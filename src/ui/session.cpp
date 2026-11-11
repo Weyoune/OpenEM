@@ -124,7 +124,15 @@ void Session::start_new_game(const std::vector<NewGameSetup>& managers, uint32_t
 void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
     const auto base = find_new_game_base(data_directory_);
     if (!base || !database_) throw FormatError("Kein Startstand (BACKUP.HOK) und keine Datenbank KB\\23.vga gefunden.");
-    start_from(encode_hok(em::start_wm_only_game(decode_hok(read_file(*base)), *database_, setup)), seed);
+    if (std::getenv("EM_OLD_SHIPPEDSTART")) {
+        start_from(encode_hok(em::start_wm_only_game(decode_hok(read_file(*base)), *database_, setup)), seed);
+        return;
+    }
+    // the world generator in the WM-only mode (var_57 = 2), REAL-CODE equal to the original's new game (WELTGENERATOR.md)
+    NewGameOptions options;
+    options.mode = kStartModeWm;
+    const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
+    start_from(encode_hok(em::start_new_world(exe_, db, decode_hok(read_file(*base)), {setup}, uint16_t(seed), &options)), seed);
 }
 
 void Session::add_manager(const NewGameSetup& setup) {
