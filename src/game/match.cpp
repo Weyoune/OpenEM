@@ -977,7 +977,7 @@ struct MatchRun::Impl {
         bool home_shot = false, away_shot = false;
         const bool home_goal = (events & 1) && chance_is_goal(h, a, 0, minute, rng, level, hp, ap, &home_shot, kinds_h, kinds_a);
         if ((events & 1) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 0, home_goal, false, h.skaters + hbox.running() == 6));
-        if ((events & 1) && hp && hp->on_chance) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
+        if ((events & 1) && hp && hp->on_chance && !(minute_check_off[0] && !std::getenv("EM_OLD_DROPCREDIT"))) hp->on_chance(home_goal, h, hsq);  // 23c4 books every chance of a match with a manager
         if ((events & 1) && ap && ap->on_opponent_chance) ap->on_opponent_chance(home_goal, h);
         if ((events & 1) && minute <= 60) { shown.period_chances[(minute - 1) / 20][0]++; if (home_goal) shown.period_goals[(minute - 1) / 20][0]++; }
         if (home_goal) {
@@ -992,7 +992,7 @@ struct MatchRun::Impl {
         }
         const bool away_goal = (events & 2) && chance_is_goal(h, a, 1, minute, rng, level, hp, ap, &away_shot, kinds_h, kinds_a);
         if ((events & 2) && scenes_on()) shown.scenes.push_back(draw_goal_scene(*rng.borland, 1, away_goal, false, a.skaters + away_penalties().running() == 6));
-        if ((events & 2) && ap && ap->on_chance) ap->on_chance(away_goal, a, asq);
+        if ((events & 2) && ap && ap->on_chance && !(minute_check_off[1] && !std::getenv("EM_OLD_DROPCREDIT"))) ap->on_chance(away_goal, a, asq);  // a club that left the pair by the pair-table error is no longer looked up (REAL-CODE Köln period 262)
         if ((events & 2) && hp && hp->on_opponent_chance) hp->on_opponent_chance(away_goal, a);
         if ((events & 2) && minute <= 60) { shown.period_chances[(minute - 1) / 20][1]++; if (away_goal) shown.period_goals[(minute - 1) / 20][1]++; }
         // both sides score in the same overtime minute: the away goal decides, the home goal of the minute is withdrawn (REAL-CODE

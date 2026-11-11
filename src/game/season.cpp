@@ -192,7 +192,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (humans.is_human(id) && !humans.is_human(next) && !std::getenv("EM_OLD_DROPHUMAN")) f->run->drop_human(side);
             id = next;
             if (f->home == f->away) f->run->mark_same_club();
-            if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d\n", f->pair, side, next);
+            if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d (now %d-%d, scheduled %d-%d) at B%zu\n", f->pair, side, next, f->home, f->away, f->scheduled[0], f->scheduled[1], g_borland_log ? g_borland_log->size() : size_t(0));
         }
         (void)trigger;
     };
