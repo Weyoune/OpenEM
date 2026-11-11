@@ -230,6 +230,58 @@ int main(int argc, char** argv) {
             check(quiet.borland_state() != live.borland_state(), "\"Aber klar\" takes Borland draws");
         }
 
+        // --- the end year: the season change ends the game (highscore, "Das wars...", program end) -------------------
+        {
+            HokFile h = decode_hok(read_file(data / "SAISEND.HOK"));
+            const Bytes exe = read_file(data / "EM.EXE");
+            int season_change = -1;
+            {
+                Game normal(exe, encode_hok(h));
+                const int year = normal.save().season_year;
+                for (int day = 0; day < 80 && season_change < 0; day++) {
+                    normal.advance_day();
+                    if (normal.save().season_year != year) season_change = day;
+                }
+                check(season_change >= 0 && !normal.game_over(), "end year 22222: the season change goes on");
+            }
+            h.state.at(0xAEB5) = uint8_t(1994 & 0xFF);
+            h.state.at(0xAEB6) = uint8_t(1994 >> 8);
+            Bytes before_end;  // the last day before the season change, as an OpenEM checkpoint
+            {
+                Game ending(exe, encode_hok(h));
+                int day = 0;
+                for (; day < 80 && !ending.game_over(); day++) {
+                    before_end = ending.checkpoint_bytes();
+                    ending.advance_day();
+                }
+                check(ending.game_over() && day - 1 == season_change, "Game: the season change of the end year ends the game");
+            }
+            const fs::path file = work / "END1994.OEM";
+            write_new_save(file, before_end);
+            ClassicApplication app(data, work, file);
+            // play on like the player: the crest, wait for timed screens, answer notices and tables
+            for (int i = 0; i < 4000 && app.probe().modal != "game-end" && app.screen() != ClassicScreen::Highscore; i++) {
+                const auto p = app.probe();
+                if (p.modal == "match" || p.modal == "banner" || p.modal == "timed-notice" || p.modal == "advancing") {
+                    virtual_now = std::max(virtual_now + 16, p.deadline.value_or(0));
+                    app.tick();
+                    app.draw();
+                } else if (p.modal == "notice") app.click(120, 171, false);
+                else if (p.modal == "cup-table" || p.modal.rfind("review", 0) == 0) app.click(160, 120, false);
+                else if (p.modal == "messages") app.key(SDLK_SPACE);
+                else if (!p.modal.empty()) app.click(190, 171, false);
+                else if (app.screen() != ClassicScreen::Main) app.click(316, 4, true);
+                else if (p.category >= 0) app.click(160, 20, true);
+                else app.click(293, 52, false);  // the crest
+            }
+            check(app.screen() == ClassicScreen::Highscore || app.probe().modal == "game-end", "the season change of 1994 ends the game");
+            if (app.screen() == ClassicScreen::Highscore) app.click(10, 10, false);  // the list of the settings
+            check(app.probe().modal == "game-end", "\"Das wars...\" after the highscore");
+            app.draw();
+            app.click(10, 10, false);
+            check(app.finished(), "a press ends the program");
+        }
+
         if (failures) throw std::runtime_error(std::to_string(failures) + " checks failed");
         std::printf("classic ui gaps: ok\n");
         return 0;

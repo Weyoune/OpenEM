@@ -3690,6 +3690,14 @@ void Game::new_season() {
         const uint32_t x = uint32_t(e[0] | e[1] << 8 | e[2] << 16 | uint32_t(e[3]) << 24) + uint32_t(v);
         for (int k = 0; k < 4; k++) e[k] = uint8_t(x >> (8 * k));
     }
+    // End of the game (day loop 6af8 before 162c:1c5b): when the date year DS:5A18 (32 bits) equals the end year DS:5A14
+    // (state 0xAEB5, start menu "Ende"), the original shows the highscore (ovl16_30ed), "Das wars..." (ovl14_00ad) and
+    // leaves the program (ovl00_058a); nothing of the season change after this point happens.
+    if (date_of_season_day(int(calendar_.events.size()), save_.year).year ==
+        int(save_.state.at(0xAEB5) | save_.state.at(0xAEB6) << 8)) {
+        game_over_ = true;
+        return;
+    }
     // 162c:1c5b: new season values of the German clubs in their new class, before the clubs change places (REAL-CODE
     // period 30: the 52 rerates follow the regional swaps directly)
     for (int t = 0; t < kFirstNationalTeam; t++) {
@@ -4352,6 +4360,7 @@ void Game::advance_day() {
             return;
         }
         new_season();
+        if (game_over_) return;  // the end year: the original leaves the program (see new_season)
         if (!std::getenv("EM_OLD_SEASONEND")) {
             // The original stops in the menu "Vor dem ersten Spieltag" (September 10) before the first matchday, with the
             // usual end of a play step: transfer-list roll and the daily factor (REAL-CODE period 30). Day 1 is the next step.

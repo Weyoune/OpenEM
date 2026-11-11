@@ -172,6 +172,8 @@ private:
             log(std::string("Vertragsfrage ") + p.text + ": " + (yes ? "Mach' ich!" : "Abbruch"));
             click(yes ? 38 : 118, (p.slot < 12 ? 80 : 0) + 86, false);  // ovl11_41db sits low for the first twelve
         } else if (m == "player-detail") click(196, 214, false);
+        else if (m == "title" || m == "cup-draw" || m == "cup-draw-key" || m == "game-end") click(160, 120, false);
+        else if (m == "cup-page") click(160, 120, true);
         else if (m == "club-info" || m == "team-schedule") click(160, 120, true);
         else if (m == "file-preview") { app().release(); settle_frame(); }
         else if (m == "fee-editor" || m == "contract-editor") key(SDLK_ESCAPE);

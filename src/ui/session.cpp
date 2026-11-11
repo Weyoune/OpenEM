@@ -164,6 +164,8 @@ void Session::commit(std::unique_ptr<Game> next, const Bytes& before) {
     const bool changed = next->checkpoint_bytes() != before;
     next->set_contract_decider({});  // never retain callbacks referring to a staged stack frame
     next->set_match_observer({});
+    next->set_cup_draw_decider({});
+    next->set_cup_reveal_observer({});
     game_ = std::move(next);
     save_history_=game_->native_save_history();
     dirty_ = dirty_ || changed;

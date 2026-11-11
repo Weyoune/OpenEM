@@ -347,6 +347,8 @@ public:
     using CupRevealObserver = std::function<void(const std::vector<int>& order, const std::vector<int>& places)>;
     void set_cup_draw_decider(CupDrawDecider d) { cup_draw_decider_ = std::move(d); }
     void set_cup_reveal_observer(CupRevealObserver o) { cup_reveal_observer_ = std::move(o); }
+    // The end year (state 0xAEB5) was reached in the season change: the game is over (highscore, "Das wars...").
+    bool game_over() const { return game_over_; }
     long match_attendance() const { return match_attendance_; }  // the last home game of the human club (ovl08_21e5)
     bool match_sold_out() const { return match_sold_out_; }
     void decline_offer(size_t i);
@@ -456,6 +458,7 @@ private:
     MatchMinuteObserver match_observer_;
     CupDrawDecider cup_draw_decider_;
     CupRevealObserver cup_reveal_observer_;
+    bool game_over_ = false;
     long match_attendance_ = 0;
     bool match_sold_out_ = false;
     RatingBounds rating_;

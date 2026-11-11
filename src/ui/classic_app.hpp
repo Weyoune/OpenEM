@@ -168,6 +168,11 @@ private:
     void click_cup_live(int x,int y,bool right);
     bool cup_live_waiting() const;
     bool cup_live_page() const;
+    // End of the game at the end year (Game::game_over): 1 = the highscore page (ovl16_30ed), 2 = "Das wars..."
+    // (ovl14_00ad) until a press, then the program ends (classic_misc_input.cpp).
+    int game_end_ = 0;
+    void begin_game_end();
+    void draw_game_end();
     std::optional<ManagerQuestion> manager_question_;
     void draw_manager_question();
     void click_manager_question(int x,int y,bool right);

@@ -209,6 +209,7 @@ void ClassicApplication::tick(){
         finish_timed_native_notice();
     }
     if(cup_live_){tick_cup_live();return;}  // the live DEB cup draw (classic_cup_draw.cpp)
+    if(!game_end_&&session_.loaded()&&session_.game().game_over()){begin_game_end();return;}  // the end year (classic_misc_input.cpp)
     if(live_day_){  // inside the minute observer: only the match display runs
         if(!live_screen_)tick_match_view();
         else if(screen_==ClassicScreen::Main){live_screen_=false;screen_=live_screen_before_;}  // the screen was left
@@ -378,6 +379,7 @@ void ClassicApplication::open_player(int slot,int manager){
 void ClassicApplication::click(int x,int y,bool right){
     if(title_){title_=false;return;}  // ovr034:07D8 any press ends the title screen
     if(cup_live_){click_cup_live(x,y,right);return;}  // the live DEB cup draw (classic_cup_draw.cpp)
+    if(game_end_==2){finished_=true;return;}  // "Das wars...": a press leaves the program (ovl00_058a)
     if(!match_frames_.empty()&&!live_screen_){  // live_screen_: a screen opened during the minutes takes the input
         if(live_day_&&!match_frames_[match_frame_].waits()&&live_click(x,y,right))return;
         // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
@@ -647,6 +649,7 @@ void ClassicApplication::motion(int x,int y){
 void ClassicApplication::key(int key){
     if(title_){title_=false;return;}
     if(cup_live_){if(cup_live_waiting())click_cup_live(0,0,false);return;}  // sub_19B08 also takes a key
+    if(game_end_==2){finished_=true;return;}
     // the key buffer read by ovl14_1dc7 after a goal scene
     if(!match_frames_.empty()&&!live_screen_&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
     if(live_day_&&!live_screen_){  // the day is being played
@@ -708,6 +711,7 @@ void ClassicApplication::text_input(std::string_view text){
 void ClassicApplication::draw(){
     if(title_){canvas_.background(197);if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}
     if(cup_live_){draw_cup_live();if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}  // classic_cup_draw.cpp
+    if(game_end_==2){draw_game_end();if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}
     if(!match_frames_.empty()&&!live_screen_){
         const ClassicMatchFrame& frame=match_frames_[match_frame_];
         if(frame.league_page){
