@@ -147,7 +147,7 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
 
 ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
                                 int selectedLine, ManualLineupAction action,const bool* sixOverride,
-                                const std::array<std::array<int,6>,5>* cellsOverride) {
+                                const std::array<std::array<int,6>,5>* cellsOverride,bool inMatch) {
     if (manager < 0 || manager >= kHokManagers)
         throw FormatError("HOK: invalid manual lineup manager");
     if (selectedLine < 0 || selectedLine > 5)
@@ -205,7 +205,7 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
         //0B57..0B7D always uses "noch gesperrt", even for status3. A
         // zero remaining-duration byte permits this diagram-only removal.
         if (r[0x0d] && status) return fail(ManualLineupMessage::Suspended);
-        r[0x0a] = 0;
+        r[0x0a] = inMatch ? 1 : 0;  // 0D1D: in a running match the player stays in the squad
         r[0x15] = 0;
         return finish();
     }
@@ -214,8 +214,10 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
     // has already been disabled before any of these messages are returned.
     if (status == 1) return fail(ManualLineupMessage::Suspended);
     if (status == 2) return fail(ManualLineupMessage::Injured);
-    if (!r[0x0a] && members == 22) return fail(ManualLineupMessage::TeamFull);
     const bool reserve = action == ManualLineupAction::ReserveToggle;
+    if (inMatch && reserve) return finish();                 // 0F55: only the left button changes a line in a match
+    if (inMatch && !r[0x15] && !r[0x0a]) return finish();  // 0E4A / 12B8: no new player during the match
+    if (!r[0x0a] && members == 22) return fail(ManualLineupMessage::TeamFull);
     if (!reserve && !r[0x15]) {
         if (!selectedLine) return fail(ManualLineupMessage::NoLineSelected);
         if ((role == 0) != (selectedLine == 5)) return fail(ManualLineupMessage::WrongRole);
@@ -231,7 +233,7 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
             r[0x0a] = 0;
         } else {
             if (r[0x0a] && r[0x15] && old_block >= 0) result.selected_line = old_block + 1;
-            r[0x0a] = reserve ? 1 : 0;
+            r[0x0a] = reserve || inMatch ? 1 : 0;  // 117F: in a match the player stays in the squad
             r[0x15] = 0;
         }
         return finish();

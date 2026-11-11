@@ -1641,10 +1641,10 @@ StockResult Game::trade_shares(size_t company,uint32_t quantity,bool sell) {
 }
 
 ManualLineupResult Game::change_lineup(size_t slot,int selected_line,ManualLineupAction action,const bool* six_override,
-                                     const std::array<std::array<int,6>,5>* cells_override){
+                                     const std::array<std::array<int,6>,5>* cells_override,bool in_match){
     const int a=active_manager_;
     if(national_coach_>=0||mgr_[a].team>=kFirstNationalTeam)throw FormatError("Aufstellung ist in dieser Phase nicht verfügbar.");
-    const auto result=manual_lineup(save_,a,slot,selected_line,action,six_override,cells_override);
+    const auto result=manual_lineup(save_,a,slot,selected_line,action,six_override,cells_override,in_match);
     if(result.changed){
         refresh_human_team(a);mgr_[a].squad.penalty_effort_adjustment=penalty_effort_adjustment(save_,mgr_[a].team);
     }
@@ -2047,8 +2047,8 @@ void Game::play_euro_day() {
         MatchStats stats;
         MatchResult res;
         if (minute_path) {  // every manager's club plays with his squad (one statistics object per game, booked per manager below)
-            res = league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0,
-                               manager_squad(home), manager_squad(away), &stats);
+            res = observed_league_match(save_.teams[size_t(home)], save_.teams[size_t(away)], rng_, 0, manager_squad(home),
+                                        manager_squad(away), &stats, {}, match_observer_ ? &match_observer_ : nullptr, home, away);
         } else {
             auto& h = save_.teams[size_t(home)]; auto& a = save_.teams[size_t(away)];
             prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
@@ -2833,6 +2833,7 @@ void Game::credit_human_goal(int competition, bool penalty, bool goal, const Hok
         credit = credit_goal(squad, save_.players, brng_, competition, penalty, goal, on_ice);
     }
     if (credit.scorer >= 0) last_scorer_slot_ = credit.scorer;
+    chance_credits_.push_back({mgr_[size_t(m)].team, goal, penalty, credit.scorer, credit.assist});
     if (!goal || credit.scorer < 0) return;
     auto& scorer = save_.players[size_t(squad[size_t(credit.scorer)].player)];
     if (competition == 0 && !penalty) scorer.league_goals = std::min(255, scorer.league_goals + 1);
@@ -3075,8 +3076,9 @@ void Game::play_wm_day() {
                     // the head-to-head table of manager 0 is booked from the own nation's view (DS:06AC, REAL-CODE period 30)
                     book_head_to_head(save_.state, p.home, p.away, res.home, res.away, save_.state.at(0x068C));
                 } else
-                    res = league_match(save_.teams[size_t(p.home)], save_.teams[size_t(p.away)], rng_, 0,
-                                       p.home == nation ? &squad : nullptr, p.away == nation ? &squad : nullptr, &stats);
+                    res = observed_league_match(save_.teams[size_t(p.home)], save_.teams[size_t(p.away)], rng_, 0,
+                                                p.home == nation ? &squad : nullptr, p.away == nation ? &squad : nullptr, &stats, {},
+                                                match_observer_ ? &match_observer_ : nullptr, p.home, p.away);
                 if (p.home == nation || p.away == nation)
                     book_national_match(p.home == nation ? res.home : res.away, stats, p.home == nation ? 0 : 1);
                 wm_groups_[g].book(p.home, p.away, res);
@@ -3139,7 +3141,7 @@ void Game::play_wm_day() {
             ties.push_back({p.home, p.away, res});
         }
     } else
-        ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats});
+        ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats}, match_observer_ ? &match_observer_ : nullptr);
     bool nation_played = false;
     for (size_t k = 0; k < ties.size(); k++) {
         const Tie& t = ties[k];
@@ -4290,6 +4292,9 @@ void Game::menu_pass(bool menu) {
 
 void Game::advance_day() {
     g_goal_scenes = save_.state.at(0xA525);  // DS:0226 goal scenes (docs/logic/TORSZENEN_HOOK.md)
+    g_match_speed = le16(save_.state, 0xB94F);  // DS:0262 speed: below 70 the match display draws (TORSZENEN_HOOK.md section 2)
+    chance_credits_.clear();
+    for (size_t i = 0; i < g_display_flags.size(); i++) g_display_flags[i] = save_.state.at(0xA51C + i);  // DS:021D switches
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
     // leaving the club calendar's last day (13.04., "Saisonende") clears the season flags of a manager without WM appointment

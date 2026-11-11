@@ -76,6 +76,7 @@ int PenaltyBox::code() const {
 }
 
 bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSquadPlayer>* squad) {
+    last_player_ = player;
     compact();
     const int next = running();
     if (next == 2) return false;

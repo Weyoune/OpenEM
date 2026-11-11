@@ -24,6 +24,7 @@ Session::Session(std::filesystem::path directory) : data_directory_(std::move(di
 }
 
 const Game& Session::game() const {
+    if (live_game_) return *live_game_;
     if (!game_) throw std::logic_error("Kein Spielstand geöffnet.");
     return *game_;
 }
@@ -158,6 +159,13 @@ void Session::commit(std::unique_ptr<Game> next, const Bytes& before) {
 
 ActionResult Session::apply(const std::function<ActionResult(Game&)>& action) {
     if (contract_question_) throw FormatError("Eine Vertragsentscheidung wartet.");
+    if (live_game_) {  // inside the minute loop of a running day: the change belongs to that day
+        ActionResult result = action(*live_game_);
+        dirty_ = true;
+        revision_++;
+        if (!result.message.empty()) add_news(result.message);
+        return result;
+    }
     const Bytes before = game().checkpoint_bytes();
     auto next = staged_game(before);
     ActionResult result = action(*next);
@@ -192,9 +200,15 @@ bool Session::advance_day() {
         Game* staged = next.get();
         next->set_match_observer([this, staged](int minute, const std::vector<LiveMatch>& matches) { match_observer_(*staged, minute, matches); });
     }
+    struct LiveScope {
+        Game*& slot;
+        ~LiveScope() { slot = nullptr; }
+    } live_scope{live_game_};
+    if (match_observer_) live_game_ = next.get();
     try {
         next->advance_day();
     } catch (const NeedContract&) {
+        live_game_ = nullptr;
         return false;  // all simulation side effects belong to the discarded staged game
     } catch (...) {
         cancel_advance();

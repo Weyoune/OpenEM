@@ -9,6 +9,9 @@
 #include "ui/session.hpp"
 #include "ui/classic_cup.hpp"
 #include "game/calendar.hpp"
+#include "game/lineup.hpp"
+#include "game/match.hpp"
+#include "game/scorers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -679,6 +682,130 @@ int main(int argc, char** argv) {
             app.click(10, 10, true);
             app.tick();
             require(app.screen() == ClassicScreen::Main, "a right click returns to the menu (screen " + std::to_string(int(app.screen())) + ")");
+        }
+        {
+            // Package 2 (11.11.2026): EuroCup / WM observer, message draws below speed 70, goal scene replays, lineup mode 5,
+            // board messages for penalties and shoot-out shots
+            const HokFile start = decode_hok(read_file(references / "START.HOK"));
+            const HokTeam& home = start.teams[6];  // EHC Freiburg
+            const HokTeam& away = start.teams[7];  // Kölner EC (reporting mode 2: a board)
+            {
+                // observed_league_match plays exactly the minutes of league_match; the observer sees 0..60
+                GameRandom r1(777), r2(777);
+                const MatchResult a = league_match(home, away, r1);
+                int calls = 0, last = -1;
+                const MatchMinuteObserver observer = [&](int minute, const std::vector<LiveMatch>& m) {
+                    require(m.size() == 1 && m[0].home == 6 && m[0].away == 7 && minute == calls, "observer of the single match");
+                    calls++; last = minute;
+                };
+                const MatchResult b = observed_league_match(home, away, r2, 0, nullptr, nullptr, nullptr, {}, &observer, 6, 7);
+                require(a.home == b.home && a.away == b.away && r1.state() == r2.state(), "the observed match draws the same");
+                require(calls == 61 && last == 60, "observer before minute 1 and after every minute");
+            }
+            {
+                // ovl14_0690 below speed 70: every chance of a board match draws rand(0, 1) twice; at 70 nothing changes
+                const auto play = [&](int speed, bool messages) {
+                    g_match_speed = speed;
+                    GameRandom r(4242);
+                    MatchRun run(home, away, r);
+                    run.set_messages(messages);
+                    const MatchResult res = run.finish();
+                    g_match_speed = 70;
+                    return std::pair<uint32_t, int>{r.state(), res.home * 100 + res.away};
+                };
+                require(play(70, true) == play(70, false), "speed 70: no message draws");
+                require(play(60, false) == play(70, false), "without DS:5A56 no message draws");
+                require(play(60, true).first != play(70, false).first, "speed 60 with a board: the messages draw");
+                GameRandom r(9);
+                g_match_speed = 60;
+                require(reporter_minute_draw(r, false) == -1 && r.state() == 9, "no reporter draw without display");
+                const int value = reporter_minute_draw(r, true);
+                require(value >= 0 && value <= 4 && r.state() != 9, "reporter draw rand(0, 4) with display");
+                g_match_speed = 70;
+                require(reporter_minute_draw(r, true) == -1, "no reporter draw at speed 70");
+            }
+            {
+                // g_scene_replay: a replay draws the next scene from the Borland stream before the scorer pick
+                g_goal_scenes = 1;
+                const auto play = [&](bool replay, int* calls) {
+                    BorlandRandom b(99);
+                    GameRandom r(5);
+                    r.borland = &b;
+                    if (replay)
+                        g_scene_replay = [calls](const SceneCall& c, const GoalScene&, int n) {
+                            require(c.home && c.away && c.minute >= 1, "scene call with the teams");
+                            (*calls)++;
+                            return n == 1 ? 1 : 0;  // every chance is played twice
+                        };
+                    MatchRun run(home, away, r);
+                    std::vector<GoalScene> seen;
+                    for (bool more = true; more;) {  // step() returns false on the last minute it plays
+                        more = run.step();
+                        for (const GoalScene& s : run.progress().scenes) seen.push_back(s);
+                    }
+                    g_scene_replay = nullptr;
+                    return std::pair<uint32_t, std::vector<GoalScene>>{b.state(), seen};
+                };
+                int calls = 0;
+                const auto plain = play(false, nullptr);
+                const auto replayed = play(true, &calls);
+                g_goal_scenes = 0;
+                require(!plain.second.empty() && calls == int(replayed.second.size()), "the hook sees every play");
+                require(replayed.second.size() == 2 * plain.second.size() || plain.first != replayed.first,
+                        "a replay draws a new scene");
+                require(std::all_of(replayed.second.begin(), replayed.second.end(), [](const GoalScene& s) { return s.shown; }) &&
+                            std::none_of(plain.second.begin(), plain.second.end(), [](const GoalScene& s) { return s.shown; }),
+                        "scenes shown by the hook are marked");
+            }
+            {
+                // lineup mode 5 (ovr033 arg_0 != 0): a line player taken out keeps his role, the reserve toggle does nothing,
+                // a player without a role cannot come in
+                HokFile h = decode_hok(read_file(references / "START.HOK"));
+                const size_t base = 0x696D;
+                int line_slot = -1, free_slot = -1;
+                for (int s = 0; s < 30; s++) {
+                    const uint8_t* r = h.state.data() + base + size_t(s) * 52;
+                    if (!r[0x0F] || (r[9] & 3)) continue;
+                    if (r[0x0A] && r[0x15] && (r[0x15] & 0x7F) <= 3 && line_slot < 0) line_slot = s;
+                    if (!r[0x0A] && free_slot < 0) free_slot = s;
+                }
+                require(line_slot >= 0, "START has a line player");
+                const auto at = [&](int s, int field) { return h.state.at(base + size_t(s) * 52 + size_t(field)); };
+                manual_lineup(h, 0, size_t(line_slot), 0, ManualLineupAction::ReserveToggle, nullptr, nullptr, true);
+                require(at(line_slot, 0x0A) && at(line_slot, 0x15), "mode 5: the reserve toggle leaves a line player");
+                manual_lineup(h, 0, size_t(line_slot), 0, ManualLineupAction::Select, nullptr, nullptr, true);
+                require(at(line_slot, 0x0A) == 1 && at(line_slot, 0x15) == 0, "mode 5: out of the line, the role stays");
+                if (free_slot >= 0) {
+                    manual_lineup(h, 0, size_t(free_slot), 1, ManualLineupAction::Select, nullptr, nullptr, true);
+                    require(at(free_slot, 0x0A) == 0 && at(free_slot, 0x15) == 0, "mode 5: no new player");
+                }
+            }
+            {
+                // board messages: a two-minute penalty names the player and "wegen " + DS:05CC[reason]; a shoot-out shot of
+                // the manager's club names its shooter (kind 6)
+                ClassicMatchFrame f0;
+                f0.minute = 5;
+                f0.boards.push_back(board("EHC FREIBURG", 86, "KÖLNER EC", 92));
+                ClassicMatchFrame f1 = f0;
+                f1.minute = 6;
+                ClassicBoardTeam& t = f1.boards[0].team[1];
+                t.penalty_minutes += 2; t.penalized = "MEIER"; t.penalty_reason = 3;
+                ClassicMatchFrame f2 = f1;
+                f2.minute = 7;
+                f2.boards[0].team[1].penalized.clear(); f2.boards[0].team[1].penalty_reason = -1;
+                f2.boards[0].shots = {{1, true}};
+                f2.boards[0].goals[1] += 1; f2.boards[0].team[1].shootout_goals = 1;
+                f2.boards[0].team[1].credits.push_back({true, true, "BRANDL", ""});
+                const auto out = classic_board_messages({f0, f1, f2}, 60, 0);
+                bool penalty = false, shot = false;
+                for (const ClassicMatchFrame& f : out) {
+                    if (!f.message || f.message->step != ClassicBoardMessage::Step::Final) continue;
+                    if (f.message->kind == 2 && f.message->player == "MEIER" && f.message->second == "wegen Haltens.") penalty = true;
+                    if (f.message->kind == 6 && f.message->player == "BRANDL") shot = true;
+                }
+                require(penalty, "the penalty message names the player and the reason");
+                require(shot, "the shoot-out shot message names the shooter");
+            }
         }
         if (failures) throw std::runtime_error(std::to_string(failures) + " raster comparisons failed");
         std::printf("classic match view: ok\n");

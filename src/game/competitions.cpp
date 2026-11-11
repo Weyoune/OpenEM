@@ -23,7 +23,7 @@ std::vector<HokPairing> cup_pairs(const std::vector<int>& pool) {
 // A knock-out or play-off game: the minute loop when the human club plays, else the quick path
 // for cup games and the minute loop with play-off rules for play-off games.
 MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameRandom& rng, const HumanSide& human,
-                    bool playoff) {
+                    bool playoff, const MatchMinuteObserver* observer = nullptr) {
     const HumanSquad* hh = human.squad_of(home);
     const HumanSquad* ha = human.squad_of(away);
     if (!hh && !ha && playoff) {  // a play-off game without the human club: set-up (5 skaters, 02a5) and a quick result (REAL-CODE period 28)
@@ -38,8 +38,8 @@ MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameR
     MatchOptions opts;
     opts.knockout = true;
     opts.playoff = playoff;
-    return league_match(teams[size_t(home)], teams[size_t(away)], rng, 0, hh, ha,
-                        human.match_stats(home, away), opts);
+    return observed_league_match(teams[size_t(home)], teams[size_t(away)], rng, 0, hh, ha, human.match_stats(home, away), opts,
+                                 observer, home, away);
 }
 }  // namespace
 
@@ -49,10 +49,10 @@ MatchResult playoff_game(const std::vector<HokTeam>& teams, int home, int away, 
 }
 
 std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw,
-                                GameRandom& rng, const HumanSide& human) {
+                                GameRandom& rng, const HumanSide& human, const MatchMinuteObserver* observer) {
     std::vector<Tie> out;
     for (const HokPairing& p : draw) {
-        Tie t{p.home, p.away, ko_game(teams, p.home, p.away, rng, human, false)};
+        Tie t{p.home, p.away, ko_game(teams, p.home, p.away, rng, human, false, observer)};
         out.push_back(t);
     }
     return out;
@@ -225,6 +225,10 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, 0, hh, ha,
                                                                          human.match_stats(p.home, p.away), o)});
     }
+    // the display of the round (switch DEB-Pokal, or a manager's club plays) and DS:5A56 (a board), as in play_matchdays
+    bool display = g_display_flags[10] != 0, board = false;
+    for (auto& e : entries) { display = display || human.is_human(e.home) || human.is_human(e.away); board = board || e.run->has_board(); }
+    for (auto& e : entries) e.run->set_messages(display && board);
     std::vector<LiveMatch> live;  // the match display only observes (no draws, no state changes)
     if (observer) {
         for (auto& e : entries) live.push_back({e.home, e.away, e.run.get()});
@@ -233,6 +237,10 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
+        bool minute_left = false;
+        for (auto& e : entries) minute_left = minute_left || e.run->minutes_left();
+        if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
+            if (const int r = reporter_minute_draw(rng, display); r >= 0) for (auto& e : entries) e.run->set_reporter(r);
         if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
             for (auto& e : entries) e.run->overtime_break();
         for (auto& e : entries) {

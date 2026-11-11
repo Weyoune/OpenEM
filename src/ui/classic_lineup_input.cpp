@@ -28,7 +28,7 @@ void ClassicApplication::open_lineup(){
 void ClassicApplication::apply_lineup(size_t slot,ManualLineupAction action){
     try{
         ManualLineupResult result;
-        session_.apply([&](Game& game){result=game.change_lineup(slot,selected_line_,action,&lineup_six_,lineup_cells_?&*lineup_cells_:nullptr);return ActionResult{{},result.message==ManualLineupMessage::None};});
+        session_.apply([&](Game& game){result=game.change_lineup(slot,selected_line_,action,&lineup_six_,lineup_cells_?&*lineup_cells_:nullptr,live_day_&&live_screen_);return ActionResult{{},result.message==ManualLineupMessage::None};});
         invalidate();selected_line_=result.selected_line;
         if(result.changed&&lineup_cells_){
             int old_block=-1,old_cell=-1;

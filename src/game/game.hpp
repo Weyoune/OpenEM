@@ -282,7 +282,8 @@ public:
     // partial-sale cost basis keeps the original two-stage percentage rounding.
     StockResult trade_shares(size_t company,uint32_t quantity,bool sell);
     ManualLineupResult change_lineup(size_t slot,int selected_line,ManualLineupAction action,const bool* six_override=nullptr,
-                                   const std::array<std::array<int,6>,5>* cells_override=nullptr);
+                                   const std::array<std::array<int,6>,5>* cells_override=nullptr,
+                                   bool in_match=false);  // in_match: from the board of a running match (mode 5)
     bool set_tactics(const TacticsPlan& plan);
     const TrainingPlan& training_plan() const { return plan_; }
     // Commit a full club plan (kinds 0..8), including its native recovery fee.
@@ -339,6 +340,10 @@ public:
     // Match display (ui/classic_match_view): observes the minute loops of league and cup days; never changes the game.
     void set_match_observer(MatchMinuteObserver o) { match_observer_ = std::move(o); }
     long match_attendance() const { return match_attendance_; }  // the last home game of the human club (ovl08_21e5)
+    // The scorer / assist picks of ovl14_2349 for the managers' chances and shoot-out shots of the running day, in order (the
+    // match display names the players of its board messages from them; squad slots, -1 none). Cleared when a day starts.
+    struct ChanceCredit { int team = -1; bool goal = false, shot = false; int scorer = -1, assist = -1; };
+    const std::vector<ChanceCredit>& chance_credits() const { return chance_credits_; }
     bool match_sold_out() const { return match_sold_out_; }
     void decline_offer(size_t i);
     const std::vector<std::string>& log() const { return log_; }
@@ -446,6 +451,7 @@ private:
     std::vector<ContractOutcome> contract_outcomes_;
     MatchMinuteObserver match_observer_;
     long match_attendance_ = 0;
+    std::vector<ChanceCredit> chance_credits_;
     bool match_sold_out_ = false;
     RatingBounds rating_;
     TrainingPlan plan_{};

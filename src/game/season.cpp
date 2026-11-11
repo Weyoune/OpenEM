@@ -154,6 +154,11 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             entries.push_back(std::move(e));
         }
     }
+    // ovl06_161d shows the minute display when a manager's club plays or a switch Ergebnisse is on; ovl14_2630 then sets DS:5A56
+    // when a match of the day has a board. Below speed 70 the display draws (g_match_speed, docs/logic/TORSZENEN_HOOK.md).
+    bool display = g_display_flags[1] || g_display_flags[4] || g_display_flags[7], board = false;
+    for (auto& e : entries) { display = display || humans.is_human(e->home) || humans.is_human(e->away); board = board || e->run->has_board(); }
+    for (auto& e : entries) e->run->set_messages(display && board);
     std::vector<LiveMatch> live;  // the match display only observes (no draws, no state changes)
     if (observer) {
         for (auto& e : entries) live.push_back({e->home, e->away, e->run.get()});
@@ -218,6 +223,10 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
     int minute_number = 0;
     for (bool more = true; more;) {
         more = false;
+        bool minute_left = false;
+        for (auto& e : entries) minute_left = minute_left || e->run->minutes_left();
+        if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
+            if (const int r = reporter_minute_draw(rng, display); r >= 0) for (auto& e : entries) e->run->set_reporter(r);
         for (auto& e : entries) {
             pull_shared(*e);
             more = e->run->step() || more;

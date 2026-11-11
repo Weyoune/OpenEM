@@ -261,6 +261,10 @@ struct MatchProgress {
     int penalty_minutes[2] = {};
     int penalty_code[2] = {};
     std::vector<struct GoalScene> scenes;  // the goal scenes drawn in the last minute (empty without goal scenes)
+    int penalty_reason[2] = {-1, -1};  // the reason of a two-minute penalty given in the last minute (DS:05CC table index, -1 none)
+    int reporter = -1;                 // rand(0, 4) of the minute loop before the last minute (0: the reporter blinks), -1 none
+    int penalty_slot[2] = {-1, -1};    // squad slot of the player penalised in the last minute (manager sides with message draws)
+    std::vector<std::pair<int, bool>> shots;  // the shoot-out shots of the last minute in order: side, goal (minute games)
 };
 
 // A goal scene of a chance (ovl15_0143, docs/logic/TORSZENEN_HOOK.md): file TORE\<number>.<h|a><v|t>[e|j].
@@ -270,12 +274,36 @@ struct GoalScene {
     int number = 2;        // 2..11, or 2 for the special variants
     char variant = 0;      // 0, 'e' (penalty shot / forced) or 'j' (six skaters)
     bool penalty = false;  // a shot of the shoot-out
+    bool shown = false;    // the display already showed it while the minute ran (g_scene_replay)
 };
+
+// The chance behind a goal scene for the display hook: the teams on the ice, the score before the chance, the minute (0x78
+// for a shot of the shoot-out).
+struct SceneCall {
+    const HokTeam* home = nullptr;
+    const HokTeam* away = nullptr;
+    int goals[2] = {};
+    int minute = 0;
+};
+// ovl14_1dc7: after a scene a typed r / w plays the chance again, at most three plays, and every play draws its scene anew
+// from the Borland stream before the scorer pick. When set (the live match display), this hook is called right after a scene
+// was drawn with its play number 1..3 and shows it at once: -1 not shown, 0 shown, 1 shown and the chance plays again.
+// Unset (tests, REAL-CODE, no frontend): no replay and no extra draws.
+extern std::function<int(const SceneCall&, const GoalScene&, int play)> g_scene_replay;
 
 // DS:0226 (state 0xA525): goal scenes 0 off, 1 on, 2 "ice stays on". With scenes on, every chance of a match with a board
 // (team byte +0x34 bit 7 at home or away) draws the scene with Borland rand between the goal decision and the scorer pick;
 // set by Game from the settings before the matches of a day.
 extern int g_goal_scenes;
+
+// DS:0262 game speed (state 0xB94F, 0..70) and the display switches DS:021D.. (state 0xA51C, GameSettings::flags), set by Game
+// with g_goal_scenes. Below speed 70 the original's match display draws while the minutes run (docs/logic/TORSZENEN_HOOK.md
+// section 2): rand(0, 4) per displayed minute (reporter), rand(0, 1) twice per board message (once for an injury; none with
+// goal scenes) and Borland rand(0, 12) for the reason of a two-minute penalty. Speed 70 (the REAL-CODE setting) draws none.
+extern int g_match_speed;
+extern std::array<uint8_t, 14> g_display_flags;
+// ovl06_2522: the reporter draw at the start of a displayed minute (game stream rand(0, 4), speed < 70); the value or -1
+int reporter_minute_draw(GameRandom& rng, bool display);
 
 // One league match played minute by minute: the original plays all matches of a day interleaved (minute 1 of every
 // match, then minute 2 ...), see Game::play_league_day.
@@ -293,6 +321,9 @@ public:
     // The manager's squad was changed between two minutes (lineup screen from the board, ovl14_24bc): the working squad
     // takes the roles and lines, the effort is set again as after leaving the lineup screen. No change: nothing happens.
     void take_lineup();
+    // The manager's tactics were changed between two minutes (tactics screen from the board, ovl14_24bc): the side takes
+    // the controls of its squad and the tactic bytes (+0x26..+0x2B, +0x2D, +0x35..+0x3A) of `record`. No draws.
+    void take_tactics(int side, const HokTeam& record);
     MatchResult finish();  // plays the remaining minutes and returns the result
     HokTeam& home_mut();  // the working copies for the pair-table error of the original (shared team records, play_matchdays)
     HokTeam& away_mut();
@@ -308,6 +339,12 @@ public:
     void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
     void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
     void set_display(bool on);  // ovr030:2937: the full minute belongs to the pairs whose home team is in the display list (overrides the manager test)
+    // DS:5A56 for the day of this match: the display is on and a match of the day has a board (ovl14_2630). With it and
+    // g_match_speed < 70 the board messages draw (ovl14_0690).
+    void set_messages(bool on);
+    bool has_board() const;  // team byte +0x34 bit 7 at home or away
+    bool minutes_left() const;  // the next step() plays a minute
+    void set_reporter(int value);  // the reporter draw of the coming minute (display only)
     MatchProgress progress() const;  // display state after the last played minute (read-only observer)
 
 private:
@@ -326,5 +363,12 @@ using MatchMinuteObserver = std::function<void(int minute, const std::vector<Liv
 MatchResult league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level = 0,
                          const HumanSquad* home_human = nullptr, const HumanSquad* away_human = nullptr,
                          MatchStats* stats = nullptr, const MatchOptions& options = {});
+
+// league_match with the match display (EuroCup and WM games, which the simulation plays one after another): the same
+// minutes; the observer sees the single match before minute 1 and after every minute (no extra draws; without an observer
+// this is league_match).
+MatchResult observed_league_match(const HokTeam& home, const HokTeam& away, GameRandom& rng, int level,
+                                  const HumanSquad* home_human, const HumanSquad* away_human, MatchStats* stats,
+                                  const MatchOptions& options, const MatchMinuteObserver* observer, int home_id, int away_id);
 
 }  // namespace em
