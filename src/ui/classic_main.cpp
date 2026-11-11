@@ -94,7 +94,7 @@ int main(int argc,char**argv){
         SDL_Window* window=SDL_CreateWindow("OpenEM – Eishockey Manager",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,640,480,SDL_WINDOW_RESIZABLE);
         if(!window)throw std::runtime_error(SDL_GetError());
         SDL_SetWindowMinimumSize(window,640,480);
-        ClassicSound sound(data);sound.play_title_music();  // title music until the first key or click (classic_sound.hpp)
+        app.show_title();ClassicSound sound(data);sound.play_title_music();  // title screen and music until the first key or click (classic_sound.hpp)
         // The native canvas is tiny and already rasterized on the CPU. A
         // software presenter also remains capturable in remote/occluded windows.
         SDL_Renderer* renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);

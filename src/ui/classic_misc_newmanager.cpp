@@ -49,14 +49,14 @@ void ClassicNewManager::open(const HokFile& h) {
         r.name = cstring(s, kManagers + size_t(m) * kManagerSize, 0x14);
         r.existing = true;
     }
-    for (size_t i = 0; i < options_.size(); i++) options_[i] = s.at(kOptions + i);
+    for (size_t i = 0; i < 4; i++) options_.values[i] = s.at(kOptions + i);
     highscore_ = (s.at(kFileNumber) | s.at(kFileNumber + 1)) != 0;
 }
 
-void ClassicNewManager::open_start(const HokFile& base) {
+void ClassicNewManager::open_start(const HokFile&) {
     *this = ClassicNewManager{};
-    for (size_t i = 0; i < options_.size(); i++) options_[i] = base.state.at(kOptions + i);
-    highscore_ = (base.state.at(kFileNumber) | base.state.at(kFileNumber + 1)) != 0;
+    options_ = NewGameOptions{};  // a new program run starts with the EM.EXE values dseg:0118, var_57 = 3
+    highscore_ = new_game_highscore_file(options_) != 0;  // DS:0256 = 141 for these values (H.141)
     start_mode_ = true;
 }
 
@@ -84,10 +84,10 @@ void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my)
     if (mark_.first > 0) mark(c, mark_.first, mark_.second, 0x18);
     if (panel_ == Panel::Options) {
         c.blit(1, 0xC2, 0xC2, 0x71, highscore_ ? 0x26 : 0, 0x36, 0x26, true, kKey);  // notepad / nail
-        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D, 0x39, 0x0D);           // league/cup mode on
-        c.blit(1, 0x103, 0x2F, 0x71, 0x66 + 0x0D, 0x39, 0x0D);          // WM mode on
+        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D * (options_.mode & 1), 0x39, 0x0D);         // league/cup mode (var_57 bit 0)
+        c.blit(1, 0x103, 0x2F, 0x71, 0x66 + 0x0D * ((options_.mode & 2) != 0), 0x39, 0x0D);  // WM mode (bit 1)
         for (int i = 0; i < 4; i++)
-            c.blit(1, 0xC3, 0x51 + 0x1C * i, 0, 10 * (options_[size_t(i)] + kOptionOffset[size_t(i)]), 0x71, 10, true, kKey);
+            c.blit(1, 0xC3, 0x51 + 0x1C * i, 0, 10 * (options_.values[size_t(i)] + kOptionOffset[size_t(i)]), 0x71, 10, true, kKey);
         return;
     }
     if (panel_ == Panel::Faces) c.rect(0xBE, 0xCA, 0x13D, 0xE7, 0x0B);
@@ -182,6 +182,21 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
         }
         if (y <= 0xF0 && y > 0x2C && x > 0x2D && x < 0x88) close_panel();  // ovr027:0F35
         return Result::None;
+    }
+    if (start_mode_) {  // ovr027:06AA: only a new game (var_64 = 0) changes the settings
+        if (x > 0xBE && y > 0x2D && y < 0x3D) {  // mode buttons
+            int named = 0;
+            for (const auto& r : rows_) named += !r.name.empty();
+            if (toggle_new_game_mode(options_, x > 0xFD ? 1 : 0, named)) highscore_ = new_game_highscore_file(options_) != 0;
+            return Result::None;
+        }
+        for (int i = 0; i < 4 && x > 0x134; i++) {  // the arrows of the four settings (ovr027:07AF)
+            const int top = 0x1C * i;
+            if (y <= top + 0x4D || y >= top + 0x5F) continue;
+            step_new_game_option(options_, i, (y > top + 0x56) - (y < top + 0x56));
+            highscore_ = new_game_highscore_file(options_) != 0;
+            return Result::None;
+        }
     }
     if (x > 0xFD && y > 0xC1 && x < 0x135 && y < 0xE9) {  // Los jetzt!
         for (const auto& r : rows_)

@@ -60,6 +60,7 @@ ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::pa
         }
         if(live_day_)live_minute(matches);
     });
+    install_cup_draw_handlers();  // the live DEB cup draw of later rounds (classic_cup_draw.cpp)
     if(!initial.empty())session_.load(initial);
     if(session_.loaded())table_order_=session_.game().league(division_).ranking;
     if(!session_.loaded()){if(session_.can_start_new_game())open_start_menu();else open_files(false);}
@@ -207,6 +208,7 @@ void ClassicApplication::tick(){
         if(classic_ticks()<*native_notice_until_)return;
         finish_timed_native_notice();
     }
+    if(cup_live_){tick_cup_live();return;}  // the live DEB cup draw (classic_cup_draw.cpp)
     if(live_day_){  // inside the minute observer: only the match display runs
         if(!live_screen_)tick_match_view();
         else if(screen_==ClassicScreen::Main){live_screen_=false;screen_=live_screen_before_;}  // the screen was left
@@ -374,6 +376,8 @@ void ClassicApplication::open_player(int slot,int manager){
     }catch(const std::exception& e){notice(e.what());}
 }
 void ClassicApplication::click(int x,int y,bool right){
+    if(title_){title_=false;return;}  // ovr034:07D8 any press ends the title screen
+    if(cup_live_){click_cup_live(x,y,right);return;}  // the live DEB cup draw (classic_cup_draw.cpp)
     if(!match_frames_.empty()&&!live_screen_){  // live_screen_: a screen opened during the minutes takes the input
         if(live_day_&&!match_frames_[match_frame_].waits()&&live_click(x,y,right))return;
         // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
@@ -641,6 +645,8 @@ void ClassicApplication::motion(int x,int y){
     }
 }
 void ClassicApplication::key(int key){
+    if(title_){title_=false;return;}
+    if(cup_live_){if(cup_live_waiting())click_cup_live(0,0,false);return;}  // sub_19B08 also takes a key
     // the key buffer read by ovl14_1dc7 after a goal scene
     if(!match_frames_.empty()&&!live_screen_&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
     if(live_day_&&!live_screen_){  // the day is being played
@@ -700,6 +706,8 @@ void ClassicApplication::text_input(std::string_view text){
     }
 }
 void ClassicApplication::draw(){
+    if(title_){canvas_.background(197);if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}
+    if(cup_live_){draw_cup_live();if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}  // classic_cup_draw.cpp
     if(!match_frames_.empty()&&!live_screen_){
         const ClassicMatchFrame& frame=match_frames_[match_frame_];
         if(frame.league_page){
@@ -812,6 +820,7 @@ void ClassicApplication::render_screen(std::string_view name){
     if(name=="main")screen_=ClassicScreen::Main;
     else if(name=="youth")screen_=ClassicScreen::Youth;
     else if(name=="match-banner"){match_banner_until_=UINT64_MAX;}
+    else if(name=="title")title_=true;
     else if(name=="settings"||name=="settings-rink"||name=="settings-slow"){
         open_settings();
         if(name=="settings-rink")action([](Game& game){game.toggle_setting(9,0);game.toggle_setting(9,0);return ActionResult{};});

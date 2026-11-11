@@ -338,6 +338,15 @@ public:
     const std::vector<ContractOutcome>& contract_outcomes() const { return contract_outcomes_; }
     // Match display (ui/classic_match_view): observes the minute loops of league and cup days; never changes the game.
     void set_match_observer(MatchMinuteObserver o) { match_observer_ = std::move(o); }
+    // Live DEB cup draw of a later round (ovl05_536d -> ovl05_4653): with the cup display switch on (DS:0227), not in the
+    // WM-only mode (DS:D0B9 = 1) and four or more clubs, the original asks "An Alle:" whether to follow the draw live. The
+    // decider gets the number of clubs and answers; without one the answer is "Kein Gedanke". "Aber klar" uncovers the
+    // places after the twenty swaps in Borland order rand(0, n - 1) (taken again while the place is open: ovl05_492e),
+    // which the observer then gets (places in uncovering order, club of each place). Called inside advance_day.
+    using CupDrawDecider = std::function<bool(int clubs)>;
+    using CupRevealObserver = std::function<void(const std::vector<int>& order, const std::vector<int>& places)>;
+    void set_cup_draw_decider(CupDrawDecider d) { cup_draw_decider_ = std::move(d); }
+    void set_cup_reveal_observer(CupRevealObserver o) { cup_reveal_observer_ = std::move(o); }
     long match_attendance() const { return match_attendance_; }  // the last home game of the human club (ovl08_21e5)
     bool match_sold_out() const { return match_sold_out_; }
     void decline_offer(size_t i);
@@ -445,6 +454,8 @@ private:
     ContractTermsDecider contract_terms_decider_;
     std::vector<ContractOutcome> contract_outcomes_;
     MatchMinuteObserver match_observer_;
+    CupDrawDecider cup_draw_decider_;
+    CupRevealObserver cup_reveal_observer_;
     long match_attendance_ = 0;
     bool match_sold_out_ = false;
     RatingBounds rating_;

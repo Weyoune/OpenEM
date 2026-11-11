@@ -49,10 +49,29 @@ void ClassicApplication::click_statistics(int x,int y,bool right){
         if(button>=0&&button<3)stats_mode_=button;
         else if(button==3)stats_managers_=false;
         else if(button==4)stats_managers_=true;
+        else if(button<0)open_stats_player(x,y);
     }else if(stats_page_==5){
         const int team=classic_stats_wm_team(x,y);
         if(team>=0)open_club_info(team,2); // 5396:1ADE stub_ovl13_0095(team,2,0,0)
     }
+}
+
+// ovr025:0CDA..0DCB: a press on a listed player searches the squads of the human managers (0..N-1) and of
+// squad 4 (transfer pool) for the player record; the first hit opens the player page (sub_123AC(slot)) with
+// that squad as the current manager (byte_2F6DE), afterwards the list is drawn again. Others do nothing.
+void ClassicApplication::open_stats_player(int x,int y){
+    try{
+        const auto& h=snapshot();
+        const int player=classic_stats_players_row(classic_stats_players_view(h,stats_mode_,stats_managers_),x,y);
+        if(player<=0)return;
+        const int humans=h.state.at(0x0DC6);
+        for(int m=0;m<5;++m){
+            if(m>=humans&&m!=4)continue;
+            const size_t slots=hok_squad(h,m).size(),base=0x696D+size_t(m)*0x618;  // squad +0x0F = player id
+            for(size_t slot=0;slot<slots;++slot)
+                if(h.state.at(base+slot*0x34+0x0F)==player){open_player(int(slot),m);return;}
+        }
+    }catch(const std::exception& e){notice(e.what());}
 }
 
 // Held arrow (see click_statistics): the original repeats once per pass of its page loop; OpenEM repeats every

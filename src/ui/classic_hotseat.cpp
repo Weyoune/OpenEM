@@ -73,9 +73,10 @@ bool ClassicApplication::bid_to_manager(int pool_slot, long fee, bool loan) {
 
 // The DEB cup draw of a new game (ovl05_4c7b(0, 0) -> ovl05_4653 = ovr029:4693..487F, Amiga FUN_00131194): with the
 // DEB-Pokal display switch on (DS:0227) the empty draw board appears and the question "An Alle:" (argument 6) asks
-// whether to watch the draw live. OpenEM draws the cup in the generator; "Aber klar" does not show the live draw yet.
+// whether to watch the draw live. The callers check the switch (classic_misc_input.cpp for a new game, Game for the later
+// rounds); the answer and the live draw: classic_cup_draw.cpp.
 void ClassicApplication::ask_cup_draw() {
-    if (!session_.loaded() || !session_.game().settings().flags[10]) return;
+    cup_answer_.reset();
     ManagerQuestion q;
     q.manager = -1;  // "An Alle:"
     q.line1 = "Sind Ihre Nerven stark genug,";
@@ -93,7 +94,7 @@ void ClassicApplication::draw_manager_question() {
         canvas_.background();
         canvas_.frame(3, 3, 13, 12);
         canvas_.text(ClassicFontId::NewBold, 0, 0x1A, "DEB-Pokal Auslosung", 7, 1, 0x141);
-        constexpr int teams = 32;
+        const int teams = q.cup_clubs;
         int y = 0x80 - ((teams >> 1) * 11 >> 1);
         for (int row = 0; row < teams; row += 2, y += 11)
             for (const int x : {37, 164}) canvas_.blit(25, x, y, 0, 0, 0x78, 10, true, 0xC0);  // DS:4DD0, DS:4DD4
@@ -122,7 +123,11 @@ void ClassicApplication::click_manager_question(int x, int y, bool right) {
     if (!yes && !no) return;
     const ManagerQuestion q = *manager_question_;
     manager_question_.reset();
-    if (q.cup_draw) return;  // both answers continue to the main menu (the live draw of "Aber klar" is not built yet)
+    if (q.cup_draw) {  // "Aber klar" / "Kein Gedanke" (DS:E068); a new game starts now (classic_cup_draw.cpp)
+        cup_answer_ = yes;
+        if (pending_start_) finish_new_game(yes);
+        return;
+    }
     // "Ihr Angebot wurde abgelehnt." is the timed notice of sub_1A2B8 (mode 75, ovr035:1A9E)
     if (q.unfair) { timed_native_notice("Ihr Angebot\nwurde abgelehnt."); return; }
     try {

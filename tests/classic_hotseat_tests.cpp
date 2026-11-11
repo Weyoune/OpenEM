@@ -279,12 +279,13 @@ int main(int argc, char** argv) {
             check(differences(app.canvas(), goldens / "start2.rgb", {{0xC3, 0x51, 0x134, 0x51 + 0x1C * 4}, {47, 40, 134, 50}}) == 0, "start menu with two managers");
 
             app.click(282, 212, false);  // Los jetzt!
-            require(app.session().loaded(), "Los jetzt! starts the game");
+            check(!app.session().loaded(), "the cup question comes before the generator draws the cup");
             // the DEB cup draw question "An Alle:" over the empty draw board (ovr029:4693..487F), pixel-equal to the original
             app.motion(281, 213);
             app.draw();
             check(differences(app.canvas(), goldens / "cupq2.rgb") == 0, "cup draw question \"An Alle:\" at the start");
             app.click(190, 172, false);  // "Kein Gedanke"
+            require(app.session().loaded(), "Los jetzt! and the answer start the game");
             const Game& g = app.session().game();
             check(g.managers() == 2 && app.session().active_manager() == 0, "two managers, manager 0 at the menu");
             const HokFile& h = g.save();

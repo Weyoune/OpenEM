@@ -1031,7 +1031,16 @@ void Game::play_cup_day() {
             // front of the list, so the tail keeps these values (REAL-CODE period 7)
             for (size_t pair = 0; pair < cup_series_.size() && pair < 16; pair++)
                 if (save_.state.at(0x8E51 + pair * 2) != uint8_t(winners[pair])) save_.state.at(0x8E51 + pair * 2) = uint8_t(winners[pair]);
-            cup_draw_ = draw_cup_round(winners, brng_);
+            // ovl05_4653: with four or more clubs, the display switch on and not in the WM-only mode the question "An
+            // Alle:"; "Aber klar" uncovers the places after the swaps (ovl05_536d live branch, Borland draws)
+            const bool ask = live && winners.size() >= 4 && save_.state.at(0x025A) != 1 && cup_draw_decider_;
+            const bool watch = ask && cup_draw_decider_(int(winners.size()));
+            std::vector<int> places;
+            cup_draw_ = draw_cup_round(winners, brng_, &places);
+            if (watch) {
+                const auto order = cup_reveal_order(int(places.size()), brng_);
+                if (cup_reveal_observer_) cup_reveal_observer_(order, places);
+            }
             // the draw of the final ends with two coins (REAL-CODE period 54, after the 20 swaps; with the cup display on)
             // the second coin is tossed again until it differs from the first (two distinct values; REAL-CODE Köln period 244:
             // 1, 1, 0 - three coins; all earlier finals had two different coins)

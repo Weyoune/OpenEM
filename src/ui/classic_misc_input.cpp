@@ -112,16 +112,15 @@ void ClassicApplication::click_start_menu(int x, int y, bool right) {
     for (const auto& r : m.setup.rows())
         if (r.face >= 0 && r.team >= 0 && r.name.size() >= 2) managers.push_back({r.name, r.face, r.team});
     if (managers.empty()) return;
-    try {
-        session_.start_new_game(managers);
-        m.start_base.reset();
-        invalidate();
-        screen_ = ClassicScreen::Main;
-        table_order_ = session_.game().league(division_).ranking;
-        ask_cup_draw();  // ovl05_4c7b(0, 0) at the start of the game (classic_hotseat.cpp)
-    } catch (const std::exception& e) {
-        notice(e.what());
+    // ovl05_4c7b(0, 0) during the set-up asks the DEB cup question (ovl05_4653) before its draw: with the display switch
+    // of the start state (DS:0227, state 0xA526) on and not in the WM-only mode (var_57 = 2 -> DS:D0B9 = 1) the game
+    // waits for the answer (classic_cup_draw.cpp finish_new_game), else it starts at once
+    pending_start_ = PendingStart{managers, m.setup.options()};
+    if (m.start_base->state.at(0xA526) && m.setup.options().mode != 2) {
+        ask_cup_draw();
+        return;
     }
+    finish_new_game(false);
 }
 
 void ClassicApplication::key_misc(int key) {

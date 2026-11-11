@@ -60,7 +60,7 @@ std::vector<Tie> play_cup_round(const std::vector<HokTeam>& teams, const std::ve
 
 std::vector<HokPairing> cup_home_rights(const std::vector<int>& pool) { return cup_pairs(pool); }
 
-std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng) {
+std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng, std::vector<int>* places) {
     std::vector<int> pool = winners;
     if (pool.empty()) return {};
     // ovl05_536d: twenty swaps, including draws that select the same slot twice.
@@ -69,10 +69,23 @@ std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandR
         const size_t b = size_t(rng.range(1, int(pool.size())) - 1);
         std::swap(pool[a], pool[b]);
     }
+    if (places) *places = pool;
     return cup_pairs(pool);
 }
 
-std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng) {
+std::vector<int> cup_reveal_order(int places, BorlandRandom& rng) {
+    std::vector<int> order;
+    std::vector<bool> open(size_t(std::max(places, 0)), false);
+    for (int k = 0; k < places; k++) {
+        int place;
+        do { place = rng.range(0, places - 1); } while (open[size_t(place)]);
+        open[size_t(place)] = true;
+        order.push_back(place);
+    }
+    return order;
+}
+
+std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, BorlandRandom& rng, std::vector<int>* places) {
     if (human_teams.size() > 4) throw FormatError("cup: at most four human managers");
     std::vector<int> pool(32, -1), humans;
     for (int team : human_teams) {
@@ -93,6 +106,7 @@ std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, Bo
                std::find(pool.begin(), pool.begin() + long(slot), team) != pool.begin() + long(slot));
         pool[slot] = team;
     }
+    if (places) *places = pool;
     return cup_pairs(pool);
 }
 

@@ -694,7 +694,9 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     std::fill_n(st.begin() + long(state_of(0xD075)), 32, uint8_t(0));
     std::vector<int> humans;
     for (size_t m = 0; m < managers.size(); m++) humans.push_back(managers[m].team);
-    const auto cup = draw_initial_cup(humans, w.brng);
+    const auto cup = draw_initial_cup(humans, w.brng, &out.cup_places);
+    // the live draw (ovl05_4c7b, DS:E068 from the question of ovl05_4653): 32 places uncovered in Borland order
+    if (settings.cup_live) out.cup_reveal = cup_reveal_order(int(out.cup_places.size()), w.brng);
     if (cup.size() * 2 < 32) st.at(state_of(dsCupDraw) + cup.size() * 2) = 0xFF;
     for (size_t i = 0; i < cup.size(); i++) {
         st.at(state_of(dsCupDraw) + 2 * i) = uint8_t(cup[i].home);
