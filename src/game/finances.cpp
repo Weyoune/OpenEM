@@ -80,7 +80,7 @@ FinanceTables load_finance_tables(const Bytes& exe, const HokFile& save) {
 }
 
 ManagerBudget budget_from_save(const HokFile& h, int m) {
-    if (m < 0 || m >= 4) throw FormatError("HOK: invalid human manager index");
+    if (m < 0 || m > 5 || m == 4) throw FormatError("HOK: invalid human manager index");  // 5: the national coach (WM gate)
     const Bytes& s = h.state;
     const size_t blk = kManagerBlock + size_t(m) * kManagerSize;
     ManagerBudget b;

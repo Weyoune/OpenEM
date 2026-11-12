@@ -3215,6 +3215,28 @@ void Game::play_wm_day() {
     std::vector<MatchResult> live_results;
     MatchStats live_stats;
     if (r < 5 && !quick && !std::getenv("EM_OLD_WMLIVE")) {
+        // sub_60D60 per pair: a home game of the nation books its gate for manager 5 first (REAL-CODE WM-only game, round 2)
+        for (size_t g = 0; g < 2 && !std::getenv("EM_OLD_WMGATE"); g++)
+            for (size_t pair = 0; pair < 3; pair++) {
+                const HokPairing& p = save_.wm_rounds[g][size_t(r)][pair];
+                if (p.home != nation) continue;
+                ManagerBudget budget = budget_from_save(save_, 5);
+                AttendanceMatch am;
+                am.home_class = team_class(finance_, p.home);
+                am.away_class = team_class(finance_, p.away);
+                am.home_strength = attendance_strength(save_.teams[size_t(p.home)]);
+                am.away_strength = attendance_strength(save_.teams[size_t(p.away)]);
+                am.guest = p.away;
+                // as the club gate: the position byte of the team's table row (+0x2A of the 64 rows; national teams 52..63)
+                am.home_rank = save_.state.at(0x3BAC + size_t(p.home) * 0x50 + 0x2A);
+                am.away_rank = save_.state.at(0x3BAC + size_t(p.away) * 0x50 + 0x2A);
+                am.kind = 3;
+                am.league_statistics = false;
+                if (std::getenv("EM_DEBUG_GATE"))
+                    std::fprintf(stderr, "national gate vs %d: places %d/%d price %d stadium %d %d %d\n", p.away, budget.places[0], budget.places[1],
+                                 budget.ticket_price, budget.stadium[0], budget.stadium[1], budget.stadium[2]);
+                match_attendance_ = home_attendance(finance_, budget, am, brng_);
+            }
         int slots = 0;
         for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_block(5) + size_t(s) * kSquadRecord + 0x0F) != 0;
         for (int s = 0; s < slots; s++)
@@ -3222,6 +3244,15 @@ void Game::play_wm_day() {
                 const size_t rec = squad_block(5) + size_t(s) * kSquadRecord;
                 save_.state.at(rec + 2) = uint8_t(save_.state.at(rec + 0x15) & 0x7F);
             }
+        // the home-game flag of manager_day for the nation's home game (rand(0, 15 + 4 * (30 - x)), x from block 5's places)
+        bool national_home = false;
+        for (size_t g = 0; g < 2; g++)
+            for (size_t pair = 0; pair < 3; pair++) national_home |= save_.wm_rounds[g][size_t(r)][pair].home == nation;
+        if (national_home && !std::getenv("EM_OLD_WMGATE")) {
+            const int low = le16(save_.state, manager_block(5) + 0x133), high = le16(save_.state, manager_block(5) + 0x137);
+            const int x = std::clamp(int(int16_t(uint16_t(high - low))) / 1000, 0, 30);
+            if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(5) + 0xF1) |= 1;
+        }
         spin_match_stream();
         std::vector<HokPairing> draw;
         for (size_t g = 0; g < 2; g++)
@@ -3250,6 +3281,8 @@ void Game::play_wm_day() {
                 MatchResult res;
                 if (!live_results.empty()) {
                     res = live_results[g * 3 + pair];
+                    // the table booking of the live round moves the morale of all six games too (REAL-CODE WM-only game)
+                    if (!std::getenv("EM_OLD_WMLIVEMORALE")) quick_results.push_back({p.home, p.away, res.home - res.away});
                     if (p.home == nation || p.away == nation) stats = live_stats;
                 } else if (quick) {  // no human nation: ovl06_161d quick path for every pair (REAL-CODE period 30)
                     HokTeam h, a;
