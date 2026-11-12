@@ -50,6 +50,10 @@ Bestehende Speicherdateien werden nicht überschrieben.
 
 **Maßstab:** Spielregeln sind zugexakt: gleiche Zufallszüge, gleiche Ergebnisse, gleiche für den Spieler sichtbare Zahlen. Fehler und interne Puffer des DOS-Originals werden nur nachgebaut, wenn das mit vertretbarem Aufwand geht; sonst stehen sie mit Beleg in [docs/DEVIATIONS.md](docs/DEVIATIONS.md).
 
-**Prüfung:** Das Original läuft im Emulator ab einem Spielstand bis zum nächsten Menü; OpenEM rechnet dieselben Tage und muss alle 47 761 Zustandsbytes und beide Zufallsfolgen gleich treffen. Inzwischen sind zwei Ketten über insgesamt mehr als zehn Spielzeiten abgedeckt (Liga, Pokal, EuroCup, Playoffs, Abstiegsrunde, WM, Saisonwechsel, Sommer; 386 Zeiträume, alle als Regressionstest; Restabweichungen in docs/DEVIATIONS.md).
+**Prüfung:** Das Original läuft im Emulator ab einem Spielstand bis zum nächsten Menü; OpenEM rechnet dieselben Tage und muss alle 47 761 Zustandsbytes und beide Zufallsfolgen gleich treffen. Inzwischen sind zwei Ketten über insgesamt mehr als zehn Spielzeiten abgedeckt (Liga, Pokal, EuroCup, Playoffs, Abstiegsrunde, WM, Saisonwechsel, Sommer; 387 Zeiträume, alle als Regressionstest, dazu ein ganzes Jahr im Modus „Nur WM“; Restabweichungen in docs/DEVIATIONS.md).
 
 Eine vollständige Karriere mit bis zu vier Managern, die Live-Steuerung während des Spiels und einige Seiten fehlen noch (siehe [docs/STATUS.md](docs/STATUS.md)).
+
+## Lizenz
+
+Der Quellcode von OpenEM steht unter der GNU General Public License, Version 3 (nur diese Version, `GPL-3.0-only`); der Text liegt in [LICENSE](LICENSE). Die Daten des Original-Spiels gehören nicht dazu und werden nicht mitgeliefert.
