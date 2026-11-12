@@ -259,9 +259,9 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
                 for (int side = 0; side < 2; side++) {
                     if (!human.is_human(side == 0 ? e.home : e.away)) continue;
                     const HokTeam& t = side == 0 ? e.run->home_state() : e.run->away_state();
-                    std::fprintf(stderr, "  %s energy %d %d %d %d / %d %d %d %d lines %d/%d\n", t.name.c_str(), t.energy[0][0], t.energy[0][1],
+                    std::fprintf(stderr, "  %s energy %d %d %d %d / %d %d %d %d lines %d/%d shift %d/%d\n", t.name.c_str(), t.energy[0][0], t.energy[0][1],
                                  t.energy[0][2], t.energy[0][3], t.energy[1][0], t.energy[1][1], t.energy[1][2], t.energy[1][3],
-                                 t.current_line[0], t.current_line[1]);
+                                 t.current_line[0], t.current_line[1], t.shift[0], t.shift[1]);
                 }
         }
         if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
