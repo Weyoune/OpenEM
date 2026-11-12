@@ -273,7 +273,8 @@ Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous
     reset_wm();
     wm_round_ = std::clamp(int(save_.state.at(kWorldRound)), 0, 7);
     const size_t national_manager = kManagerBlock + 5 * 0x1AF;
-    if (save_.state.at(0x0788) == 5 && save_.state.at(national_manager + 0x14) == save_.state.at(0x068C) &&
+    // DS:A70E is 0 between the WM days (see advance_day), so only block 5 decides
+    if ((save_.state.at(0x0788) == 5 || !std::getenv("EM_OLD_WMMODE")) && save_.state.at(national_manager + 0x14) == save_.state.at(0x068C) &&
         save_.state.at(national_manager + 0xE4) == 0) {
         // the national block holds a copy of the appointed manager's first 20 bytes (name, begin_world_championship)
         national_coach_ = 0;
@@ -3170,6 +3171,14 @@ void Game::play_wm_day() {
     // nation (DS:06AC): per kind skill1 rand(84,94), skill2 rand(79,89), form rand(45,55); the manager index DS:A70E/A70D
     // becomes 5 (REAL-CODE period 30)
     const bool quick = national_coach_ < 0;
+    // with a national coach the step start of a WM day sets DS:A70D/A70E = 5, saves the coach's line-up mode and clears
+    // DS:037F (3d115); the menu before the next WM day restores it (see advance_day; REAL-CODE WM-only game, write watch
+    // on DS:037F)
+    if (!quick && !std::getenv("EM_OLD_WMMODE")) {
+        save_.state.at(0x0788) = save_.state.at(0x0789) = 5;
+        save_.state.at(0x078B + 10) = save_.state.at(0x078A + 10);
+        save_.state.at(0x078A + 10) = 0;
+    }
     if (wm_round_ == 0 && quick) {
         const int own = save_.state.at(0x068C);
         if (own >= kFirstNationalTeam && own < kFirstNationalTeam + 12) {
@@ -3218,11 +3227,12 @@ void Game::play_wm_day() {
     // (REAL-CODE WM-only game of 12.11.2026: 29 x (0, 4), (100, 300), then (0, 1400) per minute)
     std::vector<MatchResult> live_results;
     MatchStats live_stats;
-    if (r < 5 && !quick && !std::getenv("EM_OLD_WMLIVE")) {
+    // the live round of a WM day (groups and knock-out rounds alike; REAL-CODE WM-only game, quarter-final 23.04.)
+    auto live_round = [&](const std::vector<HokPairing>& draw, bool knockout) {
         // sub_60D60 per pair: a home game of the nation books its gate for manager 5 first (REAL-CODE WM-only game, round 2)
-        for (size_t g = 0; g < 2 && !std::getenv("EM_OLD_WMGATE"); g++)
-            for (size_t pair = 0; pair < 3; pair++) {
-                const HokPairing& p = save_.wm_rounds[g][size_t(r)][pair];
+        for (size_t i = 0; i < draw.size() && !std::getenv("EM_OLD_WMGATE"); i++)
+            {
+                const HokPairing& p = draw[i];
                 if (p.home != nation) continue;
                 ManagerBudget budget = budget_from_save(save_, 5);
                 AttendanceMatch am;
@@ -3250,21 +3260,18 @@ void Game::play_wm_day() {
             }
         // the home-game flag of manager_day for the nation's home game (rand(0, 15 + 4 * (30 - x)), x from block 5's places)
         bool national_home = false;
-        for (size_t g = 0; g < 2; g++)
-            for (size_t pair = 0; pair < 3; pair++) national_home |= save_.wm_rounds[g][size_t(r)][pair].home == nation;
+        for (const HokPairing& p : draw) national_home |= p.home == nation;
         if (national_home && !std::getenv("EM_OLD_WMGATE")) {
             const int low = le16(save_.state, manager_block(5) + 0x133), high = le16(save_.state, manager_block(5) + 0x137);
             const int x = std::clamp(int(int16_t(uint16_t(high - low))) / 1000, 0, 30);
             if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(5) + 0xF1) |= 1;
         }
         spin_match_stream();
-        std::vector<HokPairing> draw;
-        for (size_t g = 0; g < 2; g++)
-            for (size_t pair = 0; pair < 3; pair++) draw.push_back(save_.wm_rounds[g][size_t(r)][pair]);
         if (!std::getenv("EM_OLD_WMLIVEGRID")) {
             // the round's pairs stand in the team grid DS:5D5B (state 0x8EB1, 12 bytes) and DS:A88D lists the home team of the
-            // coach's game, then FF (REAL-CODE WM-only game: 34 39 36 38 35 37 3A 3F 3C 3E 3B 3D and 34 FF FF FF)
-            for (size_t i = 0; i < draw.size(); i++) {
+            // coach's game, then FF (REAL-CODE WM-only game: 34 39 36 38 35 37 3A 3F 3C 3E 3B 3D and 34 FF FF FF); the
+            // knock-out pairs already stand in their slots
+            for (size_t i = 0; i < draw.size() && !knockout; i++) {
                 save_.state.at(0x8EB1 + 2 * i) = uint8_t(draw[i].home);
                 save_.state.at(0x8EB1 + 2 * i + 1) = uint8_t(draw[i].away);
             }
@@ -3282,11 +3289,10 @@ void Game::play_wm_day() {
         const HumanSide side{nation, &squad, &live_stats};
         int minutes = 60, phantom = -1;
         const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
-                                              &minutes, false, 0, &phantom, 1);
+                                              &minutes, false, knockout ? size_t(-1) : 0, &phantom, 1, true);
         squad.on_minute = nullptr;
         squad.on_chance = nullptr;
         squad.on_shot = nullptr;
-        for (const auto& t : ties) live_results.push_back(t.result);
         // like a live cup day: every team outside today's games is rested to line energy 90 (REAL-CODE WM-only game: the 138
         // clubs and European teams after the first WM days)
         if (!std::getenv("EM_OLD_WMLIVEREST"))
@@ -3295,6 +3301,13 @@ void Game::play_wm_day() {
                 for (const HokPairing& p : draw) in_round |= p.home == team || p.away == team;
                 if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);
             }
+        return ties;
+    };
+    if (r < 5 && !quick && !std::getenv("EM_OLD_WMLIVE")) {
+        std::vector<HokPairing> group_draw;
+        for (size_t g = 0; g < 2; g++)
+            for (size_t pair = 0; pair < 3; pair++) group_draw.push_back(save_.wm_rounds[g][size_t(r)][pair]);
+        for (const auto& t : live_round(group_draw, false)) live_results.push_back(t.result);
     }
     if (r < 5) {
         for (size_t g = 0; g < 2; g++)
@@ -3370,6 +3383,9 @@ void Game::play_wm_day() {
         if (r == 4) {
             const auto a = wm_groups_[0].order(), b = wm_groups_[1].order();
             wm_slots_.assign(24, -1);
+            // the draw writes the four pairs and FF into slot 8; slots 9-11 keep the last group round (REAL-CODE WM-only game, 22.04.)
+            if (!std::getenv("EM_OLD_WMQUARTERSLOTS"))
+                for (size_t i = 9; i < 12; i++) wm_slots_[i] = save_.state.at(kWorldSlots + i) == 0xFF ? -1 : save_.state.at(kWorldSlots + i);
             std::string line = "World championship quarter-finals:";
             for (size_t i = 0; i < 4; i++) {
                 wm_slots_[2 * i] = wm_groups_[0].teams[size_t(a[i])];
@@ -3419,16 +3435,22 @@ void Game::play_wm_day() {
             res.shootout = tie;
             ties.push_back({p.home, p.away, res});
         }
-    } else
+    } else if (!std::getenv("EM_OLD_WMLIVE"))
+        ties = live_round(draw, true);
+    else
         ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats}, match_observer_ ? &match_observer_ : nullptr);
+    const bool live_knockout = !quick && !std::getenv("EM_OLD_WMLIVE");
     bool nation_played = false;
     for (size_t k = 0; k < ties.size(); k++) {
         const Tie& t = ties[k];
         if (t.home == nation || t.away == nation) {
             nation_played = true;
-            book_national_match(t.home == nation ? t.result.home : t.result.away, stats, t.home == nation ? 0 : 1,
-                                t.result.shootout_goals[t.home == nation ? 0 : 1]);
+            book_national_match(t.home == nation ? t.result.home : t.result.away, live_knockout ? live_stats : stats,
+                                t.home == nation ? 0 : 1, t.result.shootout_goals[t.home == nation ? 0 : 1], !live_knockout);
         }
+        // the live knock-out games enter the head-to-head table as well (REAL-CODE WM-only game, quarter-final 23.04.)
+        if (live_knockout && !std::getenv("EM_OLD_WMKOH2H"))
+            book_head_to_head(save_.state, t.home, t.away, t.result.home, t.result.away, save_.state.at(0x068C));
         const int loser = t.winner() == t.home ? t.away : t.home;
         wm_slots_[base + 2 * k] = t.winner();
         wm_slots_[base + 2 * k + 1] = loser;
@@ -4852,6 +4874,13 @@ g_draw_scope = "weekly-injuries-offers-training";
                              (!menu_next && !std::getenv("EM_OLD_STEPREFRESH")) ||
                              (wm_only() && !std::getenv("EM_OLD_WMONLYREFRESH"));  // Köln 277: not inside a step; "Nur WM": never
         prepare_human_lineup(true, m);
+    }
+    // the menu before a WM day restores the national coach's line-up mode (DS:037F <- DS:0380, 38e6c; REAL-CODE WM-only game)
+    // and leaves DS:A70D/A70E at 5; before another day it sets them to 0 (38f53)
+    if (national_coach_ >= 0 && !std::getenv("EM_OLD_WMMODE")) {
+        const bool wm_next = calendar_.event(day_ + 1) == kEventWorldChampionship;
+        if (wm_next) save_.state.at(0x078A + 10) = save_.state.at(0x078B + 10);
+        save_.state.at(0x0788) = save_.state.at(0x0789) = wm_next ? 5 : 0;
     }
     empty_cup_day_ = false;
     idle_cup_day_.fill(false);

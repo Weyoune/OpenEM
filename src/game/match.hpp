@@ -339,7 +339,7 @@ public:
     void mark_same_club();  // the pair-table error made both sides one club: the penalty pair roll stops (ovr030:04BA compares the team ids)  // a manager penalty without bound player ended in the last minute: its saved role, else -1 (DEVIATIONS.md)
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
-    void overtime_break();  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
+    void overtime_break(bool ended_managed = false);  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
     void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
     void set_display(bool on);  // ovr030:2937: the full minute belongs to the pairs whose home team is in the display list (overrides the manager test)
     // DS:5A56 for the day of this match: the display is on and a match of the day has a board (ovl14_2630). With it and

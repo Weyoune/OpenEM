@@ -47,7 +47,8 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
                                      bool playoff = false,  // play-off mode DS:76B2 (halved goal points)
                                      size_t knockout_pairs = size_t(-1),  // pairs from this index on play without overtime (relegation round)
                                      int* phantom_role = nullptr,  // set to the role of a phantom release (pair-table write), else unchanged
-                                     int level = 0);  // the match level (WM games: 1, see quick_competition_match)
+                                     int level = 0,  // the match level (WM games: 1, see quick_competition_match)
+                                     bool ended_breaks = false);  // WM: a managed match over at 60 takes the overtime breaks too
 
 // Native redraw: twenty random swaps, then home ice for the lower division.
 // places (optional): the clubs in place order after the swaps (DS:D04B), before the home rights.

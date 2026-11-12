@@ -990,7 +990,7 @@ struct MatchRun::Impl {
                 const std::vector<HokSquadPlayer>* sq = side == 0 ? (hp ? &hsq : nullptr) : (ap ? &asq : nullptr);
                 if (!sq) continue;
                 std::fprintf(stderr, "squadfit min %d %s:", minute + 1, (side == 0 ? h : a).name.c_str());
-                for (size_t s = 18; s < sq->size() && s < 26; s++)
+                for (size_t s = 0; s < sq->size() && s < 29; s++)
                     std::fprintf(stderr, " %zu:%d/%d/%d", s, (*sq)[s].fitness, (*sq)[s].line, (*sq)[s].role);
                 std::fprintf(stderr, "\n");
             }
@@ -1225,7 +1225,13 @@ MatchProgress MatchRun::progress() const {
     m.penalty_code[1] = p_->abox.code();
     return m;
 }
-void MatchRun::overtime_break() { if (p_->hp || p_->ap) return; prepare_match_energy(p_->h, nullptr, true); prepare_match_energy(p_->a, nullptr, true); }
+void MatchRun::overtime_break(bool ended_managed) {
+    // a running managed match takes the break in its own minute (step); one that already ended takes it here like the other
+    // pairs, the managed squad included (REAL-CODE WM-only game: semi-final over at 60, the other one into overtime: +2 x 19; not on a club cup day)
+    if ((p_->hp || p_->ap) && (!ended_managed || minutes_left() || std::getenv("EM_OLD_ENDEDBREAK"))) return;
+    prepare_match_energy(p_->h, p_->hp ? &p_->hsq : nullptr, true);
+    prepare_match_energy(p_->a, p_->ap ? &p_->asq : nullptr, true);
+}
 MatchResult MatchRun::finish() { return p_->finish(); }
 HokTeam& MatchRun::home_mut() { return p_->h; }
 HokTeam& MatchRun::away_mut() { return p_->a; }
