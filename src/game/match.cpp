@@ -985,6 +985,15 @@ struct MatchRun::Impl {
         for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = record.effort[i]; t.offence[i] = record.offence[i]; }
     }
     bool step() {
+        if (std::getenv("EM_DEBUG_SQUADFIT"))  // the working squads of the human sides at the minute start: fitness, line, role
+            for (int side = 0; side < 2; side++) {
+                const std::vector<HokSquadPlayer>* sq = side == 0 ? (hp ? &hsq : nullptr) : (ap ? &asq : nullptr);
+                if (!sq) continue;
+                std::fprintf(stderr, "squadfit min %d %s:", minute + 1, (side == 0 ? h : a).name.c_str());
+                for (size_t s = 18; s < sq->size() && s < 26; s++)
+                    std::fprintf(stderr, " %zu:%d/%d/%d", s, (*sq)[s].fitness, (*sq)[s].line, (*sq)[s].role);
+                std::fprintf(stderr, "\n");
+            }
         if (forfeit || minute >= last) return false;
         shown.scenes.clear();
         shown.penalty_reason[0] = shown.penalty_reason[1] = -1;

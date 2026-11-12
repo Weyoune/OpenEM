@@ -253,6 +253,17 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         more = false;
         bool minute_left = false;
         for (auto& e : entries) minute_left = minute_left || e.run->minutes_left();
+        if (std::getenv("EM_DEBUG_LIVEMIN")) {  // the minute start with the draw counter and every human side's record
+            std::fprintf(stderr, "livemin %d at %zu\n", minute_number + 1, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
+            for (auto& e : entries)
+                for (int side = 0; side < 2; side++) {
+                    if (!human.is_human(side == 0 ? e.home : e.away)) continue;
+                    const HokTeam& t = side == 0 ? e.run->home_state() : e.run->away_state();
+                    std::fprintf(stderr, "  %s energy %d %d %d %d / %d %d %d %d lines %d/%d\n", t.name.c_str(), t.energy[0][0], t.energy[0][1],
+                                 t.energy[0][2], t.energy[0][3], t.energy[1][0], t.energy[1][1], t.energy[1][2], t.energy[1][3],
+                                 t.current_line[0], t.current_line[1]);
+                }
+        }
         if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
             if (const int r = reporter_minute_draw(rng, display); r >= 0) for (auto& e : entries) e.run->set_reporter(r);
         if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
