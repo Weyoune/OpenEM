@@ -37,6 +37,7 @@ int offence_bonus(const HokTeam& t, GameRandom& rng) {
 }  // namespace
 
 int g_goal_scenes = 0;
+int g_try_round = -1;
 int g_match_speed = 70;
 std::array<uint8_t, 14> g_display_flags{};
 
@@ -140,6 +141,7 @@ LineValues line_strength(const HokTeam& t, int line, int kind, bool in_play, int
 }
 
 LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int kind, bool in_play, int man_advantage, int minute) {
+    if (in_play && g_try_round == 7 && std::getenv("EM_TRY_NATCPU") && t.name == std::getenv("EM_TRY_NATCPU")) return line_strength(t, line, kind, in_play, man_advantage);
     constexpr int kGoalieWeight[2] = {80, 140};  // DS:4946
     int s1 = 0, s2 = 0, f = 0, count = 0, lo_nibbles = 0, hi_nibbles = 0;
     bool goalie_found = false, goalie_present = false;
@@ -163,6 +165,8 @@ LineValues line_strength(const HokTeam& t, const HumanSquad& hs, int line, int k
         int v = p.skill_b * m / 100;
         if (hs.level < 2 && in_play && p.home_line - 1 != line && v > 12) v -= 10;
         if (hs.level < 5 && in_play && !goalie && std::min(2, position_value / 25) - 1 != kind && v > 15) v -= 15;
+        // the national team (manager index 5) in play: + player record +0x19 >> 3, at most 99 (162c:16bf; REAL-CODE WM-only final)
+        if (hs.national && in_play && !std::getenv("EM_OLD_NATBONUS")) v = std::min(99, v + (players[size_t(p.player)].raw[0x19] >> 3));
         if (kind == 0) v = kGoalieWeight[goalie ? 1 : 0] * v / 100;
         s2 += v;
         f += p.form;
@@ -235,7 +239,7 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
         std::fprintf(stderr, "gpall %d %d %d %d lines %d/%d %d/%d sk %d/%d eff %d/%d fl %d/%d\n", minute, counter++ % 18, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, h.effort_current, a.effort_current, h.flags, a.flags);
     }
     if (std::getenv("EM_DEBUG_GP2")) std::fprintf(stderr, "gp2 min %d flags %d/%d shift %d,%d/%d,%d\n", minute, h.flags, a.flags, h.shift[0], h.shift[1], a.shift[0], a.shift[1]);
-    if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "G=%zu goal_points min %d: sh %d sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", g_game_log ? g_game_log->size() : size_t(0), minute, sh, sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
+    if (std::getenv("EM_DEBUG_GP")) std::fprintf(stderr, "G=%zu goal_points min %d: sh %d [k %d/%d] (cpu %d) sa %d lines %d/%d %d/%d skaters %d/%d human %d/%d eff %d/%d en %d %d %d %d %d %d %d %d\n", g_game_log ? g_game_log->size() : size_t(0), minute, sh, g_goal_kinds[0][0], g_goal_kinds[0][1], playing_strength(h, nullptr, StrengthMode::Neutral, minute, h.skaters - a.skaters, h.current_line[0], h.current_line[1]), sa, h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1], h.skaters, a.skaters, hh != nullptr, ha != nullptr, h.effort_current, a.effort_current, h.energy[0][0], h.energy[0][1], h.energy[0][2], h.energy[0][3], h.energy[1][0], h.energy[1][1], h.energy[1][2], h.energy[1][3]);
     if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP")) {
         std::fprintf(stderr, "globals: level %d per %d/%d minute %d\n", hh->level, hh->per_line[0], hh->per_line[1], minute);
         std::fprintf(stderr, "team11: flags %d effort %d lines %d/%d energy %d %d %d %d %d %d %d %d skill1 %d/%d skill2 %d/%d form %d/%d bonus %d\n", h.flags, h.effort_current,
@@ -245,7 +249,7 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
     if (hh && minute == (std::getenv("EM_DEBUG_MIN") ? std::atoi(std::getenv("EM_DEBUG_MIN")) : 2) && std::getenv("EM_DEBUG_GP"))
         for (size_t s = 0; s < hh->squad->size() && s < 26; s++) {
             const auto& p = (*hh->squad)[s];
-            std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness);
+            std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d exh %d/%d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness, p.raw_exhaustion, p.exhaustion);
         }
     int d = sh / 3 - sa / 3;
     if (const char* dt = std::getenv("EM_DEBUG_TEAMS"); dt && h.name.find(dt) != std::string::npos)  // the records of a named pair
@@ -517,7 +521,7 @@ void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const Hum
     if (!decided) {
         const int pa = ((kinds_a ? strength_from_kinds(a, kinds_a) : playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1])) * 2) & 0xFF;
         const int pb = ((kinds_b ? strength_from_kinds(b, kinds_b) : playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1])) * 2) & 0xFF;
-        if (std::getenv("EM_DEBUG_MODE")) std::fprintf(stderr, "mode min %d pa %d pb %d (kinds %d/%d, %d/%d; full %d/%d) sk %d/%d score %d:%d lines A %d/%d B %d/%d\n", minute, pa, pb, kinds_a ? kinds_a[0] : -1, kinds_a ? kinds_a[1] : -1, kinds_b ? kinds_b[0] : -1, kinds_b ? kinds_b[1] : -1, playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1]), playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]), skaters_a, skaters_b, score_a, score_b, a.current_line[0], a.current_line[1], b.current_line[0], b.current_line[1]);
+        if (std::getenv("EM_DEBUG_MODE")) std::fprintf(stderr, "mode min %d pa %d pb %d (kinds %d/%d, %d/%d; full %d/%d) sk %d/%d score %d:%d lines A %d/%d B %d/%d\n", minute, pa, pb, kinds_a ? kinds_a[0] : -1, kinds_a ? kinds_a[1] : -1, kinds_b ? kinds_b[0] : -1, kinds_b ? kinds_b[1] : -1, playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1]), playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]) * 1000 + playing_strength(b, nullptr, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]), skaters_a, skaters_b, score_a, score_b, a.current_line[0], a.current_line[1], b.current_line[0], b.current_line[1]);
         if (pa < pb && pa + 20 < pb) { mode_a = 3; mode_b = 2; }
         if (pb < pa && pb + 15 < pa) { mode_a = 2; mode_b = 3; }
     }
@@ -1031,7 +1035,9 @@ struct MatchRun::Impl {
             const HumanSquad* m = side == 0 ? hp : ap;
             const int load = stats && stats->initial_load[side] >= 0 ? stats->initial_load[side] : 0;
             // no check in the overtime of a play-off game (REAL-CODE Köln period 34: minute 61 of Köln - Kaufbeuren without it)
-            if (m && m->on_minute && !minute_check_off[side] && !(opts.playoff && minute > 60 && !std::getenv("EM_OLD_POOTCHECK"))) {
+            // nor in the overtime of a WM game of the national coach (REAL-CODE WM-only final: minute 61 without it)
+            if (m && m->on_minute && !minute_check_off[side] && !(opts.playoff && minute > 60 && !std::getenv("EM_OLD_POOTCHECK")) &&
+                !(m->national && minute > 60 && !std::getenv("EM_OLD_WMOTCHECK"))) {
                 g_minute_lineup = side == 0 ? &hsq : &asq;
                 m->on_minute(minute, load, side == 0 ? h : a);
                 g_minute_lineup = nullptr;
@@ -1122,9 +1128,11 @@ struct MatchRun::Impl {
             }
             scope("swap");
             swap_sides = !decided_now && (rng.borland ? rng.borland->range(0, 1) : 0) != 0;  // ovr030:2A78: the original swaps A and B for the rest of the minute
-            if (minute % 2 != 0) {  // the swapped side is team A of the routine (its rules are not symmetric)
-                if (swap_sides) update_tactics_mode(a, h, ap, hp, shown_away, shown_home, minute, kinds_a, kinds_h);
-                else update_tactics_mode(h, a, hp, ap, shown_home, shown_away, minute, kinds_h, kinds_a);
+            const int mode_home = shown_home, mode_away = shown_away;
+            // the golden-goal minute ends without the tactics update too (REAL-CODE WM-only final 1994: the last mode write is minute 61)
+            if (minute % 2 != 0 && !(decided_now && !std::getenv("EM_OLD_GOLDENMODE"))) {  // the swapped side is team A of the routine (its rules are not symmetric)
+                if (swap_sides) update_tactics_mode(a, h, ap, hp, mode_away, mode_home, minute, kinds_a, kinds_h);
+                else update_tactics_mode(h, a, hp, ap, mode_home, mode_away, minute, kinds_h, kinds_a);
             }
             scope("lines");
             if (swap_sides) {  // ovr030:2AD9: the swapped side changes lines first (mode 3 follows the already changed line)
@@ -1224,6 +1232,9 @@ MatchProgress MatchRun::progress() const {
     m.penalty_code[0] = p_->hbox.code();
     m.penalty_code[1] = p_->abox.code();
     return m;
+}
+void MatchRun::tactics_after_end(int minute) {
+    update_tactics_mode(p_->h, p_->a, p_->hp, p_->ap, p_->score.home, p_->score.away, minute, nullptr, nullptr);
 }
 void MatchRun::overtime_break(bool ended_managed) {
     // a running managed match takes the break in its own minute (step); one that already ended takes it here like the other

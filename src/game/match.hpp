@@ -91,6 +91,7 @@ struct HumanSquad {
     const std::vector<HokPlayer>* players = nullptr;
     int per_line[2] = {2, 3};  // DS:CC37 for this manager
     int level = 2;             // DS:0ED8
+    bool national = false;     // manager index 5 (national coach): 162c:16bf adds player +0x19 >> 3 per player in play
     int penalty_effort_adjustment = 0;  // ovl06_02d8, read through the native owner index
     int effort_control = 0, offence_control = 0;  // 0 automatic, 1 semi, 2 manual/live value
     int line_control = 0;  // 0 follows team mode, 1 two lines, 2 auto, 3 opponent, 4 minutes, 5 manual
@@ -340,6 +341,7 @@ public:
     const HokTeam& home_state() const;  // the working copies of the teams (final state after finish())
     const HokTeam& away_state() const;
     void overtime_break(bool ended_managed = false);  // minutes 61 / 66: the team energies of every pair of the round (finished or not) recover by 19 (REAL-CODE; the squad fitness does not)
+    void tactics_after_end(int minute);  // WM overtime decided early: the odd-minute tactics update still runs with the final score
     void set_watched(bool on);  // from minute 21 the original runs the full minute (energy, lines, effort, side swap) for every match of the day
     void set_display(bool on);  // ovr030:2937: the full minute belongs to the pairs whose home team is in the display list (overrides the manager test)
     // DS:5A56 for the day of this match: the display is on and a match of the day has a board (ovl14_2630). With it and

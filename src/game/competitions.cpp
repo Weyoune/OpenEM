@@ -281,7 +281,10 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             for (int i = 0; i < spin; i++) rng.range(0, 1);
         }
     }
-    if (loop_minutes) *loop_minutes = minute_number;
+    // WM: a round decided in the overtime before minute 66 still gets the break of minute 66 (REAL-CODE WM-only final 1994:
+    // the two finalists stand one +19 higher at the next WM start)
+    if (ended_breaks && minute_number > 60 && minute_number <= 65 && !std::getenv("EM_OLD_WMOTBREAK"))
+        for (auto& e : entries) e.run->overtime_break(true);    if (loop_minutes) *loop_minutes = minute_number;
     std::vector<Tie> out;
     for (auto& e : entries) {
         Tie t{e.home, e.away, e.run->finish()};
