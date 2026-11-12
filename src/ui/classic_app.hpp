@@ -32,6 +32,8 @@ struct ClassicCareerState;  // classic_career.cpp
 struct ClassicWmModeState;  // classic_wm_mode.cpp
 class ClassicApplication {
 public:
+    // the seeds of a new game (all three srand values) and the intro's draws before them (comparisons with a recorded start)
+    void set_new_game_seed(uint32_t seed, std::vector<int> intro_draws = {}) { new_game_seed_ = seed; new_game_intro_ = std::move(intro_draws); }
     ClassicApplication(std::filesystem::path data, std::filesystem::path saves, const std::filesystem::path& initial);
     void draw();
     void tick();
@@ -61,6 +63,8 @@ public:
     void set_pump(std::function<void()> pump) { pump_ = std::move(pump); }
 
 private:
+    uint32_t new_game_seed_ = 1;           // tests and scripts: fixed; the program sets the time (classic_main.cpp)
+    std::vector<int> new_game_intro_;
     struct FileEntry { std::filesystem::path path; std::string name; bool directory=false; bool save=false; };
     const HokFile& snapshot();
     void invalidate() { view_.reset(); pool_trail_ = 0; }

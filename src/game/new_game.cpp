@@ -150,7 +150,8 @@ HokFile start_new_world(const Bytes& exe, const Bytes& db_raw, const HokFile& ba
         settings.start_mode = options->mode;
         settings.cup_live = options->cup_live;
     }
-    const WorldSeeds seeds{seed, seed, seed};
+    WorldSeeds seeds{seed, seed, seed};
+    if (options) seeds.intro_draws = options->intro_draws;
     // The league shuffle runs before the start menu (ovl06_099d), so it does not depend on the managers:
     // a first run with a placeholder manager gives the club order the generated world will have.
     settings.managers = {WorldManager{"x", 0, 0}};

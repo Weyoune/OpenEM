@@ -134,12 +134,34 @@ void ClassicApplication::draw_cup_live() {
         std::vector<uint8_t> below;
         for (int row = s + 1; row < 10; row++)
             for (int col = 0; col < 0x78; col++) below.push_back(cv.pixels().at(x + col, y + row));
-        canvas_.text_native(ClassicFontId::Mini, x + 2, y + 7, c.labels[size_t(p)], c.colors[size_t(p)], -1, x + 0x77);
+        canvas_.text_native(ClassicFontId::Mini, x + 2, y + 7, c.labels[size_t(p)], c.colors[size_t(p)], 0, x + 0x77);  // black shadow (REAL-CODE)
         size_t i = 0;
         for (int row = s + 1; row < 10; row++)
             for (int col = 0; col < 0x78; col++) cv.pixels().at(x + col, y + row) = below[i++];
     }
-    if (c.waiting) canvas_.text_native(ClassicFontId::Mini, 0x5A, 0xDD, "TASTE DR]CKEN", 7, -1, 0xED);
+    // a new game: where the question dialog stood, the original's board under it carries left bars 3 pixels wider
+    // (x 157..159 stay KB25 texture beside the uncovered places; REAL-CODE live draw of 12.11.2026, rows 104..183)
+    if (!c.in_day && !std::getenv("EM_OLD_LIVESTRIP")) {
+        // the colours of a bar slot: top edge 60 80 90, body 30 50 60, bottom edge 20 30 50 (8-bit RGB of the capture)
+        auto index_of = [&](uint8_t r, uint8_t g, uint8_t b) {
+            const auto& pal = canvas_.palette().rgb;
+            for (size_t i = 0; i < pal.size(); i++)
+                if ((pal[i][0] & 0xFC) == r && (pal[i][1] & 0xFC) == g && (pal[i][2] & 0xFC) == b) return int(i);
+            return -1;
+        };
+        const int top = index_of(0x60, 0x80, 0x90), body = index_of(0x30, 0x50, 0x60), bottom = index_of(0x20, 0x30, 0x50);
+        if (top >= 0 && body >= 0 && bottom >= 0)
+            for (int p = 0; p < clubs; p += 2) {
+                const int y0 = place_y(clubs, p);
+                for (int row = 0; row < 10; row++) {
+                    const int y = y0 + row;
+                    if (y < 107 || y > 183) continue;
+                    const int colour = row == 0 ? top : row == 9 ? bottom : body;
+                    for (int x = 157; x <= 159; x++) canvas_.pixels().at(x, y) = uint8_t(colour);
+                }
+            }
+    }
+    if (c.waiting) canvas_.text_native(ClassicFontId::Mini, 0x5A, 0xDD, "TASTE DR]CKEN", 7, 0, 0xED);  // black shadow (REAL-CODE)
 }
 
 void ClassicApplication::tick_cup_live() {
@@ -188,8 +210,9 @@ void ClassicApplication::finish_new_game(bool cup_live) {
     auto pending = std::move(*pending_start_);
     pending_start_.reset();
     pending.options.cup_live = cup_live;
+    pending.options.intro_draws = new_game_intro_;
     try {
-        session_.start_new_game(pending.managers, 1, &pending.options);
+        session_.start_new_game(pending.managers, new_game_seed_, &pending.options);
         if (misc_) close_start_menu();
         invalidate();
         screen_ = ClassicScreen::Main;

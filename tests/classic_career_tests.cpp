@@ -198,6 +198,61 @@ int main(int argc, char** argv) {
                 if (diff) std::printf("cup question: %zu pixels differ from the original\n", diff);
                 check(diff == 0, "DEB cup question equals the original's screen");
             }
+            {  // the live draw ("Aber klar") of the REAL-CODE new game (seeds 0x4880, the intro's draws, the clicks of the
+               // recording in docs/logic/WELTGENERATOR.md): the finished board against the original's screen
+                ClassicApplication live(data, output / "career-live", fs::path());
+                live.set_new_game_seed(0x4880, {7, 27, 27, 27, 27, 27, 27, 27, 27, 27});
+                live.click(25, 60, false);
+                live.click(205, 55, false);
+                live.text_input("hans");
+                live.key(SDLK_RETURN);
+                live.click(158, 60, false);
+                live.click(208, 55, false);
+                live.click(282, 212, false);
+                live.click(120, 172, false);  // "Aber klar"
+                live.click(160, 120, false);  // a click lets the rest roll in fast (DS:A9E6); the end board is the same
+                const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+                const Bytes board = read_file(career / "raster_goldens" / "cup-live-realcode.rgb");
+                size_t diff = 1;
+                while (diff && std::chrono::steady_clock::now() < until) {
+                    live.tick();
+                    live.motion(120, 172);
+                    live.draw();
+                    diff = region_differences(live.canvas(), board, {0, 0, 320, 240}, {});
+                }
+                if (diff) {
+                    std::printf("live cup draw: %zu pixels differ from the original\n", diff);
+                    write_new_save(output / "live-cpp.bmp", live.canvas().bmp_bytes());
+                }
+                check(diff == 0, "live DEB cup draw equals the original's finished board");
+            }
+            {  // the same recorded new game with "Kein Gedanke", then the manager's face: the message field against the original
+                ClassicApplication field(data, output / "career-field", fs::path());
+                field.set_new_game_seed(0x4880, {7, 27, 27, 27, 27, 27, 27, 27, 27, 27});
+                field.click(25, 60, false);
+                field.click(205, 55, false);
+                field.text_input("hans");
+                field.key(SDLK_RETURN);
+                field.click(158, 60, false);
+                field.click(208, 55, false);
+                field.click(282, 212, false);
+                field.click(190, 172, false);  // "Kein Gedanke"
+                field.click(250, 50, false);   // the face (ovr034:234D)
+                field.motion(250, 50);
+                field.draw();
+                const Bytes reference = read_file(career / "raster_goldens" / "message-field-realcode.rgb");
+                // left out: face and crest of the header (the emulator's PNG does not model the VGA latch copies of these
+                // pictures), the penguin animation of "Gemischtes" and one column at x 160 (an animation frame)
+                const size_t diff = region_differences(field.canvas(), reference, {0, 0, 320, 240},
+                                                       {{232, 33, 313, 74}, {186, 170, 202, 184}, {160, 148, 161, 160}});
+                if (diff) {
+                    const Bytes& fs_state = field.session().game().save().state;
+                    std::printf("message field: %zu pixels differ from the original (face %d, club %d, +0x34 %d)\n", diff,
+                                fs_state.at(0x1EE), fs_state.at(0x0DCD + 0x14), fs_state.at(0x17E7 + size_t(fs_state.at(0x0DCD + 0x14)) * 61 + 0x34));
+                    write_new_save(output / "field-cpp.bmp", field.canvas().bmp_bytes());
+                }
+                check(diff == 0, "empty message field over the main menu equals the original");
+            }
             app.click(190, 172, false); // "Kein Gedanke" (ovl05_4653 asks before the draw)
             require(app.session().loaded(), "Los jetzt! starts the game");
             check(app.screen() == ClassicScreen::Main, "main menu after the start");

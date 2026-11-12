@@ -48,6 +48,7 @@ struct NewGameOptions {
     std::array<int, 4> values{3, 3, 0, 1};  // EM.EXE dseg:0118 = 03 03 00 01
     int mode = 3;                           // ovr027:0161
     bool cup_live = false;                  // "Aber klar" to the DEB cup question of the first round (ovl05_4c7b(0, 0))
+    std::vector<int> intro_draws;           // the draws of the intro animation before the seeds (WorldSeeds, comparisons only)
 };
 inline constexpr std::array<int, 4> kNewGameOptionMax{5, 3, 2, 2};  // dseg:011C = 05 03 02 02
 

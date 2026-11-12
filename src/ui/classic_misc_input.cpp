@@ -130,7 +130,7 @@ void ClassicApplication::click_start_menu(int x, int y, bool right) {
     if (m.setup.mode_bits() == kStartModeWm) {
         if (managers.size() > 1) return;  // the icon switches only for a single manager
         try {
-            session_.start_wm_game(managers.front());
+            session_.start_wm_game(managers.front(), new_game_seed_);
             m.start_base.reset();
             invalidate();
             screen_ = ClassicScreen::Main;

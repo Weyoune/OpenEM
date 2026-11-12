@@ -11,6 +11,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <cstdlib>
+#include <ctime>
 #include <vector>
 namespace fs=std::filesystem;
 namespace {
@@ -88,6 +89,9 @@ int main(int argc,char**argv){
             for(const auto& gap:report.gaps)log<<"Luecke: "<<gap<<'\n';
             return report.ok?0:2;
         }
+        // a new game of the interactive program takes the low 16 bits of the time as all three seeds, like srand(time()) of
+        // the original (scripts and tests keep the fixed seed 1 of ClassicApplication)
+        app.set_new_game_seed(uint32_t(std::time(nullptr)) & 0xFFFFu);
         if(render_screen!="main")app.render_screen(render_screen);
         if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)!=0)throw std::runtime_error(SDL_GetError());
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"0");
