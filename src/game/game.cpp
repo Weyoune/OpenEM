@@ -625,6 +625,7 @@ void Game::play_league_day() {
     // the injury check of the original runs in the match minute; every chance picks scorer and assist (ovl14_2349)
     for (int m = 0; m < managers_; m++) {
         HumanSquad& sq = mgr_[size_t(m)].squad;
+        install_phantom_hook(m);
         sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
         sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
         sq.on_opponent_chance = [this](bool goal, const HokTeam& team) { credit_opponent_goal(0, goal, team); };
@@ -899,6 +900,7 @@ void Game::play_cup_day() {
     if (live)
         for (int m = 0; m < managers_; m++) {
             HumanSquad& sq = mgr_[size_t(m)].squad;
+            install_phantom_hook(m);
             sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
             sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, false, goal, &team, &working, m); };
             sq.on_shot = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(1, true, goal, &team, &working, m); };
@@ -1919,15 +1921,20 @@ void Game::prepare_human_lineup(bool restore_saved_mode, int m) {
     skip_refresh_once_ = false;
     mgr_[m].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[m].team);
     configure_human_tactics(mgr_[m].squad, save_, m);
-    // ovr030:0151 for a manager m >= 1: record -1 of his squad block is record 29 of manager m - 1 (flags bit 0 cleared,
-    // role, +0x0D = 0, the same three bytes that land in the pair table for manager 0; REAL-CODE two managers 12.11.2026)
-    if (m > 0)
-        mgr_[m].squad.on_phantom = [this, m](int role) {
-            const size_t r = squad_block(m - 1) + 29 * kSquadRecord;
-            save_.state.at(r + 0x09) = uint8_t(save_.state.at(r + 0x09) & ~1);
-            save_.state.at(r + 0x0A) = uint8_t(role);
-            save_.state.at(r + 0x0D) = 0;
-        };
+    install_phantom_hook(m);
+}
+
+// ovr030:0151 for a manager m >= 1: record -1 of his squad block is record 29 of manager m - 1 (flags bit 0 cleared, role,
+// +0x0D = 0, the same three bytes that land in the pair table for manager 0; REAL-CODE two managers 12.11.2026). Installed
+// with the other match hooks, so a reloaded game has it too.
+void Game::install_phantom_hook(int m) {
+    if (m <= 0 || m >= managers_) return;
+    mgr_[size_t(m)].squad.on_phantom = [this, m](int role) {
+        const size_t r = squad_block(m - 1) + 29 * kSquadRecord;
+        save_.state.at(r + 0x09) = uint8_t(save_.state.at(r + 0x09) & ~1);
+        save_.state.at(r + 0x0A) = uint8_t(role);
+        save_.state.at(r + 0x0D) = 0;
+    };
 }
 
 // 162c:146c (called by the day loop): the human club's team record follows its squad. Per kind
@@ -2501,6 +2508,7 @@ void Game::play_playoff_day(bool setup_only) {
         spin_match_stream();
         for (int m = 0; m < managers_; m++) {
             HumanSquad& sq = mgr_[size_t(m)].squad;
+            install_phantom_hook(m);
             sq.on_minute = [this, m](int, int load, const HokTeam& team) { injury_minute(load, &team, m); };
             sq.on_chance = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, false, goal, &team, &working, m); };
             sq.on_shot = [this, m](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) { credit_human_goal(0, true, goal, &team, &working, m); };

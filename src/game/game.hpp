@@ -156,6 +156,7 @@ public:
     void enter_first_menu();
     // one manager's turn of the menu pass (transfer-list roll and daily factor), see menu_pass
     void menu_pass_manager(int manager, bool menu = true);
+    void install_phantom_hook(int manager);  // see game.cpp (ovr030:0151 for managers 1..)
     // The name database KB/23.vga; without it the season change keeps the player names.
     void set_database(const Database& db) { db_ = db; }
     // The three cursors of the annual distribution live only in the original's process (not in a HOK); the REAL-CODE
