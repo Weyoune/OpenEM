@@ -3055,7 +3055,7 @@ void Game::book_match_condition(const MatchStats& stats, int side, int manager) 
     }
 }
 
-void Game::book_national_match(int own_goals, const MatchStats& stats, int side, int shootout_goals) {
+void Game::book_national_match(int own_goals, const MatchStats& stats, int side, int shootout_goals, bool credit_goals) {
     interactive_played_ = true;
     if (book_forfeit(stats, 5)) return;
     book_match_condition(stats, side, 5);
@@ -3067,7 +3067,7 @@ void Game::book_national_match(int own_goals, const MatchStats& stats, int side,
         save_.state.at(at) = uint8_t(value);
         save_.state.at(at + 1) = uint8_t(value >> 8);
     };
-    for (int goal = 0; goal < own_goals; goal++) {
+    for (int goal = 0; goal < own_goals && credit_goals; goal++) {
         const bool penalty = goal >= own_goals - shootout_goals;
         const GoalCredit credit = credit_goal(squad, save_.players, brng_, 0, penalty);
         if (credit.scorer < 0) continue;
@@ -3091,6 +3091,26 @@ void Game::book_national_match(int own_goals, const MatchStats& stats, int side,
         increment16(at + 0x20);
         save_.state.at(at + 0x1A) |= 0x80;
     }
+}
+
+void Game::credit_national_chance(bool penalty, bool goal, const HokTeam* on_ice, const std::vector<HokSquadPlayer>* working) {
+    constexpr size_t block = kSquad + 5 * 0x618;
+    auto squad = national_squad();
+    if (working && working->size() == squad.size())  // the pick sees the running lineup (players in the box have no role)
+        for (size_t i = 0; i < squad.size(); i++) squad[i].role = (*working)[i].role;
+    const GoalCredit credit = credit_goal(squad, save_.players, brng_, 0, penalty, goal, on_ice);
+    if (!goal || credit.scorer < 0) return;
+    auto increment16 = [&](size_t at) {
+        const int value = le16(save_.state, at) + 1;
+        save_.state.at(at) = uint8_t(value);
+        save_.state.at(at + 1) = uint8_t(value >> 8);
+    };
+    HokPlayer& scorer = save_.players[size_t(squad[size_t(credit.scorer)].player)];
+    if (!penalty) scorer.league_goals = std::min(scorer.league_goals + 1, 255);
+    const size_t at = block + size_t(credit.scorer) * kSquadRecord;
+    save_.state.at(at + 3) = uint8_t(squad[size_t(credit.scorer)].league_goals_byte);
+    if (!penalty && le16(save_.state, at + 0x22) < 255) increment16(at + 0x22);
+    if (credit.assist >= 0) increment16(size_t(save_.players[size_t(squad[size_t(credit.assist)].player)].raw - save_.state.data()) + 0x1F);
 }
 
 void Game::play_wm_day() {
@@ -3160,13 +3180,49 @@ void Game::play_wm_day() {
                 save_.teams[size_t(team)].bonus = std::clamp(save_.teams[size_t(team)].bonus + (dd > 0 ? step : -step), 47, 53);
             }
     };
+    // a human national coach: the day loop's manager pass runs for manager 5 (sub_60D60: rand(0, 4) per nominee, the home
+    // line), the stream spins, and all pairs of the round are played together minute by minute with the coach's checks
+    // (REAL-CODE WM-only game of 12.11.2026: 29 x (0, 4), (100, 300), then (0, 1400) per minute)
+    std::vector<MatchResult> live_results;
+    MatchStats live_stats;
+    if (r < 5 && !quick && !std::getenv("EM_OLD_WMLIVE")) {
+        int slots = 0;
+        for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_block(5) + size_t(s) * kSquadRecord + 0x0F) != 0;
+        for (int s = 0; s < slots; s++)
+            if (brng_.range(0, 4) == 0) {
+                const size_t rec = squad_block(5) + size_t(s) * kSquadRecord;
+                save_.state.at(rec + 2) = uint8_t(save_.state.at(rec + 0x15) & 0x7F);
+            }
+        spin_match_stream();
+        std::vector<HokPairing> draw;
+        for (size_t g = 0; g < 2; g++)
+            for (size_t pair = 0; pair < 3; pair++) draw.push_back(save_.wm_rounds[g][size_t(r)][pair]);
+        squad.on_minute = [this](int, int load, const HokTeam&) { (void)match_injury_minute(load, finance_.level, brng_); };
+        squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
+            credit_national_chance(false, goal, &team, &working);
+        };
+        squad.on_shot = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
+            credit_national_chance(true, goal, &team, &working);
+        };
+        const HumanSide side{nation, &squad, &live_stats};
+        int minutes = 60, phantom = -1;
+        const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
+                                              &minutes, false, 0, &phantom, 1);
+        squad.on_minute = nullptr;
+        squad.on_chance = nullptr;
+        squad.on_shot = nullptr;
+        for (const auto& t : ties) live_results.push_back(t.result);
+    }
     if (r < 5) {
         for (size_t g = 0; g < 2; g++)
             for (size_t pair = 0; pair < 3; pair++) {
                 const HokPairing& p = save_.wm_rounds[g][size_t(r)][pair];
                 MatchStats stats;
                 MatchResult res;
-                if (quick) {  // no human nation: ovl06_161d quick path for every pair (REAL-CODE period 30)
+                if (!live_results.empty()) {
+                    res = live_results[g * 3 + pair];
+                    if (p.home == nation || p.away == nation) stats = live_stats;
+                } else if (quick) {  // no human nation: ovl06_161d quick path for every pair (REAL-CODE period 30)
                     HokTeam h, a;
                     quick_setup(p.home, p.away, h, a);
                     res = quick_competition_match(h, a, false, false, rng_, 1, false, false, true);  // level 1: the away roll (1,2) is drawn (REAL-CODE)
@@ -3181,7 +3237,7 @@ void Game::play_wm_day() {
                                                 p.home == nation ? &squad : nullptr, p.away == nation ? &squad : nullptr, &stats, {},
                                                 match_observer_ ? &match_observer_ : nullptr, p.home, p.away);
                 if (p.home == nation || p.away == nation)
-                    book_national_match(p.home == nation ? res.home : res.away, stats, p.home == nation ? 0 : 1);
+                    book_national_match(p.home == nation ? res.home : res.away, stats, p.home == nation ? 0 : 1, 0, live_results.empty());
                 wm_groups_[g].book(p.home, p.away, res);
                 const size_t o = kGroupResults + g * 0x24 + size_t(r) * 6 + pair * 2;
                 save_.state.at(o) = uint8_t(res.home);

@@ -222,7 +222,7 @@ namespace em {
 // watched list after a home game of the human club are the same (REAL-CODE whole-program test).
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
                                      const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer,
-                                     int* loop_minutes, bool playoff, size_t knockout_pairs, int* phantom_role) {
+                                     int* loop_minutes, bool playoff, size_t knockout_pairs, int* phantom_role, int level) {
     struct Entry {
         int home, away;
         std::unique_ptr<MatchRun> run;
@@ -236,7 +236,7 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         const HumanSquad* ha = human.squad_of(p.away);
         MatchOptions o = opts;
         o.knockout = entries.size() < knockout_pairs;  // the relegation games of a play-off day run in the same loop, without overtime
-        entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, 0, hh, ha,
+        entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, level, hh, ha,
                                                                          human.match_stats(p.home, p.away), o)});
     }
     // the display of the round (switch DEB-Pokal, or a manager's club plays) and DS:5A56 (a board), as in play_matchdays
