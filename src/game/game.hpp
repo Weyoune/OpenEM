@@ -482,6 +482,7 @@ private:
     NationalTeamTables national_tables_;
     int daily_luck_ = 100;                // DS:E1A4: valuation factor 85..115 of the current play step
     bool injuries_in_minutes_ = false;    // the league match already ran the injury checks per minute
+    bool national_hurt_today_ = false;  // a national player was hurt in the live WM round (the original opens the line-up screen)
     bool interactive_played_ = false;
     bool empty_cup_day_ = false;  // a cup day on which no game was played (every series decided)
     std::array<bool, kMaxManagers> idle_cup_day_{};  // a cup day with games, none of them this manager club's

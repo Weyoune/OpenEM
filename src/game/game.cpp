@@ -3148,9 +3148,19 @@ void Game::national_injury_minute(int load, const HokTeam* on_ice, std::vector<H
         r[0x0D] = uint8_t(in.weeks);
         r[0x09] |= 2;
         r[0x17] = uint8_t(in.type);
-        r[0x0A] = 0;
+        if (std::getenv("EM_OLD_NATHURTROLE")) r[0x0A] = 0;  // the record keeps the role until the next line-up: the game still counts (REAL-CODE WM 1995)
         national[slot].role = 0;  // the running match takes the player out of its lineup
         log_.push_back(pl.name + ": " + injuries_.names[size_t(in.type)] + " (WM)");
+        national_hurt_today_ = true;
+        // leaving the line-up screen (sub_55DD2) sets the active line quotas DS:CC73 of manager 5 as for a club (REAL-CODE
+        // WM-only game, WM 1995: 2 3 3 0 / 2 3 3 0)
+        if (!std::getenv("EM_OLD_NATQUOTAS"))
+            for (size_t kind = 0; kind < 2; kind++) {
+                std::array<uint8_t, 4> raw{};
+                for (size_t i = 0; i < 4; i++) raw[i] = save_.state.at(0x028B + 5 * 8 + kind * 4 + i);
+                const auto active = normalize_tactics_quotas(raw);
+                for (size_t i = 0; i < 4; i++) save_.state.at(0x025B + 5 * 8 + kind * 4 + i) = active[i];
+            }
         break;
     }
 }
@@ -4529,7 +4539,7 @@ Bytes Game::save_bytes() const {
             h.table_order[size_t(l)][place] = lg.first_team + lg.ranking[place];
         const int md = matchday_[size_t(l)];
         // ("Nur WM": the first league keeps the pair table DS:5D7B as left by the EuroCup schedule, see new_season)
-        if (md >= 1 && md <= 4 * (kHokLeagueSize - 1) && !(l == 0 && wm_only() && !std::getenv("EM_OLD_WMONLYPAIRS"))) {
+        if (md >= 1 && md <= 4 * (kHokLeagueSize - 1) && !(l == 0 && wm_only() && wm_round_ == 0 && !std::getenv("EM_OLD_WMONLYPAIRS"))) {
             const auto pairs = round_robin_pairings(schedule_.teams12, md - 1);
             for (size_t i = 0; i < pairs.size() && i < h.pairings[size_t(l)].size(); i++)
                 h.pairings[size_t(l)][i] = {lg.first_team + pairs[i].home, lg.first_team + pairs[i].away};
@@ -4856,7 +4866,15 @@ g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::
     if (event == kEventCup) play_cup_day();
     if (event == kEventEuroCup) play_euro_day();
     if (event == kEventPlayoff) play_playoff_day();
+    national_hurt_today_ = false;
     if (event == kEventWorldChampionship) play_wm_day();
+    // the line-up screen of a national injury leaves DS:A70E at manager 0, so the manager routine 146e:0c89 of the WM branch
+    // is no longer kept off the club: injuries, offers and training of manager 0 run at once (REAL-CODE WM-only game, WM 1995)
+    if (national_hurt_today_ && !std::getenv("EM_OLD_WMHURTCLUB")) {
+        squad_injuries(day_ % 7 == 0, false, 0, 0);
+        make_offers();
+        train_squad();
+    }
     // the WM appointment on 13.04. (DOSBox NATPRE1 -> NATAUTO: the national manager's menu on that day); a manager without
     // appointment keeps last season's flags until the day is left (see the top of advance_day)
     if (event == kEventSectionEnd && calendar_.event(day_ + 1) == kEventWorldChampionship)
@@ -4945,6 +4963,8 @@ g_draw_scope = "weekly-injuries-offers-training";
     if (national_coach_ >= 0 && !std::getenv("EM_OLD_WMMODE")) {
         const bool wm_next = calendar_.event(day_ + 1) == kEventWorldChampionship;
         if (wm_next) save_.state.at(0x078A + 10) = save_.state.at(0x078B + 10);
+        // ... and runs the automatic line-up of the national squad (an injured player leaves it; REAL-CODE WM-only game, WM 1995)
+        if (wm_next && !std::getenv("EM_OLD_NATLINEUP")) auto_lineup(save_, 5);
         save_.state.at(0x0788) = save_.state.at(0x0789) = wm_next ? 5 : 0;
     }
     empty_cup_day_ = false;
