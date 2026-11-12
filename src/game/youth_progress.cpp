@@ -22,6 +22,8 @@ void youth_fixture_day(Bytes& state,const FinanceTables& finance,int first_match
     const size_t at=block(state,manager);
     if(first_matchday<0||first_matchday>44||finance.money_num<=0||finance.money_den<=0)
         throw FormatError("youth progress: invalid matchday or currency");
+    // a manager without youth teams (block all zero; REAL-CODE 12.11.2026: the original draws nothing for him)
+    if(!state[at]&&!state[at+1]&&!state[at+2]&&!std::getenv("EM_OLD_YOUTHZERO"))return;
     for(size_t i=0;i<3;++i)if(!state[at+i]||state[at+6+i]>=3)
         throw FormatError("youth progress: invalid native quality or league");
     const auto draw=[&](int lo,int hi){return random(lo,hi);};  // rand(1,0) stays as it is (sub_1A237 swaps itself)

@@ -859,6 +859,16 @@ struct MatchRun::Impl {
         outer_human[1] = ha;
         hp = hh ? &hh2 : nullptr;
         ap = ha ? &ha2 : nullptr;
+        // the penalty effort adjustment reads DS:974B + owner * 0x1AF, the match load (+0xF0) of manager `owner` = the next
+        // manager after the side's own (penalty_effort_adjustment). The match start writes the loads of both human sides
+        // first: when that next manager is the opponent, the side reads his load of this match (REAL-CODE 12.11.2026, two
+        // managers, Freiburg - Frankfurt: effort 60 + 21 - 20 = 61)
+        if (hh && ha && stats && h.raw && a.raw && !std::getenv("EM_OLD_PAIRLOAD")) {
+            const int owner_home = h.raw[0x16], owner_away = a.raw[0x16];
+            const int load_home = stats->initial_load[0], load_away = stats->initial_load[1];
+            if (owner_home >= 1 && owner_home <= 5 && owner_away == owner_home + 1) hh2.penalty_effort_adjustment = load_away - 20;
+            if (owner_away >= 1 && owner_away <= 5 && owner_home == owner_away + 1) ha2.penalty_effort_adjustment = load_home - 20;
+        }
         // FUN_162c_02a5 also sets up a human team whose manager leaves effort and offence on automatic
         // (DS:A6FA / DS:A706 per manager; Kölner EC in MONAT1 carries exactly the automatic values).
         // Each component follows its independent saved AUTOM./SEMI/MANUAL mode.

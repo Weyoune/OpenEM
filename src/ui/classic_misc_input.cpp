@@ -91,8 +91,10 @@ void ClassicApplication::click_misc(int x, int y, bool right) {
         // ovr027 with var_64 = old manager count: every complete new row joins the running game in menu order
         screen_ = ClassicScreen::Main;
         try {
+            const int first = session_.game().managers();
             for (const auto& r : misc_->setup.rows())
                 if (!r.existing && r.face >= 0 && r.team >= 0 && r.name.size() >= 2) session_.add_manager({r.name, r.face, r.team});
+            session_.begin_added_turns(first);  // the day loop goes on with the added managers' turns (REAL-CODE)
             invalidate();
         } catch (const std::exception& e) {
             notice(e.what());

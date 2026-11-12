@@ -2592,6 +2592,9 @@ void Game::play_playoff_day(bool setup_only) {
                 const size_t live_at = g * pairs.size() + pair;
                 if (live_round && live_at < relegation_live.size()) {
                     r = relegation_live[live_at];
+                    // the live loop booked the game into the statistics of its managed side (as in the play-off loop above), not
+                    // into manager 0's: another manager's squad is booked from his own (4 managers: a relegation game of manager 3)
+                    if (MatchStats* own = side.match_stats(home, away); own && !std::getenv("EM_OLD_RELSTATS")) game_stats = own;
                 } else if (!manager_team(home) && !manager_team(away)) {  // without a human club a quick result (REAL-CODE period 28)
                     HokTeam h, a;
                     quick_setup(home, away, h, a);  // same quick path as the play-offs
@@ -4414,10 +4417,14 @@ g_draw_scope = "image";
 // menus; random draws of a menu action of manager m < N-1 therefore come after the whole pass here, in the original
 // between factor(m) and roll(m + 1).
 void Game::menu_pass(bool menu) {
-    for (int m = 0; m < managers_; m++) {
-        if (brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) (asm 170773)
-        if (menu) daily_luck_ = brng_.range(85, 115);
-    }
+    for (int m = 0; m < managers_; m++) menu_pass_manager(m, menu);
+}
+
+// One manager's turn of the menu pass. Manager -> Neuer: the day loop goes on with the added manager's turn after the menu
+// (REAL-CODE 12.11.2026: rand(0, N + 2) with the new N, a refreshed list, rand(85, 115), then his menu).
+void Game::menu_pass_manager(int, bool menu) {
+    if (brng_.range(0, managers_ + 2) == 0) refresh_transfer_list();  // rand(0, managers + 2) (asm 170773)
+    if (menu) daily_luck_ = brng_.range(85, 115);
 }
 
 // The original's day loop after the new-game generator, up to the first menu "Vor dem ersten Spieltag" (REAL-CODE new game

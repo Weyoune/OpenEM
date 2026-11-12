@@ -658,6 +658,11 @@ if(TARGET em_realcode)
     # original's state in the menu "Vor dem ersten Spieltag" (share market, finances, image, menu pass)
     add_test(NAME realcode_new_game_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin" 3934523008)
     set_tests_properties(realcode_new_game_start PROPERTIES ENVIRONMENT "GENSTART=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # two managers (REAL-CODE 12.11.2026): the recorded new game, Manager -> Neuer (ESC Frankfurt), the added manager's turn
+    # of the menu pass, then three days to 12.09. with the head-to-head of the two human clubs; DS:A70E/A70D: the original
+    # stands in the second manager's menu
+    add_test(NAME realcode_two_managers COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_start.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_day3.bin" 3215422093)
+    set_tests_properties(realcode_two_managers PROPERTIES ENVIRONMENT "MENUPASS=1;GSTATE=783127;FORCEDAYS=3;DAYDIFF_IGNORE=788,789")
     # fourth season change (13.04. -> 10.09.1996): the same head-to-head deviation as period 58 (docs/DEVIATIONS.md)
     add_test(NAME realcode_daydiff_period92 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid91.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day92.bin" 84)
     set_tests_properties(realcode_daydiff_period92 PROPERTIES ENVIRONMENT "GSTATE=84;FORCEDAYS=16;DAYDIFF_IGNORE=919c,91aa,91bc")

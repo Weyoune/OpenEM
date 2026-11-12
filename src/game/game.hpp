@@ -154,6 +154,8 @@ public:
     void set_borland_state(uint32_t s) { brng_ = BorlandRandom(s); }  // Manager -> Neuer (Session::add_manager)
     // a world just built by the generator (game/world_generator.hpp): the part of September 10 before the first menu
     void enter_first_menu();
+    // one manager's turn of the menu pass (transfer-list roll and daily factor), see menu_pass
+    void menu_pass_manager(int manager, bool menu = true);
     // The name database KB/23.vga; without it the season change keeps the player names.
     void set_database(const Database& db) { db_ = db; }
     // The three cursors of the annual distribution live only in the original's process (not in a HOK); the REAL-CODE

@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 #include "game/checkpoint.hpp"
+#include "game/scorers.hpp"
 #include "game/manager_layout.hpp"
 #include "ui/session.hpp"
 
@@ -88,7 +89,7 @@ void career(const fs::path& data, const std::vector<int>& clubs, uint32_t seed) 
             try {
                 return s.advance_day();
             } catch (const std::exception& e) {
-                throw std::runtime_error(tag + "session, day " + std::to_string(days + 1) + ": " + e.what());
+                throw std::runtime_error(tag + "session, day " + std::to_string(days + 1) + " (" + em::g_draw_scope + "): " + e.what());
             }
         };
         while (!advance()) {

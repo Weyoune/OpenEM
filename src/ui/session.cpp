@@ -142,6 +142,13 @@ void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
     continue_generator_streams(streams);
 }
 
+void Session::begin_added_turns(int first) {
+    if (!game_ || first < 0 || first >= game_->managers()) return;
+    for (int m = first; m < game_->managers(); m++) game_->menu_pass_manager(m);
+    select_manager(first);
+    revision_++;
+}
+
 void Session::continue_generator_streams(const std::array<uint32_t, 2>& streams) {
     if (!game_ || std::getenv("EM_OLD_GENSTREAMS")) return;
     game_->set_borland_state(streams[0]);

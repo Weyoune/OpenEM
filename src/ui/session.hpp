@@ -70,6 +70,9 @@ public:
     void start_wm_game(const NewGameSetup& setup, uint32_t seed = 1);
     // Manager -> Neuer in a running game (game/world_generator.hpp add_manager_to_game): the game goes on with one more manager
     void add_manager(const NewGameSetup& setup);
+    // after Manager -> Neuer: the menu-pass turns of the managers from `first` on (transfer-list roll, daily factor); the
+    // menu goes to manager `first` (the original's day loop goes on with the added manager)
+    void begin_added_turns(int first);
     // after a generator start: Borland and GameRandom go on from the generator's end states, as in the original
     void continue_generator_streams(const std::array<uint32_t, 2>& streams);
     void start_new_game(const std::vector<NewGameSetup>& managers, uint32_t seed = 1, const NewGameOptions* options = nullptr);
