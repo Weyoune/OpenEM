@@ -190,6 +190,14 @@ int main(int argc, char** argv) {
             app.click(210, 60, false);  // second crest of the first page
             app.click(282, 212, false); // Los jetzt!
             check(!app.session().loaded() && app.screen() == ClassicScreen::NewManager, "the cup question comes before the game");
+            {  // the screen of the question against the original (REAL-CODE emulator, em_realcode_boot RGBOUT, same clicks)
+                app.motion(282, 212);
+                app.draw();
+                const Bytes question = read_file(career / "raster_goldens" / "cup-question-realcode.rgb");
+                const size_t diff = region_differences(app.canvas(), question, {0, 0, 320, 240}, {});
+                if (diff) std::printf("cup question: %zu pixels differ from the original\n", diff);
+                check(diff == 0, "DEB cup question equals the original's screen");
+            }
             app.click(190, 172, false); // "Kein Gedanke" (ovl05_4653 asks before the draw)
             require(app.session().loaded(), "Los jetzt! starts the game");
             check(app.screen() == ClassicScreen::Main, "main menu after the start");

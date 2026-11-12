@@ -4489,6 +4489,7 @@ void Game::advance_day() {
     for (size_t i = 0; i < g_display_flags.size(); i++) g_display_flags[i] = save_.state.at(0xA51C + i);  // DS:021D switches
     if (std::getenv("EM_DEBUG_MSGS")) { std::fprintf(stderr, "msgs day %d:", day_); for (int i = 0; i < 4; i++) std::fprintf(stderr, " %02x/%02x", save_.state.at(0xAEB7 + size_t(i) * 0x71), save_.state.at(0xAEB8 + size_t(i) * 0x71)); std::fprintf(stderr, "\n"); }
     if (std::getenv("EM_DEBUG_MSGSTEP")) std::fprintf(stderr, "msgstep day %d pending %d\n", day_, int(message_step_pending_));
+    if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: step start day %d at %zu\n", day_, (g_game_log ? g_game_log->size() : 0) + (g_borland_log ? g_borland_log->size() : 0));
     // leaving the club calendar's last day (13.04., "Saisonende") clears the season flags of a manager without WM appointment
     // (DOS sub_6153F asm 171379, Amiga 17802; REAL-CODE period 57: on 13.04. the licence mark 0x04 of the last season end is still set)
     // (the loop clears +0xF3 of every manager 0..N-1 and sets 0x40 again for the appointed one, DOS LAB_6af8_3509)
