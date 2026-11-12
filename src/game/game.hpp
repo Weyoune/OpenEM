@@ -414,6 +414,8 @@ private:
     void book_national_match(int own_goals, const MatchStats& stats, int side, int shootout_goals = 0, bool credit_goals = true);
     // one chance of the national team in a live WM minute (ovl14_2349 for manager 5): scorer and assist picks, goal booking
     void credit_national_chance(bool penalty, bool goal, const HokTeam* on_ice, const std::vector<HokSquadPlayer>* working);
+    // the per-minute injury check of the national coach's match (injury_minute for squad block 5, ovr030:23B6)
+    void national_injury_minute(int load, const HokTeam* on_ice, std::vector<HokSquadPlayer>& national);
     void book_match_condition(const MatchStats& stats, int side, int manager);
     bool book_forfeit(const MatchStats& stats, int manager = 0);
     void book_club_match(int own_goals, int goals_against, int competition, bool league_statistics, int shootout_goals = 0,

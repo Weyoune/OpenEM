@@ -3113,6 +3113,35 @@ void Game::credit_national_chance(bool penalty, bool goal, const HokTeam* on_ice
     if (credit.assist >= 0) increment16(size_t(save_.players[size_t(squad[size_t(credit.assist)].player)].raw - save_.state.data()) + 0x1F);
 }
 
+void Game::national_injury_minute(int load, const HokTeam* on_ice, std::vector<HokSquadPlayer>& national) {
+    int with_role = 0;
+    for (const HokSquadPlayer& sp : national) with_role += sp.player >= 0 && sp.role != 0;
+    if (with_role < 5) return;
+    if (!match_injury_minute(load, finance_.level, brng_)) return;
+    const size_t block = squad_block(5);
+    for (int tries = 0; tries <= 150; tries++) {  // the picks of injury_minute (ovr030:23B6) on squad block 5
+        const size_t slot = size_t(brng_.range(0, int(national.size()) - 1));
+        const HokSquadPlayer& sp = national[slot];
+        uint8_t* r = save_.state.data() + block + slot * kSquadRecord;
+        if (sp.player < 0 || sp.role == 0 || sp.line == 0 || (r[0x09] & 2)) continue;
+        if (const auto* live = g_minute_lineup; live && slot < live->size() && (*live)[slot].role == 0) continue;
+        if (on_ice && (sp.line & 0x7F) != on_ice->current_line[(sp.line >> 7) & 1] + 1) continue;
+        const bool weaker = r[0x11] < r[0x10];
+        if (brng_.range(0, 10) <= (weaker ? 3 : 7)) continue;
+        if (std::min(2, save_.players[size_t(sp.player)].position / 25) == 0 && brng_.range(0, 2) != 0) continue;
+        HokPlayer& pl = save_.players[size_t(sp.player)];  // injure(slot, 1, 5) without a manager budget
+        if (pl.form > 20) pl.form -= brng_.range(10, 15);
+        const Injury in = draw_injury(injuries_, 1, finance_.level, brng_);
+        r[0x0D] = uint8_t(in.weeks);
+        r[0x09] |= 2;
+        r[0x17] = uint8_t(in.type);
+        r[0x0A] = 0;
+        national[slot].role = 0;  // the running match takes the player out of its lineup
+        log_.push_back(pl.name + ": " + injuries_.names[size_t(in.type)] + " (WM)");
+        break;
+    }
+}
+
 void Game::play_wm_day() {
     if (save_.state.at(0x025A) == 2) return;  // native league-only mode has no WM
     if (wm_round_ >= 8) return;
@@ -3150,7 +3179,7 @@ void Game::play_wm_day() {
         save_.state.at(0x0788) = 5;  // DS:A70E (DS:A70D is not saved)
     }
     refresh_national_team();
-    const auto national = national_squad();
+    auto national = national_squad();
     HumanSquad squad{&national, &save_.players};
     for(int kind=0;kind<2;kind++)squad.per_line[kind]=line_counts_[5][size_t(kind)];
     squad.minimum_players = 9;
@@ -3197,7 +3226,7 @@ void Game::play_wm_day() {
         std::vector<HokPairing> draw;
         for (size_t g = 0; g < 2; g++)
             for (size_t pair = 0; pair < 3; pair++) draw.push_back(save_.wm_rounds[g][size_t(r)][pair]);
-        squad.on_minute = [this](int, int load, const HokTeam&) { (void)match_injury_minute(load, finance_.level, brng_); };
+        squad.on_minute = [this, &national](int, int load, const HokTeam& team) { national_injury_minute(load, &team, national); };
         squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
             credit_national_chance(false, goal, &team, &working);
         };
