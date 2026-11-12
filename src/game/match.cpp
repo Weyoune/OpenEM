@@ -517,7 +517,7 @@ void update_tactics_mode(HokTeam& a, HokTeam& b, const HumanSquad* ha, const Hum
     if (!decided) {
         const int pa = ((kinds_a ? strength_from_kinds(a, kinds_a) : playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1])) * 2) & 0xFF;
         const int pb = ((kinds_b ? strength_from_kinds(b, kinds_b) : playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1])) * 2) & 0xFF;
-        if (std::getenv("EM_DEBUG_MODE")) std::fprintf(stderr, "mode min %d pa %d pb %d sk %d/%d score %d:%d lines A %d/%d B %d/%d\n", minute, pa, pb, skaters_a, skaters_b, score_a, score_b, a.current_line[0], a.current_line[1], b.current_line[0], b.current_line[1]);
+        if (std::getenv("EM_DEBUG_MODE")) std::fprintf(stderr, "mode min %d pa %d pb %d (kinds %d/%d, %d/%d; full %d/%d) sk %d/%d score %d:%d lines A %d/%d B %d/%d\n", minute, pa, pb, kinds_a ? kinds_a[0] : -1, kinds_a ? kinds_a[1] : -1, kinds_b ? kinds_b[0] : -1, kinds_b ? kinds_b[1] : -1, playing_strength(a, ha, StrengthMode::Neutral, minute, skaters_a - skaters_b, a.current_line[0], a.current_line[1]), playing_strength(b, hb, StrengthMode::Neutral, minute, skaters_b - skaters_a, b.current_line[0], b.current_line[1]), skaters_a, skaters_b, score_a, score_b, a.current_line[0], a.current_line[1], b.current_line[0], b.current_line[1]);
         if (pa < pb && pa + 20 < pb) { mode_a = 3; mode_b = 2; }
         if (pb < pa && pb + 15 < pa) { mode_a = 2; mode_b = 3; }
     }
