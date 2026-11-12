@@ -150,6 +150,8 @@ void Game::wm_only_prepare() {
                 for (auto& kind : team.energy)
                     for (auto& e : kind) e = 90;
         day_ = first - 1;  // the counter and cursor only run on: no matches, finances or training on the way
+        // the month routines on the way leave the month counter DS:A8A0 at the WM month (0-based; REAL-CODE WM-only game: 3)
+        if (!std::getenv("EM_OLD_WMMONTH")) save_.state.at(0xB965) = uint8_t((date_of_season_day(day_, save_.year).month + 11) % 12);
         message_step_pending_ = true;
     }
     const int nation = save_.state.at(kNation);

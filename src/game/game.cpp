@@ -3058,7 +3058,10 @@ void Game::book_match_condition(const MatchStats& stats, int side, int manager) 
 void Game::book_national_match(int own_goals, const MatchStats& stats, int side, int shootout_goals, bool credit_goals) {
     interactive_played_ = true;
     if (book_forfeit(stats, 5)) return;
+    const uint8_t load_before = save_.state.at(manager_block(5) + 0xF0);
     book_match_condition(stats, side, 5);
+    // the live WM round does not store the coach's match load in manager block 5 (REAL-CODE WM-only game: +0xF0 stays 0)
+    if (!credit_goals && !std::getenv("EM_OLD_WMLOAD")) save_.state.at(manager_block(5) + 0xF0) = load_before;
     book_special_teams(stats, side, 5);
     auto squad = national_squad();
     constexpr size_t block = kSquad + 5 * 0x618;
@@ -3152,12 +3155,13 @@ void Game::play_wm_day() {
     // fitness stands one load step higher than the formula of the final load)
     if (!std::getenv("EM_OLD_WMREST"))
         for (int m = 0; m < managers_; m++) {
-            if (m == national_coach_) continue;
+            if (m == national_coach_ && !(wm_only() && !std::getenv("EM_OLD_WMONLYREST"))) continue;  // "Nur WM": the club squad rests too
             auto& squad = save_.squad_of(m);
             for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
                 const size_t at = squad_block(m) + slot * kSquadRecord;
                 if (save_.state.at(at + 0x0F) == 0) continue;
-                const uint8_t f = rested_fitness(save_.state.at(at + 0x13));
+                // "Nur WM": the coach's club squad stands at 90 whatever its load (REAL-CODE WM-only game, day 222)
+                const uint8_t f = m == national_coach_ ? uint8_t(90) : rested_fitness(save_.state.at(at + 0x13));
                 save_.state.at(at + 0x1B) = f;
                 squad[slot].fitness = f;
             }
@@ -3257,6 +3261,17 @@ void Game::play_wm_day() {
         std::vector<HokPairing> draw;
         for (size_t g = 0; g < 2; g++)
             for (size_t pair = 0; pair < 3; pair++) draw.push_back(save_.wm_rounds[g][size_t(r)][pair]);
+        if (!std::getenv("EM_OLD_WMLIVEGRID")) {
+            // the round's pairs stand in the team grid DS:5D5B (state 0x8EB1, 12 bytes) and DS:A88D lists the home team of the
+            // coach's game, then FF (REAL-CODE WM-only game: 34 39 36 38 35 37 3A 3F 3C 3E 3B 3D and 34 FF FF FF)
+            for (size_t i = 0; i < draw.size(); i++) {
+                save_.state.at(0x8EB1 + 2 * i) = uint8_t(draw[i].home);
+                save_.state.at(0x8EB1 + 2 * i + 1) = uint8_t(draw[i].away);
+            }
+            for (size_t i = 0; i < 4; i++) save_.state.at(0x784 + i) = 0xFF;
+            for (const HokPairing& p : draw)
+                if (p.home == nation || p.away == nation) { save_.state.at(0x784) = uint8_t(p.home); break; }
+        }
         squad.on_minute = [this, &national](int, int load, const HokTeam& team) { national_injury_minute(load, &team, national); };
         squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
             credit_national_chance(false, goal, &team, &working);
@@ -3272,6 +3287,14 @@ void Game::play_wm_day() {
         squad.on_chance = nullptr;
         squad.on_shot = nullptr;
         for (const auto& t : ties) live_results.push_back(t.result);
+        // like a live cup day: every team outside today's games is rested to line energy 90 (REAL-CODE WM-only game: the 138
+        // clubs and European teams after the first WM days)
+        if (!std::getenv("EM_OLD_WMLIVEREST"))
+            for (int team = 0; team < int(save_.teams.size()); team++) {
+                bool in_round = false;
+                for (const HokPairing& p : draw) in_round |= p.home == team || p.away == team;
+                if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);
+            }
     }
     if (r < 5) {
         for (size_t g = 0; g < 2; g++)
@@ -3283,6 +3306,43 @@ void Game::play_wm_day() {
                     res = live_results[g * 3 + pair];
                     // the table booking of the live round moves the morale of all six games too (REAL-CODE WM-only game)
                     if (!std::getenv("EM_OLD_WMLIVEMORALE")) quick_results.push_back({p.home, p.away, res.home - res.away});
+                    if (!std::getenv("EM_OLD_WMLIVESERIES")) {  // series, records and the head-to-head table, as on the quick path
+                        update_series(p.home, 0, res.home, res.away);
+                        update_series(p.away, 1, res.away, res.home);
+                        update_records(p.home, p.away, res.home, res.away);
+                        book_head_to_head(save_.state, p.home, p.away, res.home, res.away, save_.state.at(0x068C));
+                        // the table rows of both nations (64-row table, rows 52..63) take the game like a league game: form,
+                        // goals, games, wins, losses and the points before the row (REAL-CODE WM-only game, 22.04.)
+                        auto load_row = [&](int team) {
+                            HokTableRow row;
+                            const uint8_t* r = save_.state.data() + 0x3BAC + size_t(team) * 0x50;
+                            row.form.assign(reinterpret_cast<const char*>(r), 8);
+                            for (int s = 0; s < 2; s++) {
+                                row.goals_for[s] = r[0x12 + s];
+                                row.goals_against[s] = r[0x16 + s];
+                                row.games[s] = r[0x1A + s];
+                                row.wins[s] = r[0x22 + s];
+                                row.losses[s] = r[0x26 + s];
+                            }
+                            return row;
+                        };
+                        auto store_row = [&](int team, const HokTableRow& row) {
+                            uint8_t* r = save_.state.data() + 0x3BAC + size_t(team) * 0x50;
+                            for (size_t i = 0; i < 8 && i < row.form.size(); i++) r[i] = uint8_t(row.form[i]);
+                            for (int s = 0; s < 2; s++) {
+                                r[0x12 + s] = uint8_t(row.goals_for[s]);
+                                r[0x16 + s] = uint8_t(row.goals_against[s]);
+                                r[0x1A + s] = uint8_t(row.games[s]);
+                                r[0x22 + s] = uint8_t(row.wins[s]);
+                                r[0x26 + s] = uint8_t(row.losses[s]);
+                                *(r - 4 + s) = uint8_t(2 * row.wins[s] + row.draws(s));
+                            }
+                        };
+                        HokTableRow home_row = load_row(p.home), away_row = load_row(p.away);
+                        book_result_rows(&home_row, &away_row, res);
+                        store_row(p.home, home_row);
+                        store_row(p.away, away_row);
+                    }
                     if (p.home == nation || p.away == nation) stats = live_stats;
                 } else if (quick) {  // no human nation: ovl06_161d quick path for every pair (REAL-CODE period 30)
                     HokTeam h, a;
@@ -4676,7 +4736,8 @@ void Game::advance_day() {
     // 162c:146c runs in the event block of the day loop (ovr038:2F1A): days without a calendar event skip it (REAL-CODE period 49)
     // every manager 0..N-1 in index order (the loop of ovr038:2EDD..2F2A; 146c draws nothing)
     if (std::getenv("EM_OLD_DAYREFRESH") || (calendar_.event(day_ + 1) != 0 && calendar_.event(day_ + 1) != 0xFF))
-        for (int m = 0; m < managers_; m++) refresh_human_team(m);  // 162c:146c (not in the WM branch without a national coach, see there)
+        for (int m = 0; m < managers_; m++)  // 162c:146c (not in the WM branch without a national coach, see there)
+            if (!(wm_only() && !std::getenv("EM_OLD_WMONLYREFRESH"))) refresh_human_team(m);  // "Nur WM": the clubs keep their values
     // Native6AF8:313E..3158 preserves the menu's latest selection for
     // the next menu, then disables automatic selection during this match.
     // It runs once per play step, when the step leaves the menu (REAL-CODE period 29, write watch on DS:0375/0376: one copy
@@ -4735,7 +4796,8 @@ g_draw_scope = "match-injuries";
     // no-match flag (REAL-CODE period 30).
     // The branch calls 146e:0c89 once with DS:A70E = 5 (not in a manager loop); which squads it reaches with N > 1 is open,
     // the call stays with manager 0 (docs/MEHRSPIELER_PLAN.md step 7).
-    if (world_phase && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
+    // WM-only mode: no club days, so no club processing on the free WM dates either (REAL-CODE WM-only game, 20.04.)
+    if (world_phase && !(wm_only() && !std::getenv("EM_OLD_WMONLYCLUB")) && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
         if (national_coach_ >= 0) weekly_team_drift();
         // today's healing was already prepared; on day % 7 == 0 the routine heals the week once more (REAL-CODE Köln period 146:
         // an injury of 3 weeks on 13.04. is over by 28.04., the training-injury roll of 28.04. includes the player)
@@ -4787,7 +4849,8 @@ g_draw_scope = "weekly-injuries-offers-training";
                                               (ne == kEventPlayoff && !human_in_next_playoff()) || (ne == kEventWorldChampionship && wm_round_ > 0 && national_coach_ < 0)));
         skip_refresh_once_ = (empty_cup_day_ && !std::getenv("EM_OLD_EMPTYCUP")) || idle_cup_day_[size_t(m)] ||
                              (calendar_.event(day_) == kEventCup && !menu_next && !std::getenv("EM_OLD_CUPREFRESH")) ||
-                             (!menu_next && !std::getenv("EM_OLD_STEPREFRESH"));  // inside a step the evening does not refresh the club record either (Köln 277)
+                             (!menu_next && !std::getenv("EM_OLD_STEPREFRESH")) ||
+                             (wm_only() && !std::getenv("EM_OLD_WMONLYREFRESH"));  // Köln 277: not inside a step; "Nur WM": never
         prepare_human_lineup(true, m);
     }
     empty_cup_day_ = false;

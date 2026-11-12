@@ -654,6 +654,10 @@ if(TARGET em_realcode)
     # jump to the WM appointment (Game::wm_only_prepare) against the original's state on 14.04.1994; DS:0256 comes from the menu
     add_test(NAME realcode_wm_only_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_orig_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_only_start PROPERTIES ENVIRONMENT "GENSTART=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # the same game over six WM days (live national round, gate, head-to-head, national table rows) against the original's
+    # state at the step start of 19.04.1994 (REAL-CODE 12.11.2026; national squad picked automatically)
+    add_test(NAME realcode_wm_only_days COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_day222_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_only_days PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;GSTATE=783127;FORCEDAYS=6;DAYDIFF_IGNORE=6ae,6af")
     # club-mode new game: the generator world plus September 10 up to the first menu (Game::enter_first_menu) against the
     # original's state in the menu "Vor dem ersten Spieltag" (share market, finances, image, menu pass)
     add_test(NAME realcode_new_game_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin" 3934523008)

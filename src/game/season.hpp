@@ -34,6 +34,8 @@ League league_from_save(const HokFile& save, int league);
 
 // Books one result for the slots home / away (0..11).
 void book_result(League& league, int home, int away, MatchResult result);
+// the same booking on two table rows (form letters lower case at home, goals, games, wins, losses); null rows are skipped
+void book_result_rows(HokTableRow* home, HokTableRow* away, MatchResult result);
 
 // Recomputes HokTableRow::position (0 = leader).
 void sort_league(League& league);
