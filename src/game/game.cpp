@@ -589,16 +589,26 @@ void Game::play_league_day() {
     // sub_60D60 per pair in pairing order (leagues 0..2), its manager loop inside (see manager_day): a forfeiting manager
     // (+0xF0 = 100, sub_60CC0) gets no gate and no bookkeeping, an away game no gate and no stadium flag.
     bool any_plays = false;
+    // DS:A88D (4 bytes): the home teams of the day's manager games in pairing order, one entry per game (a game of two
+    // managers once), then FF (REAL-CODE two managers 12.11.2026: [04 FF], [05 07], [04 03])
+    size_t pair_list = 0;
+    const bool old_pair_list = std::getenv("EM_OLD_PAIRLIST") != nullptr;
     for (size_t d = 0; d < league_days.size(); d++) {
         const auto pre_pairs = round_robin_pairings(schedule_.teams12, league_days[d].matchday);
         for (const auto& p : pre_pairs) {
             const int hi = league_days[d].league->first_team + p.home, ai = league_days[d].league->first_team + p.away;
+            bool listed = false;
             for (int m = 0; m < managers_; m++) {
                 ManagerState& mg = mgr_[size_t(m)];
                 if (hi != mg.team && ai != mg.team) continue;
                 if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;  // forfeit: no gate
                 any_plays = true;
-                save_.state.at(0x784) = uint8_t(hi);  // DS:A88D: the home team of the manager game (REAL-CODE)
+                if (old_pair_list) save_.state.at(0x784) = uint8_t(hi);  // DS:A88D: the home team of the manager game (REAL-CODE)
+                else if (!listed && pair_list < 4) {
+                    save_.state.at(0x784 + pair_list++) = uint8_t(hi);
+                    if (pair_list < 4) save_.state.at(0x784 + pair_list) = 0xFF;
+                    listed = true;
+                }
                 bool gate_booked = false;
                 if (hi == mg.team) {
                     g_draw_scope = "gate";
