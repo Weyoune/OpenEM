@@ -248,6 +248,12 @@ MatchResult goal_points(const HokTeam& h, const HokTeam& a, int minute, bool who
             std::fprintf(stderr, "squad %2zu: %3d %3d %3d %3d %3d %3d %3d %3d %3d\n", s, p.home_line, p.role, p.player + 1, p.skill_a, p.skill_b, p.form, p.line, p.nibbles, p.fitness);
         }
     int d = sh / 3 - sa / 3;
+    if (const char* dt = std::getenv("EM_DEBUG_TEAMS"); dt && h.name.find(dt) != std::string::npos)  // the records of a named pair
+        for (const HokTeam* t : {&h, &a})
+            std::fprintf(stderr, "teams min %d %s: skill1 %d/%d skill2 %d/%d form %d/%d energy %d %d %d %d / %d %d %d %d lines %d/%d effort %d flags %02x skaters %d bonus %d\n",
+                         minute, t->name.c_str(), t->skill1[0], t->skill1[1], t->skill2[0], t->skill2[1], t->form[0], t->form[1],
+                         t->energy[0][0], t->energy[0][1], t->energy[0][2], t->energy[0][3], t->energy[1][0], t->energy[1][1],
+                         t->energy[1][2], t->energy[1][3], t->current_line[0], t->current_line[1], t->effort_current, t->flags, t->skaters, t->bonus);
     if (std::getenv("EM_DEBUG_D"))
         std::fprintf(stderr, "d B%zu min %d %s-%s sh %d sa %d d %d lines %d/%d %d/%d\n", g_borland_log ? g_borland_log->size() : size_t(0), minute, h.name.c_str(), a.name.c_str(), sh, sa, d,
                      h.current_line[0], h.current_line[1], a.current_line[0], a.current_line[1]);
@@ -1217,8 +1223,16 @@ HokTeam& MatchRun::away_mut() { return p_->a; }
 PenaltyBox& MatchRun::home_box() { return p_->hbox; }
 PenaltyBox& MatchRun::away_box() { return p_->away_penalties(); }
 int MatchRun::take_phantom_release() {
-    const int h = p_->hp ? p_->hbox.take_phantom_release() : -1;
-    const int a = p_->ap ? p_->abox.take_phantom_release() : -1;
+    // a manager m >= 1 writes into the previous manager's squad block, not into the pair table (REAL-CODE two managers)
+    const auto route = [](const HumanSquad* human, int role) {
+        if (role >= 0 && human && human->on_phantom && !std::getenv("EM_OLD_PHANTOMMANAGER")) {
+            human->on_phantom(role);
+            return -1;
+        }
+        return role;
+    };
+    const int h = p_->hp ? route(p_->hp, p_->hbox.take_phantom_release()) : -1;
+    const int a = p_->ap ? route(p_->ap, p_->abox.take_phantom_release()) : -1;
     return h >= 0 ? h : a;
 }
 void MatchRun::drop_human(int side) { if (side == 0 || side == 1) p_->minute_check_off[side] = true; }

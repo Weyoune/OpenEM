@@ -104,6 +104,9 @@ struct HumanSquad {
     std::function<void(bool goal, const HokTeam& scorer)> on_opponent_chance;  // the opponent's chance in the same match (ovl14_2349 looks up a manager of the scoring club)
     std::function<void(bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working)> on_shot;  // one shoot-out shot of this manager team (ovl14_2349 with param_3 = 1)
     std::function<void(int minute, int load, const HokTeam& team)> on_minute;  // per-minute injury check of the manager's match (ovr030:3706)
+    // a penalty of this manager without a bound player ended (ovr030:0151 writes through record -1 of his squad block): for
+    // manager 0 that is the pair table (season.cpp corrupt_pairs); for manager m >= 1 the record 29 of manager m - 1, set here
+    std::function<void(int role)> on_phantom;
     std::function<void(int conceded)> on_minute_end;  // after the chances of a minute (ovr030:2A47): goalie minutes and goals against
 };
 

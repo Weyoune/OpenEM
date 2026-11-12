@@ -663,10 +663,11 @@ if(TARGET em_realcode)
     # stands in the second manager's menu
     add_test(NAME realcode_two_managers COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_start.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_day3.bin" 3215422093)
     set_tests_properties(realcode_two_managers PROPERTIES ENVIRONMENT "MENUPASS=1;GSTATE=783127;FORCEDAYS=3;DAYDIFF_IGNORE=788,789")
-    # the same game seven days on (to 16.09., two league days, the list DS:A88D of both manager games), state at the start of
-    # day 8 (STATEAT in the original's run)
-    add_test(NAME realcode_two_managers_day7 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_start.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_day7.bin" 3215422093)
-    set_tests_properties(realcode_two_managers_day7 PROPERTIES ENVIRONMENT "MENUPASS=1;GSTATE=783127;FORCEDAYS=7;DAYDIFF_IGNORE=788,789")
+    # the same game ten days on (to 19.09., three league days, the list DS:A88D of both manager games, a penalty of manager 1
+    # without bound player written into record 29 of manager 0 instead of the pair table), state at the start of
+    # day 11 (STATEAT in the original's run)
+    add_test(NAME realcode_two_managers_day10 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_start.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/twomanagers_day10.bin" 3215422093)
+    set_tests_properties(realcode_two_managers_day10 PROPERTIES ENVIRONMENT "MENUPASS=1;GSTATE=783127;FORCEDAYS=10;DAYDIFF_IGNORE=788,789")
     # fourth season change (13.04. -> 10.09.1996): the same head-to-head deviation as period 58 (docs/DEVIATIONS.md)
     add_test(NAME realcode_daydiff_period92 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/mid91.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff/day92.bin" 84)
     set_tests_properties(realcode_daydiff_period92 PROPERTIES ENVIRONMENT "GSTATE=84;FORCEDAYS=16;DAYDIFF_IGNORE=919c,91aa,91bc")

@@ -1919,6 +1919,15 @@ void Game::prepare_human_lineup(bool restore_saved_mode, int m) {
     skip_refresh_once_ = false;
     mgr_[m].squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, mgr_[m].team);
     configure_human_tactics(mgr_[m].squad, save_, m);
+    // ovr030:0151 for a manager m >= 1: record -1 of his squad block is record 29 of manager m - 1 (flags bit 0 cleared,
+    // role, +0x0D = 0, the same three bytes that land in the pair table for manager 0; REAL-CODE two managers 12.11.2026)
+    if (m > 0)
+        mgr_[m].squad.on_phantom = [this, m](int role) {
+            const size_t r = squad_block(m - 1) + 29 * kSquadRecord;
+            save_.state.at(r + 0x09) = uint8_t(save_.state.at(r + 0x09) & ~1);
+            save_.state.at(r + 0x0A) = uint8_t(role);
+            save_.state.at(r + 0x0D) = 0;
+        };
 }
 
 // 162c:146c (called by the day loop): the human club's team record follows its squad. Per kind
