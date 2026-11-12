@@ -1189,7 +1189,7 @@ void Game::heal_squad(bool weekly, int m) {
 // contract wish) of the original daily manager routine, with the messages of these events (src/game/messages.cpp;
 // player byte +0x1E holds the entry index). Phase A walks the shared transfer list (block 4), not manager m's squad: the
 // original runs it only in the call of manager 0 (146e:0caf: DS:A70E != 0 jumps past it, docs/MEHRSPIELER_PLAN.md step 7).
-void Game::squad_injuries(bool weekly, bool no_match_today, int m) {
+void Game::squad_injuries(bool weekly, bool no_match_today, int m, int date_offset) {
     uint8_t* st = save_.state.data();
     // phase A: the entries of the transfer list: exhaustion decay, ownership toggle, interest expiry
     for (int slot = 0; m == 0 && slot < kTransferListSlots; slot++) {
@@ -1205,8 +1205,8 @@ void Game::squad_injuries(bool weekly, bool no_match_today, int m) {
     }
     // heal_squad(weekly) runs after the loop below
     // the messages of this loop (src/game/messages.cpp), each with its date draw rand(0, 3)
-    const GameDate today = date_of_season_day(day_ + 1, save_.year);
-    const MessageDate message_date{today.day, today.month, today.year, day_ + 1};
+    const GameDate today = date_of_season_day(day_ + date_offset, save_.year);
+    const MessageDate message_date{today.day, today.month, today.year, day_ + date_offset};
     auto native_name = [](const uint8_t* pl) { std::string t; for (size_t k = 0; k < 19 && pl[k]; k++) t += char(pl[k]); return t; };
     for (size_t i = 0; i < save_.squad_of(m).size() && i < size_t(kHokSquadSlots); i++) {
         if (save_.squad_of(m)[i].player < 0) continue;
@@ -2115,6 +2115,14 @@ int Game::current_club_image(int m) {
         if (p >= 0) image_squad.push_back(c);
     }
     in.stadium = stadium_score(sponsor_tables_, mgr_[m].budget.stadium, mgr_[m].budget.places);
+    if (std::getenv("EM_DEBUG_IMAGE")) {
+        std::fprintf(stderr, "image day %d md %d form", day_, in.matchday);
+        for (int r : in.recent_results) std::fprintf(stderr, " %d", r);
+        for (const ContractPlayer& c : image_squad)
+            std::fprintf(stderr, " | %d %d e%d g%d,%d,%d gl%d,%d,%d b%d,%d a%d p%d f%02x", c.skill1, c.skill2, c.experience, c.games[0], c.games[1], c.games[2],
+                         c.league_goals, c.cup_goals, c.other_goals, c.bonus_a, c.bonus_b, c.age, c.position, c.flags);
+        std::fprintf(stderr, "\n");
+    }
     return club_image(in, image_squad, contracts_, brng_);
 }
 
@@ -3455,10 +3463,17 @@ void Game::play_wm_day() {
                                 t.home == nation ? 0 : 1, t.result.shootout_goals[t.home == nation ? 0 : 1], !live_knockout);
         }
         // the live knock-out games enter the head-to-head table as well (REAL-CODE WM-only game, quarter-final 23.04.)
-        if (live_knockout && !std::getenv("EM_OLD_WMKOH2H"))
+        if ((live_knockout || (quick && !std::getenv("EM_OLD_WMQUICKH2H"))) && !std::getenv("EM_OLD_WMKOH2H"))  // quick: REAL-CODE Köln period 249
             book_head_to_head(save_.state, t.home, t.away, t.result.home, t.result.away, save_.state.at(0x068C));
-        const int loser = t.winner() == t.home ? t.away : t.home;
-        wm_slots_[base + 2 * k] = t.winner();
+        // quick path: a level score after the grid shoot-out goes to the home team (the +30 mark sits on its score)
+        // (REAL-CODE Köln period 249: Norway - Germany 3:3, Norway plays for 5th place)
+        const int winner = quick && t.result.decision_marker > 0 && t.result.home == t.result.away && !std::getenv("EM_OLD_WMGRIDWIN") ? t.home : t.winner();
+        if (std::getenv("EM_DEBUG_WMKO"))
+            std::fprintf(stderr, "wm ko round %d pair %zu: %s - %s %d:%d marker %d -> %s\n", r, k, save_.teams[size_t(t.home)].name.c_str(),
+                         save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away, t.result.decision_marker,
+                         save_.teams[size_t(winner)].name.c_str());
+        const int loser = winner == t.home ? t.away : t.home;
+        wm_slots_[base + 2 * k] = winner;
         wm_slots_[base + 2 * k + 1] = loser;
         // Native knock-out slots are winner first; the scores follow that same order.
         const size_t o = kWorldResults + base + 2 * k;
@@ -4872,7 +4887,8 @@ g_draw_scope = "match-injuries";
         if (national_coach_ >= 0) weekly_team_drift();
         // today's healing was already prepared; on day % 7 == 0 the routine heals the week once more (REAL-CODE Köln period 146:
         // an injury of 3 weeks on 13.04. is over by 28.04., the training-injury roll of 28.04. includes the player)
-        squad_injuries(day_ % 7 == 0 && !std::getenv("EM_OLD_WMHEAL"), event == 0);
+        // the WM branch runs on the current day: its messages carry that date (REAL-CODE Köln period 249: 18.04., not 19.04.)
+        squad_injuries(day_ % 7 == 0 && !std::getenv("EM_OLD_WMHEAL"), event == 0, 0, std::getenv("EM_OLD_WMMSGDATE") ? 1 : 0);
         make_offers();
         train_squad();
     }

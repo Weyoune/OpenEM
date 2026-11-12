@@ -440,7 +440,7 @@ private:
     void manager_finance_day(int m, const GameDate& finance_date, int finance_month_days, bool world_phase);
     void menu_pass(bool menu);  // transfer-list roll and (with a menu) the daily factor of every manager
     void injure(size_t slot, int kind, int m = 0);
-    void squad_injuries(bool weekly, bool no_match_today, int m = 0);
+    void squad_injuries(bool weekly, bool no_match_today, int m = 0, int date_offset = 1);  // the message date: day_ + date_offset
     void heal_squad(bool weekly, int m = 0);
     void reload_squads();  // the decoded squads of managers 0..N-1 from their native rows
     void refresh_budget_roster(int m = 0);
