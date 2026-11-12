@@ -168,6 +168,8 @@ void Game::wm_only_prepare() {
     save_.state.at(kAppointment) = 0;
     save_.state.at(kFriendlyCount) = 0;  // ovl05_194b(0) of the new season (ovr029:198E)
     save_.state.at(0x0788) = save_.state.at(0x0789) = 5;
+    // the menu before the WM day restores the coach's line-up mode (DS:037F <- DS:0380; REAL-CODE WM-only game, 1995)
+    if (!std::getenv("EM_OLD_WMMODE")) save_.state.at(0x078A + 10) = save_.state.at(0x078B + 10);
     save_.state.at(0xA528) = 1;  // DS:0229: native WM match display
     refresh_national_team();
     log_.push_back("WM-only mode: national team manager of " + save_.teams[size_t(nation)].name);
