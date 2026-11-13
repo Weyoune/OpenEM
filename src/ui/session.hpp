@@ -82,6 +82,8 @@ public:
     int active_manager() const { return active_manager_; }
     void save(const std::filesystem::path& file);  // new .oem or .hok only, never overwrite
     ActionResult apply(const std::function<ActionResult(Game&)>& action);
+    // like apply, with the match observer on the staged game (a friendly of the national coach shows its minutes)
+    ActionResult apply_observed(const std::function<ActionResult(Game&)>& action);
     bool advance_day();  // false means a contract decision is pending; game remains unchanged
     bool next_day_has_match() const;  // checkpoint preview, no state or random-stream changes
     // Observer of the minute loops of the next advance_day (match display); called with the staged game, read-only.

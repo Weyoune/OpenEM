@@ -3,11 +3,13 @@
 #include "game/wm_mode.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "game/game.hpp"
 #include "game/manager_layout.hpp"
 #include "game/national_team.hpp"
+#include "game/result_books.hpp"
 #include "game/scorers.hpp"
 
 namespace em {
@@ -185,6 +187,16 @@ bool Game::enter_friendlies() {
     return true;
 }
 
+// ovl07_1af6, the line overview of a selected opponent (first click on a flag): for the own nation it runs the automatic
+// line-up ovl09_26dc of the national squad first (REAL-CODE WM-only game, friendly page on 13.04.1994)
+bool Game::preview_friendly() {
+    if (national_coach_ < 0 || national_coach_ != active_manager_ || wm_round_ != 0) return false;
+    if (std::getenv("EM_OLD_FRIENDLYLINEUP")) return false;
+    auto_lineup(save_, 5);
+    if (std::getenv("EM_OLD_FRIENDLYREFRESH")) refresh_national_team();
+    return true;
+}
+
 Game::FriendlyOutcome Game::play_friendly(int opponent, bool home) {
     FriendlyOutcome out;
     const int nation = save_.state.at(kNation);
@@ -203,11 +215,13 @@ Game::FriendlyOutcome Game::play_friendly(int opponent, bool home) {
     }
     put32(save_.state, kNationalManager + 0x18F, account - price);
     const int q = int((price / 2000 + brng_.range(0, 50)) / 50);
-    // ovl05_0e35: one match with the national squad (competition 0x0D). OpenEM plays it with the WM match model;
-    // no Länderspiel, table or history is booked.
-    refresh_national_team();
-    const auto national = national_squad();
+    // ovl05_0e35: the pair list DS:034B holds this one game, competition DS:76B2 = 0x0D, and ovl06_161d(0, 8, 0, 0, 3)
+    // plays it like a WM group round: gate of the nation's home game, manager pass of manager 5, the minute loop with
+    // the coach's checks (REAL-CODE WM-only game, friendly against Russia on 13.04.1994)
+    if (std::getenv("EM_OLD_FRIENDLYREFRESH")) refresh_national_team();  // the record keeps its values (REAL-CODE)
+    auto national = national_squad();
     HumanSquad squad{&national, &save_.players};
+    squad.national = !std::getenv("EM_OLD_FRIENDLY");
     for (int kind = 0; kind < 2; kind++) squad.per_line[kind] = line_counts_[5][size_t(kind)];
     squad.minimum_players = 9;
     squad.level = finance_.level;
@@ -217,9 +231,36 @@ Game::FriendlyOutcome Game::play_friendly(int opponent, bool home) {
     configure_human_tactics(squad, save_, 5);
     squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, nation);
     const int h = home ? nation : opponent, a = home ? opponent : nation;
-    MatchStats stats;
-    const MatchResult r = league_match(save_.teams[size_t(h)], save_.teams[size_t(a)], rng_, 0,
-                                       h == nation ? &squad : nullptr, a == nation ? &squad : nullptr, &stats);
+    MatchResult r;
+    if (std::getenv("EM_OLD_FRIENDLY")) {
+        MatchStats stats;
+        r = league_match(save_.teams[size_t(h)], save_.teams[size_t(a)], rng_, 0, h == nation ? &squad : nullptr,
+                         a == nation ? &squad : nullptr, &stats);
+    } else {
+        // the match day of ovl06_161d books like a WM day: rest of the club squads, caps of all nominees, and after the game
+        // the coach's match bookings (appearances, special teams); no table, series or head-to-head booking
+        const bool book = !std::getenv("EM_OLD_FRIENDLYBOOK");
+        if (book) {
+            rest_for_national_match();
+            count_national_caps(national);
+        }
+        MatchStats live_stats;
+        HokPairing pair;
+        pair.home = h;
+        pair.away = a;
+        const auto ties = national_live_round({pair}, false, squad, national, live_stats, std::getenv("EM_OLD_FRIENDLYLEVEL") ? 1 : 0);
+        if (!ties.empty()) r = ties.front().result;
+        if (book) {
+            book_national_match(home ? r.home : r.away, live_stats, home ? 0 : 1, 0, false);
+            // the result bytes DS:029B of the pair list land in the result slot 0 of the WM block (DS:5CAB), and ovl13_2f93
+            // books the game into the head-to-head table from the nation's view
+            save_.state.at(0x8F60) = uint8_t(r.home);
+            save_.state.at(0x8F61) = uint8_t(r.away);
+            book_head_to_head(save_.state, h, a, r.home, r.away, nation);
+            // back on the page, ovr031:2150 sets the exhaustion of all nominees to 70 again
+            enter_friendlies();
+        }
+    }
     const int own = home ? r.home : r.away, other = home ? r.away : r.home;
     out.bonus = friendly_bonus(int(int8_t(uint8_t(own))) - int(int8_t(uint8_t(other))), q, !home, brng_);
     apply_friendly_bonus(save_, out.bonus, q);
@@ -229,7 +270,7 @@ Game::FriendlyOutcome Game::play_friendly(int opponent, bool home) {
     save_.state.at(kFriendlyHomeGoals + n) = uint8_t(r.home);
     save_.state.at(kFriendlyAwayGoals + n) = uint8_t(r.away);
     save_.state.at(kFriendlyCount)++;
-    refresh_national_team();
+    if (std::getenv("EM_OLD_FRIENDLYREFRESH")) refresh_national_team();
     out.played = true;
     out.home = h;
     out.away = a;
@@ -254,6 +295,7 @@ std::array<std::array<int, 3>, 2> Game::line_overview(int team) const {
         for (int line = 0; line < 3; line++) {
             const LineValues v = own ? line_strength(t, squad, line, kind, false, 0) : line_strength(t, line, kind, false, 0);
             out[size_t(kind)][size_t(line)] = (v.skill1 + v.skill2) / 2;
+            if (std::getenv("EM_DEBUG_OVERVIEW")) std::fprintf(stderr, "overview %d kind %d line %d: %d %d %d\n", team, kind, line, v.skill1, v.skill2, v.form);
         }
     return out;
 }

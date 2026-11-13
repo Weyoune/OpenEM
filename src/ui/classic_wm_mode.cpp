@@ -205,7 +205,7 @@ void ClassicApplication::draw_friendlies() {
     // var_D = 2: opponent, price and account in the field; the line overview of both nations below
     const int opponent = kNations + st.selected;
     canvas_.rect(0x18, 0xA0, 0x18 + 0xA4, 0xA0 + 0x18, 1);
-    constexpr const char* labels[3] = {"Gegner", "Kosten", "Konto"};
+    constexpr const char* labels[3] = {"Gegner", "Kosten", "Kontostand"};  // as in the original (REAL-CODE screen of 13.11.2026)
     for (int i = 0; i < 3; i++) {
         canvas_.text(mini, 0x18 + 3, 0xA0 + 7 + 7 * i, labels[i], 7);
         canvas_.text(mini, 0x18 + 0x33, 0xA0 + 7 + 7 * i, ":", 7);
@@ -254,21 +254,34 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
     if (cell < 0) return;
     const HokFile& h = snapshot();
     if (kNations + cell == h.state.at(0x068C)) return;  // ovr031:2433: not against the own nation
-    if (st.selected != cell) { st.selected = cell; return; }  // first click: price and strengths
+    if (st.selected != cell) {  // first click: price and strengths (ovl07_1af6 runs the national auto line-up first)
+        st.selected = cell;
+        action([](Game& g) { return ActionResult{{}, g.preview_friendly()}; });
+        return;
+    }
     const int opponent = kNations + cell;
     const bool home = !st.away;
     Game::FriendlyOutcome outcome;
-    action([&](Game& g) {
-        outcome = g.play_friendly(opponent, home);
-        return ActionResult{{}, outcome.played};
-    });
-    st.selected = -1;
-    if (!outcome.refusal.empty()) { notice(outcome.refusal); return; }
-    if (outcome.played) {
-        const HokFile& after = snapshot();
-        notice("Freundschaftsspiel\n" + team_name(after, outcome.home) + " - " + team_name(after, outcome.away) + "  " +
-               std::to_string(outcome.home_goals) + ":" + std::to_string(outcome.away_goals));
+    // ovl05_0e35 plays the game through ovl06_161d with the minute display of a WM game (ovl06_081d sets up the screen)
+    pending_match_frames_.clear();
+    pending_human_match_ = true;
+    pending_league_day_ = false;
+    pending_event_ = kEventWorldChampionship;
+    try {
+        session_.apply_observed([&](Game& g) {
+            outcome = g.play_friendly(opponent, home);
+            return ActionResult{{}, outcome.played};
+        });
+        invalidate();
+    } catch (const std::exception& e) {
+        notice(e.what());
+        return;
     }
+    if (outcome.played) begin_match_view();
+    pending_match_frames_.clear();
+    st.selected = -1;
+    // the original returns to the page; the score stands in the list on the right (no notice)
+    if (!outcome.refusal.empty()) notice(outcome.refusal);
 }
 
 }  // namespace em::ui

@@ -250,6 +250,22 @@ ActionResult Session::apply(const std::function<ActionResult(Game&)>& action) {
     return result;
 }
 
+ActionResult Session::apply_observed(const std::function<ActionResult(Game&)>& action) {
+    if (contract_question_) throw FormatError("Eine Vertragsentscheidung wartet.");
+    if (live_game_) return apply(action);
+    const Bytes before = game().checkpoint_bytes();
+    auto next = staged_game(before);
+    if (match_observer_) {
+        Game* staged = next.get();
+        next->set_match_observer([this, staged](int minute, const std::vector<LiveMatch>& matches) { match_observer_(*staged, minute, matches); });
+    }
+    ActionResult result = action(*next);
+    next->set_match_observer({});
+    commit(std::move(next), before);
+    if (!result.message.empty()) add_news(result.message);
+    return result;
+}
+
 bool Session::advance_day() {
     if (contract_question_) return false;
     const Bytes before = game().checkpoint_bytes();

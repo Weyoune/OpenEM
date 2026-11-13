@@ -215,6 +215,7 @@ public:
     int friendlies_played() const;                       // DS:D0C1
     // ovl07_1f27: opening the friendlies page (national coach before the WM) sets every nominee's exhaustion to 70.
     bool enter_friendlies();
+    bool preview_friendly();  // first click on a flag: line overview (auto line-up of the national squad)
     struct FriendlyOutcome {
         bool played = false;
         std::string refusal;  // native notice text when the game was refused
@@ -408,6 +409,10 @@ private:
     void play_playoff_day(bool setup_only = false);  // setup_only: the first round set-up of the phase, run at the step end before it
     void store_playoff_state(int stage, int completed_days);
     void play_wm_day();
+    void rest_for_national_match();
+    void count_national_caps(const std::vector<HokSquadPlayer>& national);
+    std::vector<Tie> national_live_round(const std::vector<HokPairing>& draw, bool knockout, HumanSquad& squad,
+                                         std::vector<HokSquadPlayer>& national, MatchStats& live_stats, int level = 1);
     void begin_world_championship();
     void finish_world_championship();
     void refresh_national_team();

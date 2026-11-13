@@ -2863,7 +2863,9 @@ void Game::finish_world_championship() {
 bool Game::auto_select_national_squad() {
     if (national_coach_ < 0 || wm_round_ != 0) return false;
     auto_national_squad(save_, national_tables_, contracts_, brng_);
-    refresh_national_team();
+    // the original leaves the team record of the nation alone here; the WM day (or the friendly) values it later (REAL-CODE
+    // WM-only game: record 57 keeps its values through "auto" and the friendly page)
+    if (std::getenv("EM_OLD_AUTOREFRESH")) refresh_national_team();
     return true;
 }
 
@@ -3165,27 +3167,132 @@ void Game::national_injury_minute(int load, const HokTeam* on_ice, std::vector<H
     }
 }
 
+// the live round of a WM day or a friendly (ovl06_161d(0, 8, knockout, 0, 3)): gate and manager pass of manager 5, then all
+// pairs minute by minute with the coach's checks
+std::vector<Tie> Game::national_live_round(const std::vector<HokPairing>& draw, bool knockout, HumanSquad& squad,
+                                           std::vector<HokSquadPlayer>& national, MatchStats& live_stats, int level) {
+    const int nation = national_team();
+    // sub_60D60 per pair: a home game of the nation books its gate for manager 5 first (REAL-CODE WM-only game, round 2)
+    for (size_t i = 0; i < draw.size() && !std::getenv("EM_OLD_WMGATE"); i++)
+        {
+            const HokPairing& p = draw[i];
+            if (p.home != nation) continue;
+            ManagerBudget budget = budget_from_save(save_, 5);
+            AttendanceMatch am;
+            am.home_class = team_class(finance_, p.home);
+            am.away_class = team_class(finance_, p.away);
+            am.home_strength = attendance_strength(save_.teams[size_t(p.home)]);
+            am.away_strength = attendance_strength(save_.teams[size_t(p.away)]);
+            am.guest = p.away;
+            // as the club gate: the position byte of the team's table row (+0x2A of the 64 rows; national teams 52..63)
+            am.home_rank = save_.state.at(0x3BAC + size_t(p.home) * 0x50 + 0x2A);
+            am.away_rank = save_.state.at(0x3BAC + size_t(p.away) * 0x50 + 0x2A);
+            am.kind = 3;
+            am.league_statistics = false;
+            if (std::getenv("EM_DEBUG_GATE"))
+                std::fprintf(stderr, "national gate vs %d: places %d/%d price %d stadium %d %d %d\n", p.away, budget.places[0], budget.places[1],
+                             budget.ticket_price, budget.stadium[0], budget.stadium[1], budget.stadium[2]);
+            match_attendance_ = home_attendance(finance_, budget, am, brng_);
+        }
+    int slots = 0;
+    for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_block(5) + size_t(s) * kSquadRecord + 0x0F) != 0;
+    for (int s = 0; s < slots; s++)
+        if (brng_.range(0, 4) == 0) {
+            const size_t rec = squad_block(5) + size_t(s) * kSquadRecord;
+            save_.state.at(rec + 2) = uint8_t(save_.state.at(rec + 0x15) & 0x7F);
+            // the match reads the records, so the working squad takes the new home line too (REAL-CODE WM-only game,
+            // final: slot 19 -> line 3 changes the neutral strength 210 -> 212)
+            if (size_t(s) < national.size() && !std::getenv("EM_OLD_WMPASSCOPY")) national[size_t(s)].home_line = save_.state.at(rec + 2);
+        }
+    // the home-game flag of manager_day for the nation's home game (rand(0, 15 + 4 * (30 - x)), x from block 5's places)
+    bool national_home = false;
+    for (const HokPairing& p : draw) national_home |= p.home == nation;
+    if (national_home && !std::getenv("EM_OLD_WMGATE")) {
+        const int low = le16(save_.state, manager_block(5) + 0x133), high = le16(save_.state, manager_block(5) + 0x137);
+        const int x = std::clamp(int(int16_t(uint16_t(high - low))) / 1000, 0, 30);
+        if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(5) + 0xF1) |= 1;
+    }
+    spin_match_stream();
+    if (!std::getenv("EM_OLD_WMLIVEGRID")) {
+        // the round's pairs stand in the team grid DS:5D5B (state 0x8EB1, 12 bytes) and DS:A88D lists the home team of the
+        // coach's game, then FF (REAL-CODE WM-only game: 34 39 36 38 35 37 3A 3F 3C 3E 3B 3D and 34 FF FF FF); the
+        // knock-out pairs already stand in their slots
+        for (size_t i = 0; i < draw.size() && !knockout; i++) {
+            save_.state.at(0x8EB1 + 2 * i) = uint8_t(draw[i].home);
+            save_.state.at(0x8EB1 + 2 * i + 1) = uint8_t(draw[i].away);
+        }
+        for (size_t i = 0; i < 4; i++) save_.state.at(0x784 + i) = 0xFF;
+        for (const HokPairing& p : draw)
+            if (p.home == nation || p.away == nation) { save_.state.at(0x784) = uint8_t(p.home); break; }
+    }
+    squad.on_minute = [this, &national](int, int load, const HokTeam& team) { national_injury_minute(load, &team, national); };
+    squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
+        credit_national_chance(false, goal, &team, &working);
+    };
+    squad.on_shot = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
+        credit_national_chance(true, goal, &team, &working);
+    };
+    const HumanSide side{nation, &squad, &live_stats};
+    int minutes = 60, phantom = -1;
+    const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
+                                          &minutes, false, knockout ? size_t(-1) : 0, &phantom, level, true);
+    // the overtime minutes leave DS:A70E off manager 5 as well (REAL-CODE WM-only game: the routine of manager 0 after the
+    // 1994 final day with overtime, none after the 1995 one without)
+    if (minutes > 60 && !std::getenv("EM_OLD_WMOTCLUB")) national_hurt_today_ = true;
+    squad.on_minute = nullptr;
+    squad.on_chance = nullptr;
+    squad.on_shot = nullptr;
+    // like a live cup day: every team outside today's games is rested to line energy 90 (REAL-CODE WM-only game: the 138
+    // clubs and European teams after the first WM days)
+    if (!std::getenv("EM_OLD_WMLIVEREST"))
+        for (int team = 0; team < int(save_.teams.size()); team++) {
+            bool in_round = false;
+            for (const HokPairing& p : draw) in_round |= p.home == team || p.away == team;
+            if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);
+        }
+    return ties;
+}
+
+// the rest of a national match day: the squads of the managers who are not national coach rest like on a EuroCup day
+// without them (fitness from the load); in "Nur WM" the coach's club squad stands at 90 (REAL-CODE WM-only game, day 222)
+void Game::rest_for_national_match() {
+    for (int m = 0; m < managers_; m++) {
+        if (m == national_coach_ && !(wm_only() && !std::getenv("EM_OLD_WMONLYREST"))) continue;  // "Nur WM": the club squad rests too
+        auto& squad = save_.squad_of(m);
+        for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
+            const size_t at = squad_block(m) + slot * kSquadRecord;
+            if (save_.state.at(at + 0x0F) == 0) continue;
+            const uint8_t f = m == national_coach_ ? uint8_t(90) : rested_fitness(save_.state.at(at + 0x13));
+            save_.state.at(at + 0x1B) = f;
+            squad[slot].fitness = f;
+        }
+    }
+}
+
+// FUN_162c_0417(0) counts every nominee once per national match day, even when the nation has already gone out in the
+// groups and only other teams are playing
+void Game::count_national_caps(const std::vector<HokSquadPlayer>& national) {
+    if (national_coach_ < 0) return;
+    for (const auto& sp : national) {
+        if (sp.player < 0) continue;
+        const size_t player = size_t(save_.players[size_t(sp.player)].raw - save_.state.data());
+        if (save_.state.at(player + 0x19) != 255) save_.state.at(player + 0x19)++;
+    }
+}
+
 void Game::play_wm_day() {
     if (save_.state.at(0x025A) == 2) return;  // native league-only mode has no WM
     if (wm_round_ >= 8) return;
     if (wm_round_ == 0) begin_world_championship();
+    // ovl05_0ef7(0) at the first WM day: the result list DS:029B (= DS:5CAB) is cleared; it still holds the score of the
+    // last friendly (REAL-CODE WM-only game, friendlies on 13.04.1994)
+    if (wm_round_ == 0 && !std::getenv("EM_OLD_WMRESULTCLEAR"))
+        std::fill(save_.state.begin() + long(kWorldResults), save_.state.begin() + long(kWorldResults + 0x20), uint8_t(0));
     if (std::getenv("EM_DEBUG_DAYFLOW")) std::fprintf(stderr, "dayflow: WM round %d, national coach %d\n", wm_round_, national_coach_);
     // a WM day rests the squads of the managers who are not national coach like a EuroCup day without them: fitness from
     // the load; the squad routine of the WM branch trains afterwards (REAL-CODE Köln period 37: after the last WM day the
     // fitness stands one load step higher than the formula of the final load)
-    if (!std::getenv("EM_OLD_WMREST"))
-        for (int m = 0; m < managers_; m++) {
-            if (m == national_coach_ && !(wm_only() && !std::getenv("EM_OLD_WMONLYREST"))) continue;  // "Nur WM": the club squad rests too
-            auto& squad = save_.squad_of(m);
-            for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
-                const size_t at = squad_block(m) + slot * kSquadRecord;
-                if (save_.state.at(at + 0x0F) == 0) continue;
-                // "Nur WM": the coach's club squad stands at 90 whatever its load (REAL-CODE WM-only game, day 222)
-                const uint8_t f = m == national_coach_ ? uint8_t(90) : rested_fitness(save_.state.at(at + 0x13));
-                save_.state.at(at + 0x1B) = f;
-                squad[slot].fitness = f;
-            }
-        }
+    if (!std::getenv("EM_OLD_WMREST")) rest_for_national_match();
     // ovr038:3649: without a human national coach (manager 5 club 0xFD) the first WM day rolls the strengths of the own
     // nation (DS:06AC): per kind skill1 rand(84,94), skill2 rand(79,89), form rand(45,55); the manager index DS:A70E/A70D
     // becomes 5 (REAL-CODE period 30)
@@ -3223,14 +3330,7 @@ void Game::play_wm_day() {
     configure_human_tactics(squad, save_, 5);
     if (national_coach_ >= 0) squad.penalty_effort_adjustment = penalty_effort_adjustment(save_, national_team());
     const int nation = national_team();
-    // FUN_162c_0417(0) counts every nominee once per WM day, even when the
-    // nation has already gone out in the groups and only other teams are playing.
-    if (national_coach_ >= 0)
-        for (const auto& sp : national) {
-            if (sp.player < 0) continue;
-            const size_t player = size_t(save_.players[size_t(sp.player)].raw - save_.state.data());
-            if (save_.state.at(player + 0x19) != 255) save_.state.at(player + 0x19)++;
-        }
+    count_national_caps(national);
     const int r = wm_round_++;
     g_try_round = r;
     struct QuickResult { int home, away, diff; };
@@ -3250,85 +3350,7 @@ void Game::play_wm_day() {
     MatchStats live_stats;
     // the live round of a WM day (groups and knock-out rounds alike; REAL-CODE WM-only game, quarter-final 23.04.)
     auto live_round = [&](const std::vector<HokPairing>& draw, bool knockout) {
-        // sub_60D60 per pair: a home game of the nation books its gate for manager 5 first (REAL-CODE WM-only game, round 2)
-        for (size_t i = 0; i < draw.size() && !std::getenv("EM_OLD_WMGATE"); i++)
-            {
-                const HokPairing& p = draw[i];
-                if (p.home != nation) continue;
-                ManagerBudget budget = budget_from_save(save_, 5);
-                AttendanceMatch am;
-                am.home_class = team_class(finance_, p.home);
-                am.away_class = team_class(finance_, p.away);
-                am.home_strength = attendance_strength(save_.teams[size_t(p.home)]);
-                am.away_strength = attendance_strength(save_.teams[size_t(p.away)]);
-                am.guest = p.away;
-                // as the club gate: the position byte of the team's table row (+0x2A of the 64 rows; national teams 52..63)
-                am.home_rank = save_.state.at(0x3BAC + size_t(p.home) * 0x50 + 0x2A);
-                am.away_rank = save_.state.at(0x3BAC + size_t(p.away) * 0x50 + 0x2A);
-                am.kind = 3;
-                am.league_statistics = false;
-                if (std::getenv("EM_DEBUG_GATE"))
-                    std::fprintf(stderr, "national gate vs %d: places %d/%d price %d stadium %d %d %d\n", p.away, budget.places[0], budget.places[1],
-                                 budget.ticket_price, budget.stadium[0], budget.stadium[1], budget.stadium[2]);
-                match_attendance_ = home_attendance(finance_, budget, am, brng_);
-            }
-        int slots = 0;
-        for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_block(5) + size_t(s) * kSquadRecord + 0x0F) != 0;
-        for (int s = 0; s < slots; s++)
-            if (brng_.range(0, 4) == 0) {
-                const size_t rec = squad_block(5) + size_t(s) * kSquadRecord;
-                save_.state.at(rec + 2) = uint8_t(save_.state.at(rec + 0x15) & 0x7F);
-                // the match reads the records, so the working squad takes the new home line too (REAL-CODE WM-only game,
-                // final: slot 19 -> line 3 changes the neutral strength 210 -> 212)
-                if (size_t(s) < national.size() && !std::getenv("EM_OLD_WMPASSCOPY")) national[size_t(s)].home_line = save_.state.at(rec + 2);
-            }
-        // the home-game flag of manager_day for the nation's home game (rand(0, 15 + 4 * (30 - x)), x from block 5's places)
-        bool national_home = false;
-        for (const HokPairing& p : draw) national_home |= p.home == nation;
-        if (national_home && !std::getenv("EM_OLD_WMGATE")) {
-            const int low = le16(save_.state, manager_block(5) + 0x133), high = le16(save_.state, manager_block(5) + 0x137);
-            const int x = std::clamp(int(int16_t(uint16_t(high - low))) / 1000, 0, 30);
-            if (brng_.range(0, 15 + 4 * (30 - x)) == 0) save_.state.at(manager_block(5) + 0xF1) |= 1;
-        }
-        spin_match_stream();
-        if (!std::getenv("EM_OLD_WMLIVEGRID")) {
-            // the round's pairs stand in the team grid DS:5D5B (state 0x8EB1, 12 bytes) and DS:A88D lists the home team of the
-            // coach's game, then FF (REAL-CODE WM-only game: 34 39 36 38 35 37 3A 3F 3C 3E 3B 3D and 34 FF FF FF); the
-            // knock-out pairs already stand in their slots
-            for (size_t i = 0; i < draw.size() && !knockout; i++) {
-                save_.state.at(0x8EB1 + 2 * i) = uint8_t(draw[i].home);
-                save_.state.at(0x8EB1 + 2 * i + 1) = uint8_t(draw[i].away);
-            }
-            for (size_t i = 0; i < 4; i++) save_.state.at(0x784 + i) = 0xFF;
-            for (const HokPairing& p : draw)
-                if (p.home == nation || p.away == nation) { save_.state.at(0x784) = uint8_t(p.home); break; }
-        }
-        squad.on_minute = [this, &national](int, int load, const HokTeam& team) { national_injury_minute(load, &team, national); };
-        squad.on_chance = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
-            credit_national_chance(false, goal, &team, &working);
-        };
-        squad.on_shot = [this](bool goal, const HokTeam& team, const std::vector<HokSquadPlayer>& working) {
-            credit_national_chance(true, goal, &team, &working);
-        };
-        const HumanSide side{nation, &squad, &live_stats};
-        int minutes = 60, phantom = -1;
-        const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
-                                              &minutes, false, knockout ? size_t(-1) : 0, &phantom, 1, true);
-        // the overtime minutes leave DS:A70E off manager 5 as well (REAL-CODE WM-only game: the routine of manager 0 after the
-        // 1994 final day with overtime, none after the 1995 one without)
-        if (minutes > 60 && !std::getenv("EM_OLD_WMOTCLUB")) national_hurt_today_ = true;
-        squad.on_minute = nullptr;
-        squad.on_chance = nullptr;
-        squad.on_shot = nullptr;
-        // like a live cup day: every team outside today's games is rested to line energy 90 (REAL-CODE WM-only game: the 138
-        // clubs and European teams after the first WM days)
-        if (!std::getenv("EM_OLD_WMLIVEREST"))
-            for (int team = 0; team < int(save_.teams.size()); team++) {
-                bool in_round = false;
-                for (const HokPairing& p : draw) in_round |= p.home == team || p.away == team;
-                if (!in_round) prepare_match_energy(save_.teams[size_t(team)], nullptr);
-            }
-        return ties;
+        return national_live_round(draw, knockout, squad, national, live_stats);
     };
     if (r < 5 && !quick && !std::getenv("EM_OLD_WMLIVE")) {
         std::vector<HokPairing> group_draw;

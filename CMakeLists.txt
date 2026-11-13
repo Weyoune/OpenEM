@@ -654,6 +654,14 @@ if(TARGET em_realcode)
     # jump to the WM appointment (Game::wm_only_prepare) against the original's state on 14.04.1994; DS:0256 comes from the menu
     add_test(NAME realcode_wm_only_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_orig_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_only_start PROPERTIES ENVIRONMENT "GENSTART=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # a friendly of the "WM Vorbereitung" page (Germany - Russia at home, 13.04.1994): played like a WM group round with
+    # level 0, booked like a WM day plus head-to-head and result slot (REAL-CODE 13.11.2026, all draws equal)
+    add_test(NAME realcode_wm_friendly COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_friendly_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_friendly PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;FRIENDLY=58:1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # two friendlies (Russia at home, in Sweden away), then the first WM day: the WM start clears the result list the
+    # friendlies wrote (state 15.04.1994)
+    add_test(NAME realcode_wm_friendly_day218 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_friendly_day218_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_friendly_day218 PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;FRIENDLY=58:1,61:0;GSTATE=783127;FORCEDAYS=2;DAYDIFF_IGNORE=6ae,6af")
     # the same game over six WM days (live national round, gate, head-to-head, national table rows) against the original's
     # state at the step start of 19.04.1994 (REAL-CODE 12.11.2026; national squad picked automatically)
     add_test(NAME realcode_wm_only_days COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_day222_4880.bin" 3934523008)
