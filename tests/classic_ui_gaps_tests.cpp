@@ -230,6 +230,26 @@ int main(int argc, char** argv) {
             check(quiet.borland_state() != live.borland_state(), "\"Aber klar\" takes Borland draws");
         }
 
+        // --- the final draw: no question, the two coins are the uncovering order, the cup page follows (period 54) ------
+        {
+            const Bytes exe = read_file(data / "EM.EXE"), save = read_file(ref / "START.HOK");
+            Game quiet(exe, save), live(exe, save);
+            std::vector<int> order, places;
+            int finals = 0;
+            quiet.set_cup_draw_decider([](int) { return false; });
+            live.set_cup_draw_decider([](int) { return false; });  // "Kein Gedanke" for the earlier rounds
+            live.set_cup_reveal_observer([&](const std::vector<int>& o, const std::vector<int>& p) {
+                if (p.size() == 2) { finals++; order = o; places = p; }
+            });
+            for (int day = 0; day < 400 && !finals; day++) {
+                quiet.advance_day();
+                live.advance_day();
+            }
+            require(finals == 1, "the final draw reaches the frontend");
+            check(is_permutation_of_places(order, 2) && places[0] != places[1], "two places, both uncovered");
+            check(quiet.borland_state() == live.borland_state(), "the final page takes no draws of its own");
+        }
+
         // --- a later round through the frontend: question inside the day, uncovering, TASTE, cup page ----------------
         {
             ClassicApplication app(data, work, ref / "START.HOK");

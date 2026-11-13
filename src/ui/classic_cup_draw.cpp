@@ -22,6 +22,7 @@
 #include "ui/classic_cup.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace em::ui {
 namespace {
@@ -105,6 +106,9 @@ void ClassicApplication::start_cup_live(const HokFile& after, const std::vector<
         c->colors.push_back(color);
     }
     c->next = classic_ticks() + 2 * kTickMs;
+    // the final (two clubs): no board and no question; after the draw the original shows the cup page "Endspiel" and waits
+    // for a click (REAL-CODE period 54). The two bars of ovl05_492e over the previous screen are not drawn here.
+    if (in_day && places.size() == 2 && !std::getenv("EM_OLD_FINALPAGE")) c->page = true;
     cup_live_ = std::move(c);
 }
 

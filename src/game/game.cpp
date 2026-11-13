@@ -1117,6 +1117,10 @@ void Game::play_cup_day() {
                 const int first = brng_.range(0, 1);
                 if (std::getenv("EM_OLD_FINALCOINS2")) brng_.range(0, 1);
                 else while (brng_.range(0, 1) == first) {}
+                // the coins are the uncovering order of the two places (ovl05_536d with the live flag set without question);
+                // ovl05_4b97 then shows the cup page "Endspiel" inside the day (REAL-CODE period 54)
+                if (cup_reveal_observer_ && places.size() == 2 && save_.state.at(0x025A) != 1 && !std::getenv("EM_OLD_FINALPAGE"))
+                    cup_reveal_observer_({first, 1 - first}, places);
             }
             cup_series_.clear();
             cup_round_++;
