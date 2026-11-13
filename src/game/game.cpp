@@ -2151,6 +2151,8 @@ int Game::current_club_image(int m) {
         if (p >= 0) image_squad.push_back(c);
     }
     in.stadium = stadium_score(sponsor_tables_, mgr_[m].budget.stadium, mgr_[m].budget.places);
+    if (std::getenv("EM_DEBUG_IMAGE")) std::fprintf(stderr, "image inputs day %d: league %d comp %d cup %d euro %d stadium %d md %d\n", day_, in.league,
+                                                   in.in_competition, in.cup, in.euro, in.stadium, in.matchday);
     if (std::getenv("EM_DEBUG_IMAGE")) {
         std::fprintf(stderr, "image day %d md %d form", day_, in.matchday);
         for (int r : in.recent_results) std::fprintf(stderr, " %d", r);
