@@ -378,6 +378,9 @@ MatchResult quick_match(const HokTeam& h, const HokTeam& a, GameRandom& rng, int
     return goal_points(h, a, 0, true, rng, level, nullptr, nullptr, playoff);
 }
 
+bool g_track_guard = false;
+int g_manager_guard = 5;
+
 namespace {
 int situation_of(int own, int opp) {
     if (own - 2 > opp) return kHighLead;
@@ -403,7 +406,9 @@ int drain(const HokTeam& t, int shift, GameRandom& rng) {
     return d;
 }
 
+
 void energy_minute(HokTeam& t, std::vector<HokSquadPlayer>* squad, GameRandom& rng) {
+    note_manager_guard(t.raw);
     if (!squad) {
         for (int kind = 0; kind < 2; kind++) {
             const int on_ice = t.current_line[kind];

@@ -3276,9 +3276,16 @@ std::vector<Tie> Game::national_live_round(const std::vector<HokPairing>& draw, 
     } live_national_human{live_national_human_};
     live_national_human_ = &squad;
     live_national_ = &national;
+    g_track_guard = !std::getenv("EM_OLD_WMGUARD");
+    g_manager_guard = 5;
     national_played_.fill(false);
     const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
                                           &minutes, false, knockout ? size_t(-1) : 0, &phantom, level, true);
+    // DS:A70E after the round: the energy minute and the penalty start of the last team leave its manager byte - 1; not 5 lets
+    // the WM-branch routine 146e:0c89 run for manager 0 (REAL-CODE WM-only game: Germany - Finland 4:4 on 18.04.1996)
+    if (g_track_guard && g_manager_guard != 5) national_hurt_today_ = true;
+    if (std::getenv("EM_DEBUG_GUARD")) std::fprintf(stderr, "guard after the national round: %d\n", g_manager_guard);
+    g_track_guard = false;
     // the overtime minutes leave DS:A70E off manager 5 as well (REAL-CODE WM-only game: the routine of manager 0 after the
     // 1994 final day with overtime, none after the 1995 one without)
     if (minutes > 60 && !std::getenv("EM_OLD_WMOTCLUB")) national_hurt_today_ = true;

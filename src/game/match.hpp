@@ -85,6 +85,13 @@ LineValues line_strength(const HokTeam& team, int line, int kind, bool in_play, 
 // the running lineup of the manager match whose per-minute check (on_minute) is being called: the original reads the
 // squad record it plays with, in which penalised players have role 0 (REAL-CODE Köln period 196)
 extern const std::vector<HokSquadPlayer>* g_minute_lineup;
+// DS:A70E as FUN_162c_0737 (energy minute) and the penalty start of ovr030 leave it: the manager byte +0x16 of the team
+// minus 1, 0 for a team without manager (tracked during a national live round only)
+extern bool g_track_guard;
+extern int g_manager_guard;
+inline void note_manager_guard(const uint8_t* team_raw) {
+    if (g_track_guard && team_raw) g_manager_guard = team_raw[0x16] ? team_raw[0x16] - 1 : 0;
+}
 
 struct HumanSquad {
     const std::vector<HokSquadPlayer>* squad = nullptr;
