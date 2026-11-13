@@ -1749,6 +1749,12 @@ ManualLineupResult Game::change_lineup(size_t slot,int selected_line,ManualLineu
     }
     const int a=active_manager_;
     if(national_coach_>=0||mgr_[a].team>=kFirstNationalTeam)throw FormatError("Aufstellung ist in dieser Phase nicht verfügbar.");
+    // a player taken off during the match keeps his appearance (REAL-CODE Köln, substitution in minute 4: BRANDL booked)
+    if(in_match&&!std::getenv("EM_OLD_CLUBPLAYED")){
+        const auto& squad=save_.squad_of(a);
+        for(size_t s=0;s<squad.size()&&s<mgr_[a].hurt_in_match.size();s++)
+            if(squad[s].player>=0&&squad[s].role!=0&&squad[s].line!=0)mgr_[a].hurt_in_match[s]=true;
+    }
     const auto result=manual_lineup(save_,a,slot,selected_line,action,six_override,cells_override,in_match);
     if(result.changed){
         refresh_human_team(a);mgr_[a].squad.penalty_effort_adjustment=penalty_effort_adjustment(save_,mgr_[a].team);
@@ -3016,7 +3022,7 @@ void Game::book_club_match(int own_goals, int goals_against, int competition, bo
         }
         const bool hurt = slot < mgr_[m].hurt_in_match.size() && mgr_[m].hurt_in_match[slot];  // a player injured in the match started it
         if (slot < mgr_[m].hurt_in_match.size()) mgr_[m].hurt_in_match[slot] = false;
-        if (sp.player < 0 || (sp.role == 0 && !hurt) || sp.line == 0) continue;
+        if (sp.player < 0 || ((sp.role == 0 || (sp.line == 0 && !std::getenv("EM_OLD_CLUBPLAYED"))) && !hurt) || (sp.line == 0 && std::getenv("EM_OLD_CLUBPLAYED"))) continue;
         auto& player = save_.players[size_t(sp.player)];
         if (competition == 2) {
             const size_t at = squad_block(m) + slot * kSquadRecord;

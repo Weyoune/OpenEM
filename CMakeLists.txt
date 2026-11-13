@@ -680,6 +680,10 @@ if(TARGET em_realcode)
     # the national coach's tactics page in the menu (effort and offence AUTOM -> SEMI), then the friendly
     add_test(NAME realcode_wm_friendly_tactics COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${EM_LIVE}/friendly_tactics_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_friendly_tactics PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;TACTICSEDIT=2:1,3:1;FRIENDLY=58:1;DRAWLOG=${EM_LIVE}/friendly_tactics_draws.txt;DRAWSTRICT=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # a substitution from the board centre in Köln's home game against Berlin (period 2 of the Köln chain, minute 4: BRANDL
+    # out of line 1, HOCK in): the player taken off keeps his appearance; all draws and the state equal
+    add_test(NAME realcode_koeln_live_substitution COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/daydiff_koeln/mid1.HOK" "${EM_LIVE}/koeln_sub_day12.bin" 1001)
+    set_tests_properties(realcode_koeln_live_substitution PROPERTIES ENVIRONMENT "GSTATE=1001;FORCEDAYS=5;LIVEHOME=7;LIVELINEUP=4:12:13:1;DRAWLOG=${EM_LIVE}/koeln_sub_draws.txt;DRAWSTRICT=1")
     # the same game over six WM days (live national round, gate, head-to-head, national table rows) against the original's
     # state at the step start of 19.04.1994 (REAL-CODE 12.11.2026; national squad picked automatically)
     add_test(NAME realcode_wm_only_days COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_day222_4880.bin" 3934523008)
