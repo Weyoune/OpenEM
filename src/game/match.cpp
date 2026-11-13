@@ -427,7 +427,11 @@ void energy_minute(HokTeam& t, std::vector<HokSquadPlayer>* squad, GameRandom& r
     }
     // Native walks the packed occupied prefix once, in squad-slot order. Each
     // kind's shift advances only when its first on-ice player is encountered.
+    // FUN_162c_0737 keeps the advanced value in one local (local_9): the drain of every later player uses the shift that
+    // was advanced last, whichever kind it belongs to (REAL-CODE Köln period 282: a defender listed after the first
+    // forward on the ice gives the forwards behind him the defence shift)
     bool advanced[2] = {};
+    int last_shift = -1;
     const auto end = squad->begin() + std::min(size_t(29), squad->size());
     const size_t occupied = size_t(std::count_if(squad->begin(), end, [](const auto& p) { return p.player >= 0; }));
     for (size_t slot = 0; slot < occupied; slot++) {
@@ -439,12 +443,18 @@ void energy_minute(HokTeam& t, std::vector<HokSquadPlayer>* squad, GameRandom& r
             if (!advanced[kind]) {
                 t.shift[kind] = uint8_t(t.shift[kind] + 1);
                 advanced[kind] = true;
+                last_shift = t.shift[kind];
             }
             if (rng.range(0, 4 + (p.skill_b < p.skill_a)) == 0) {
                 p.raw_exhaustion = uint8_t(p.raw_exhaustion + 1);
                 p.exhaustion = p.raw_exhaustion * 2 / 3;
             }
-            e = std::clamp(e - drain(t, t.shift[kind], rng), 1, 99);
+            const int shift = last_shift >= 0 && !std::getenv("EM_OLD_DRAINSHIFT") ? last_shift : t.shift[kind];
+            const int d = drain(t, shift, rng);
+            if (const char* ds = std::getenv("EM_DEBUG_DRAIN"); ds && int(slot) == std::atoi(ds))
+                std::fprintf(stderr, "drain slot %zu G%zu effort %d shift %d (own %d) -> %d (fitness %d)\n", slot,
+                             g_game_log ? g_game_log->size() : size_t(0), t.effort_current, shift, t.shift[kind], d, e);
+            e = std::clamp(e - d, 1, 99);
         } else if (e < 90) {
             int bonus = (rng.range(0, 4) == 0 && p.skill_a > rng.range(0, 100)) ? 1 : 0;
             e += 1 + bonus;
