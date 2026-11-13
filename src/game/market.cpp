@@ -64,7 +64,8 @@ void market_day(Bytes& s, BorlandRandom& rng) {
         bool step_up = uint32_t(p) < target;
         if (!step_up) step_up = rng.range(0, 1) != 0;
         if (step_up && trend == 0) p += 1;
-        for (int e = 0; e + 1 < kEntries; e++) put16  // drop the oldest history entry(s, hist + size_t(e) * 2, get16(s, hist + size_t(e + 1) * 2));
+        for (int e = 0; e + 1 < kEntries; e++)  // drop the oldest history entry
+            put16(s, hist + size_t(e) * 2, get16(s, hist + size_t(e + 1) * 2));
         if (p > 2000) {  // 2:1 split: price 1000, every manager's holding doubles
             p = 1000;
             for (int k = 0; k < 4; k++) {

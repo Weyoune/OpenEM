@@ -5,7 +5,7 @@
 #   cmake --build build --config Release
 #   ctest --test-dir build -C Release
 cmake_minimum_required(VERSION 3.24)
-project(OpenEM VERSION 0.0.1 LANGUAGES CXX C)
+project(OpenEM VERSION 1.0.0 LANGUAGES CXX C)
 add_compile_definitions(OPENEM_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -420,12 +420,12 @@ if(TARGET em_editor)
     install(TARGETS em_editor RUNTIME DESTINATION .)
     install(FILES docs/EDITOR.md DESTINATION docs)
 endif()
-install(FILES README.md DESTINATION .)
+install(FILES README.md LICENSE DESTINATION .)
 
 # Release archive: cpack -G ZIP -C Release (in the build folder) packs the install layout above
 set(CPACK_PACKAGE_NAME "OpenEM")
 set(CPACK_PACKAGE_VENDOR "OpenEM")
-set(CPACK_PACKAGE_VERSION "0.9.0")
+set(CPACK_PACKAGE_VERSION "1.0.0-beta.1")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Nachbau des Eishockey Managers (1993); benötigt die Originaldaten")
 set(CPACK_GENERATOR "ZIP")
 include(CPack)
