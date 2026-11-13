@@ -56,6 +56,9 @@ public:
     int tick(HokTeam& team, std::vector<HokSquadPlayer>* squad);
     void goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad);
     void finish(HokTeam& team, std::vector<HokSquadPlayer>* squad);
+    // the national coach's box at the match end: running timers end on the release path, a stale slot stays for the next
+    // national match (REAL-CODE WM-only game: the 1995 final ended "15/8", the release in 1996 minute 15 gives slot 8 its role)
+    void finish_released(HokTeam& team, std::vector<HokSquadPlayer>* squad);
     int started() const { return started_; }
     int code() const;  // team record byte +0x33 for the running penalties
     int minutes_assessed() const { return assessed_; }

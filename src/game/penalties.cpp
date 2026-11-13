@@ -174,4 +174,9 @@ void PenaltyBox::finish(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
     }
 }
 
+void PenaltyBox::finish_released(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
+    for (int i = 0; i < 2; i++)
+        if (entries_[i].minutes) release(i, team, squad);
+}
+
 }  // namespace em

@@ -648,6 +648,10 @@ void apply_effort(HokTeam& t, int own, int opp, const std::vector<HokSquadPlayer
     int effort = t.effort_base + t.effort[situation];
     const int energy = (line_energy(t, squad, 0, t.current_line[0]) + line_energy(t, squad, 1, t.current_line[1])) >> 1;
     if (energy < 50) effort += energy - 50;
+    if (const char* de = std::getenv("EM_DEBUG_EFF"); de && g_game_log && g_game_log->size() + 200 > size_t(std::atoll(de)) && g_game_log->size() < size_t(std::atoll(de)) + 50)
+        std::fprintf(stderr, "eff G%zu %s: base %d sit %d (%d) energy %d lines %d/%d en %d %d / %d %d control %d -> %d\n", g_game_log->size(), t.name.c_str(),
+                     t.effort_base, situation, t.effort[situation], energy, t.current_line[0], t.current_line[1], t.energy[0][t.current_line[0]],
+                     t.energy[0][0], t.energy[1][t.current_line[1]], t.energy[1][0], effort_control, effort);
     if (effort_control != 2) t.effort_current = std::clamp(effort, 0, 100);
     if (offence_control < 2)
         t.flags = (t.flags & 0x8F) | (((t.offence_base + t.offence[situation]) << 4) & 0x70);
@@ -1042,6 +1046,11 @@ struct MatchRun::Impl {
             // nor in the overtime of a WM game of the national coach (REAL-CODE WM-only final: minute 61 without it)
             if (m && m->on_minute && !minute_check_off[side] && !(opts.playoff && minute > 60 && !std::getenv("EM_OLD_POOTCHECK")) &&
                 !(m->national && minute > 60 && !std::getenv("EM_OLD_WMOTCHECK"))) {
+                // the roles before the check: only a role the check itself clears is an injury (a penalty release may have
+                // given a working slot a role the outer copy never had; the original keeps one record for both)
+                std::vector<int> roles_before;
+                if (const auto* outer = outer_squad[side])
+                    for (const auto& p : *outer) roles_before.push_back(p.role);
                 g_minute_lineup = side == 0 ? &hsq : &asq;
                 m->on_minute(minute, load, side == 0 ? h : a);
                 g_minute_lineup = nullptr;
@@ -1051,7 +1060,11 @@ struct MatchRun::Impl {
                 bool removed = false;
                 if (const auto* outer = outer_squad[side])
                     for (size_t s = 0; s < working.size() && s < outer->size(); s++)
-                        if ((*outer)[s].role == 0 && working[s].role != 0) { working[s].role = 0; removed = true; }
+                        if ((*outer)[s].role == 0 && working[s].role != 0 &&
+                            (std::getenv("EM_OLD_REMOVEDCHECK") || s >= roles_before.size() || roles_before[s] != 0)) {
+                            working[s].role = 0;
+                            removed = true;
+                        }
                 // leaving the lineup screen sets the effort again as in a drawn game (situation 2), the offence stays (REAL-CODE: period
                 // 28 at 0:0 and period 41 at 3:2 -> 60 + 20 = 80; the minute loop calls of 162c:12da are not the ones used here)
                 if (removed && message_draws() && board()) message_coins(true);  // ovl06_364f -> ovl14_1dc7 -> ovl14_0690 (kind 4)
@@ -1197,8 +1210,10 @@ struct MatchRun::Impl {
         // the original leaves running penalties of a team without manager on the record (skaters, +0x33)
         if (std::getenv("EM_DEBUG_FIN"))
             std::fprintf(stderr, "finish %s - %s: code %d/%d skaters %d/%d score %d:%d\n", h.name.c_str(), a.name.c_str(), hbox.code(), abox.code(), h.skaters, a.skaters, score.home, score.away);
-        if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
+        if (hp && hp->national && !std::getenv("EM_OLD_NATFINISH")) hbox.finish_released(h, &hsq);
+        else if (hp) hbox.finish(h, &hsq); else h.penalty_code = hbox.code();
         if (box_shared) { a.penalty_code = h.penalty_code; sync_away(); }
+        else if (ap && ap->national && !std::getenv("EM_OLD_NATFINISH")) abox.finish_released(a, &asq);
         else if (ap) abox.finish(a, &asq); else a.penalty_code = abox.code();
         if (stats) {
             stats->final_teams = {h, a};
