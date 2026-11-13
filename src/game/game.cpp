@@ -3226,9 +3226,12 @@ std::vector<Tie> Game::national_live_round(const std::vector<HokPairing>& draw, 
                              budget.ticket_price, budget.stadium[0], budget.stadium[1], budget.stadium[2]);
             match_attendance_ = home_attendance(finance_, budget, am, brng_);
         }
+    // the manager pass only with the nation in the round (REAL-CODE WM-only game: quarter-finals of 24.04.1996 without Germany)
+    bool nation_plays = false;
+    for (const HokPairing& p : draw) nation_plays |= p.home == nation || p.away == nation;
     int slots = 0;
     for (int s = 0; s < kHokSquadSlots; s++) slots += save_.state.at(squad_block(5) + size_t(s) * kSquadRecord + 0x0F) != 0;
-    for (int s = 0; s < slots; s++)
+    for (int s = 0; s < slots && (nation_plays || std::getenv("EM_OLD_WMOUTPASS")); s++)
         if (brng_.range(0, 4) == 0) {
             const size_t rec = squad_block(5) + size_t(s) * kSquadRecord;
             save_.state.at(rec + 2) = uint8_t(save_.state.at(rec + 0x15) & 0x7F);
@@ -3505,7 +3508,15 @@ void Game::play_wm_day() {
     for (size_t i = base; i < base + 8; i += 2) draw.push_back({wm_slots_[i], wm_slots_[i + 1]});
     MatchStats stats;
     std::vector<Tie> ties;
-    if (quick) {  // no human nation: the quick path for the knock-out games as well (REAL-CODE period 30)
+    // the coach's nation out after the groups (REAL-CODE WM-only game 1996 without Germany): the quarter-finals still run
+    // live with the spin but without the manager pass (national_live_round); the semi-finals and placement games then take
+    // the quick path as without a coach
+    bool nation_in_round = false;
+    for (const HokPairing& p : draw) nation_in_round |= p.home == nation || p.away == nation;
+    bool nation_in_quarter = false;
+    for (size_t i = 0; i < 8 && i < wm_slots_.size(); i++) nation_in_quarter |= wm_slots_[i] == nation;
+    const bool quick_round = quick || (r >= 6 && !nation_in_quarter && !std::getenv("EM_OLD_WMQUICKOUT"));
+    if (quick_round) {  // no human nation: the quick path for the knock-out games as well (REAL-CODE period 30)
         // as in the play-offs (sub_40683): after each game every pair of the day is scanned for a level score in the result
         // grid; the pairs not played yet are 0:0 and get the mark 30, and any level pair gives the current game a Borland
         // shoot-out rand(0,2) pairs (+30 on its home byte); no morale booking
@@ -3534,11 +3545,17 @@ void Game::play_wm_day() {
             res.shootout = tie;
             ties.push_back({p.home, p.away, res});
         }
+        // with a coach the quick round leaves DS:A70E at the last team it set up (all without manager: 0), which opens the
+        // WM-branch routine of manager 0 (REAL-CODE WM-only game: 28.04.1996 after the placement games without Germany)
+        if (!quick && !draw.empty() && !std::getenv("EM_OLD_WMQUICKGUARD")) {
+            const uint8_t* last = save_.teams[size_t(draw.back().away)].raw;
+            if (last && (last[0x16] ? last[0x16] - 1 : 0) != 5) national_hurt_today_ = true;
+        }
     } else if (!std::getenv("EM_OLD_WMLIVE"))
         ties = live_round(draw, true);
     else
         ties = play_cup_round(save_.teams, draw, rng_, HumanSide{nation, &squad, &stats}, match_observer_ ? &match_observer_ : nullptr);
-    const bool live_knockout = !quick && !std::getenv("EM_OLD_WMLIVE");
+    const bool live_knockout = !quick_round && !std::getenv("EM_OLD_WMLIVE");
     bool nation_played = false;
     for (size_t k = 0; k < ties.size(); k++) {
         const Tie& t = ties[k];
@@ -3548,11 +3565,11 @@ void Game::play_wm_day() {
                                 t.home == nation ? 0 : 1, t.result.shootout_goals[t.home == nation ? 0 : 1], !live_knockout);
         }
         // the live knock-out games enter the head-to-head table as well (REAL-CODE WM-only game, quarter-final 23.04.)
-        if ((live_knockout || (quick && !std::getenv("EM_OLD_WMQUICKH2H"))) && !std::getenv("EM_OLD_WMKOH2H"))  // quick: REAL-CODE Köln period 249
+        if ((live_knockout || (quick_round && !std::getenv("EM_OLD_WMQUICKH2H"))) && !std::getenv("EM_OLD_WMKOH2H"))  // quick: REAL-CODE Köln period 249
             book_head_to_head(save_.state, t.home, t.away, t.result.home, t.result.away, save_.state.at(0x068C));
         // quick path: a level score after the grid shoot-out goes to the home team (the +30 mark sits on its score)
         // (REAL-CODE Köln period 249: Norway - Germany 3:3, Norway plays for 5th place)
-        const int winner = quick && t.result.decision_marker > 0 && t.result.home == t.result.away && !std::getenv("EM_OLD_WMGRIDWIN") ? t.home : t.winner();
+        const int winner = quick_round && t.result.decision_marker > 0 && t.result.home == t.result.away && !std::getenv("EM_OLD_WMGRIDWIN") ? t.home : t.winner();
         if (std::getenv("EM_DEBUG_WMKO"))
             std::fprintf(stderr, "wm ko round %d pair %zu: %s - %s %d:%d marker %d -> %s\n", r, k, save_.teams[size_t(t.home)].name.c_str(),
                          save_.teams[size_t(t.away)].name.c_str(), t.result.home, t.result.away, t.result.decision_marker,
