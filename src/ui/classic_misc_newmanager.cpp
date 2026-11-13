@@ -2,6 +2,7 @@
 #include "ui/classic_misc_newmanager.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "game/wm_mode.hpp"
 
@@ -139,7 +140,10 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
     }
     const bool manager_field = y > 0x26 && y < 0xEB && (x < 0x2D || (x > 0x88 && x < 0xB2));
     if (manager_field) {
-        const int row = std::clamp((y - 0x26) / 0x33, 0, 3), column = x > 0x2D ? 2 : 1;
+        // "Nur WM" (mode 2) of a new game knows one manager: a click on any row edits the first one (DOSBox 13.11.2026:
+        // the face, name and club picked from row 2 went into row 1)
+        const bool wm_only = start_mode_ && options_.mode == 2 && !std::getenv("EM_OLD_WMROW");
+        const int row = wm_only ? 0 : std::clamp((y - 0x26) / 0x33, 0, 3), column = x > 0x2D ? 2 : 1;
         if (rows_[size_t(row)].existing) return Result::None;  // the running game's managers stay
         if (right) {  // ovr027:0AE4: remove the new manager of this row
             rows_[size_t(row)] = Row{};
