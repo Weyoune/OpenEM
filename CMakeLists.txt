@@ -702,6 +702,11 @@ if(TARGET em_realcode)
     # appointment
     add_test(NAME realcode_wm_only_two_years COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_1996_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_only_two_years PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;WMAUTOAT=16;GSTATE=783127;FORCEDAYS=32;DAYDIFF_CURSORS=0,0,0;DAYDIFF_IGNORE=6ae,6af")
+    # three whole years up to the WM appointment of 1997 (13.11.2026): Germany out after the groups of 1996 (quarter-finals
+    # live without the manager pass, then the quick path), DS:A70E as left by the energy minute and the penalty start; all
+    # 279 235 draws equal. Open: a flag bit of team 59 and the pair table DS:5D7B after the quick-path WM (DEVIATIONS.md)
+    add_test(NAME realcode_wm_only_three_years COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_1997_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_only_three_years PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;WMAUTOAT=16,32;GSTATE=783127;FORCEDAYS=48;DAYDIFF_CURSORS=0,0,0;DAYDIFF_IGNORE=6ae,6af,2622,8dfd,8dfe,8dff,8e00,8e01,8e02")
     # club-mode new game: the generator world plus September 10 up to the first menu (Game::enter_first_menu) against the
     # original's state in the menu "Vor dem ersten Spieltag" (share market, finances, image, menu pass)
     add_test(NAME realcode_new_game_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin" 3934523008)

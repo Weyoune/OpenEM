@@ -2152,6 +2152,14 @@ int Game::current_club_image(int m) {
             std::fprintf(stderr, " | %d %d e%d g%d,%d,%d gl%d,%d,%d b%d,%d a%d p%d f%02x", c.skill1, c.skill2, c.experience, c.games[0], c.games[1], c.games[2],
                          c.league_goals, c.cup_goals, c.other_goals, c.bonus_a, c.bonus_b, c.age, c.position, c.flags);
         std::fprintf(stderr, "\n");
+        if (std::getenv("EM_DEBUG_IMAGEVAL")) {
+            std::fprintf(stderr, "image values day %d:", day_);
+            for (const ContractPlayer& c : image_squad) {
+                BorlandRandom probe = brng_;
+                std::fprintf(stderr, " %ld/%ld", player_worth(contracts_, c, Worth::Value, probe), c.value);
+            }
+            std::fprintf(stderr, "\n");
+        }
     }
     return club_image(in, image_squad, contracts_, brng_);
 }
@@ -3315,7 +3323,7 @@ void Game::rest_for_national_match() {
         for (size_t slot = 0; slot < squad.size() && slot < size_t(kHokSquadSlots); slot++) {
             const size_t at = squad_block(m) + slot * kSquadRecord;
             if (save_.state.at(at + 0x0F) == 0) continue;
-            const uint8_t f = m == national_coach_ ? uint8_t(90) : rested_fitness(save_.state.at(at + 0x13));
+            const uint8_t f = m == national_coach_ && !(national_out_ && !std::getenv("EM_OLD_WMOUTREST")) ? uint8_t(90) : rested_fitness(save_.state.at(at + 0x13));
             save_.state.at(at + 0x1B) = f;
             squad[slot].fitness = f;
         }
@@ -3345,6 +3353,13 @@ void Game::play_wm_day() {
     // a WM day rests the squads of the managers who are not national coach like a EuroCup day without them: fitness from
     // the load; the squad routine of the WM branch trains afterwards (REAL-CODE Köln period 37: after the last WM day the
     // fitness stands one load step higher than the formula of the final load)
+    {
+        national_out_ = false;
+        if (national_coach_ >= 0 && wm_round_ >= 6 && wm_slots_.size() >= 8) {
+            const int own = save_.state.at(0x068C);
+            national_out_ = std::find(wm_slots_.begin(), wm_slots_.begin() + 8, own) == wm_slots_.begin() + 8;
+        }
+    }
     if (!std::getenv("EM_OLD_WMREST")) rest_for_national_match();
     // ovr038:3649: without a human national coach (manager 5 club 0xFD) the first WM day rolls the strengths of the own
     // nation (DS:06AC): per kind skill1 rand(84,94), skill2 rand(79,89), form rand(45,55); the manager index DS:A70E/A70D

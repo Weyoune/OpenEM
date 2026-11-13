@@ -550,6 +550,7 @@ private:
     LineRotation national_rotation_;
     std::vector<HokSquadPlayer>* live_national_ = nullptr;  // the working national squad of a running national match (live line-up)
     std::array<bool, 29> national_played_{};  // slots taken off by a live line-up change (their appearance stays booked)
+    bool national_out_ = false;  // the coach's nation is out after the quarter-finals (the WM days after them)
     HumanSquad* live_national_human_ = nullptr;  // the national HumanSquad of a running national match (live tactics)
     PenaltyTimers national_timers_;  // DS:D096 row of the national coach (not saved; zero after loading)
     std::array<GroupTable, 2> euro_groups_{};
