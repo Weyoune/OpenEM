@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Sponsor offers, contract renewal, stadium score and club image; see sponsors.hpp.
 #include "game/sponsors.hpp"
 
 #include <algorithm>
@@ -6,7 +7,8 @@
 namespace em {
 
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // file offset of the EM.EXE data segment, see schedule.cpp
+// Offsets of the sponsor constants within the data segment.
 constexpr size_t kKindFactor = 0x4F05, kEconomy = 0x02C0, kStadiumWeight = 0x4F9C;
 }  // namespace
 
@@ -85,7 +87,7 @@ bool sponsor_renews(const AdRecord& contract, int image, BorlandRandom& rng) {
 }
 
 long stadium_score(const SponsorTables& t, const std::array<int, 9>& stadium, const std::array<int, 2>& places) {
-    // unsigned 16-bit arithmetic of the original (REAL-CODE test): places * 3 wraps at 65536 (above 21845 places)
+    // unsigned 16-bit arithmetic of the original: places * 3 wraps at 65536 (above 21845 places)
     const uint16_t half = uint16_t(uint16_t(places[0] * 3) / 2);
     long s = std::min(long(uint16_t(half + uint16_t(places[1])) / 2), 50000L);
     for (size_t i = 0; i < 9; i++) {
@@ -108,8 +110,10 @@ ImageCompetitionFactors image_competition_factors(const HokFile& save, int manag
                save.teams[size_t(team)].raw[0x16] == manager + 1;
     };
     auto group = [&](int kind, int index, int round) {
-        // ovl05_27a5 suppresses unformed relegation/final groups. Its first
-        // three schedule rows also describe return dates with sides reversed.
+        // Is the manager's club in group `index` of competition `kind` (1 relegation round,
+        // 2 European cup groups, 3 European cup final group) in `round`? Groups that are not
+        // formed yet count as empty, as in the original. The first three schedule rows also
+        // describe the return dates with the sides reversed.
         if (round < 0 || round >= 6 || (kind == 1 && state[0x03B6] == 0xFF) ||
             (kind == 3 && state[0x8F86] < 6)) return false;
         const size_t at = 0x03B8 + size_t(kind * 0x48 + index * 0x24 + (round % 3) * 6);
@@ -120,7 +124,7 @@ ImageCompetitionFactors image_competition_factors(const HokFile& save, int manag
     const int playoff_game = state[0x0259];
     const int relegation_round = state[0x8F87] * 2 + (playoff_game != 0) + (playoff_game > 2);
     factors.playoffs = group(1, 0, relegation_round) || group(1, 1, relegation_round);
-    // The param_2=1 query includes a drawn play-off participant even when
+    // The play-off query includes a drawn play-off participant even when
     // that particular series is already decided; the next bracket removes it.
     for (size_t slot = state[0x03B6]; slot < 32; slot++) {
         const int team = state[0x8E91 + slot];
@@ -141,6 +145,8 @@ ImageCompetitionFactors image_competition_factors(const HokFile& save, int manag
 }
 
 namespace {
+// The image formula of sponsors.hpp; `value(slot)` yields the market value of squad slot 0..count-1
+// (and may draw random numbers itself).
 template <class Value>
 int calculate_club_image(const ImageInputs& in, size_t count, Value value, BorlandRandom& rng) {
     const int lg = std::clamp(in.league, 0, 2);

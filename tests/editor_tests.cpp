@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Tests of the asset editor logic (no window): drawing tools, undo/redo, saving with backup.
+// Tests of the asset editor logic (no window): drawing tools, undo/redo, saving with backup (.bak), tile and
+// sprite sheets and the panel picture (editor/pixel_editor.cpp), the palette editor (editor/palette_doc.cpp),
+// palette sources, image import, the hall map editor (editor/map_doc.cpp) and the team editor for the club
+// database KB\23.vga (editor/team_doc.cpp).
+//
+// Usage: editor_tests [DATA] — DATA is the original game folder; the needed KB files are copied into a temporary
+// folder, so the original files are never written. Without DATA the test is skipped.
 #include <cstdio>
 #include <filesystem>
 
@@ -13,8 +19,10 @@ namespace fs = std::filesystem;
 using namespace em;
 using namespace em::editor;
 
+// Number of failed CHECKs.
 static int failures = 0;
-#define CHECK(cond)                                                                    \
+// Reports a failed condition with file and line and counts it, without stopping the test.
+#define CHECK(cond)                                                                   \
     do {                                                                               \
         if (!(cond)) {                                                                 \
             std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \

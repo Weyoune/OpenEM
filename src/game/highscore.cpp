@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Highscore score, file records and merge (see highscore.hpp), plus Game::highscore_record, which
+// supplies the random parts (club image and squad market values) from the running game.
 #include "game/highscore.hpp"
 
 #include <algorithm>
@@ -9,20 +11,23 @@
 
 namespace em {
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // file offset of the EM.EXE data segment (see schedule.cpp)
+// HOK state offsets: manager blocks, team names (0x3D bytes each).
 constexpr size_t kManagers = 0x0DCD, kManagerSize = 0x1AF, kTeams = 0x17E7, kTeamSize = 0x3D;
-constexpr size_t kTeamRecords = 0x3BA5, kTeamRecordSize = 0x50;  // DS:8257
-constexpr size_t kShares = 0x30, kPrices = 0xB0;                   // DS:D214, DS:D0F4
-constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618;
+constexpr size_t kTeamRecords = 0x3BA5, kTeamRecordSize = 0x50;  // per-team season records (table place, WM results)
+constexpr size_t kShares = 0x30, kPrices = 0xB0;                   // share holdings, share price history (x3)
+constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618;  // squad blocks
+// Highscore file number, WM-only flag, national team index, career year.
 constexpr size_t kFileNumber = 0x06AE, kWmOnly = 0x025A, kNationalTeam = 0x068C, kCareerYear = 0xB951;
 
 long s32(const Bytes& b, size_t o) { return long(int32_t(le32(b, o))); }
+// A NUL-terminated string of at most `n` bytes.
 std::string cstring(const uint8_t* p, size_t n) {
     size_t len = 0;
     while (len < n && p[len]) len++;
     return std::string(reinterpret_cast<const char*>(p), len);
 }
-// ovl12_0d27(manager, 0)
+// Number of occupied squad slots of manager m (player index +0x0F != 0).
 int count_players(const Bytes& s, int m) {
     int n = 0;
     for (int i = 0; i < 0x1D; i++)
@@ -64,7 +69,7 @@ HighscoreTables load_highscore_tables(const Bytes& exe) {
 int highscore_file_number(const HokFile& h) { return int16_t(le16(h.state, kFileNumber)); }
 uint32_t highscore_game_identity(const HokFile& h) { return le32(h.header, 0xB4); }
 std::filesystem::path highscore_file_name(int number) {
-    // DOS keeps three extension characters: the WM-only list 30000 (DS:0256 = 7530h) is H.300.
+    // DOS keeps three extension characters: the WM-only list 30000 (0x7530) is H.300.
     return std::filesystem::path("HIGH") / ("H." + std::to_string(number).substr(0, 3));
 }
 
@@ -84,7 +89,7 @@ long highscore_base(const HighscoreTables& t, const HokFile& h, int m, int image
         const long claim = s32(s, manager_block(j) + 0x19B + 4 * size_t(m));
         if (claim < 0) w -= claim;
     }
-    long own = 0;  // ovr039:02E8(0, 99)
+    long own = 0;  // the manager's own debts to the other human managers and the bank
     for (int j = 0; j < 5; j++) {
         if (j == m || (j >= managers && j != 4)) continue;
         const long claim = s32(s, M + 0x19B + 4 * size_t(j));
@@ -184,7 +189,9 @@ HighscoreTable read_highscore_table(const Bytes& bytes) {
     return t;
 }
 
-// Native page entry for manager m: the image (ovl08_2893) and the market values draw random numbers in this order.
+// Highscore record of `manager` as the highscore page computes it: first the club image (stored
+// in the manager state), then the market values of the occupied squad slots; both draw random
+// numbers from the game generator, in this order.
 HighscoreRecord Game::highscore_record(int manager, const HighscoreTables& tables) {
     if (manager < 0 || manager >= managers_) throw FormatError("highscore: invalid manager");
     mgr_[size_t(manager)].image = current_club_image(manager);

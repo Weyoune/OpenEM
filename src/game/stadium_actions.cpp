@@ -1,17 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Stadium actions of the active manager (Game members declared in game/game.hpp): the ticket price
+// and the two-step construction dialog (quote with random construction time and discount, then
+// accept or decline). Rules for quotes and prices: game/stadium.hpp.
 #include "game/game.hpp"
 #include "game/manager_layout.hpp"
 
 namespace em {
 namespace {
+// Stores a little-endian 32-bit value.
 void put32(Bytes& b,size_t at,uint32_t n){for(int i=0;i<4;++i)b.at(at+size_t(i))=uint8_t(n>>(8*i));}
 }
-// The stadium actions act for the active manager (docs/MEHRSPIELER_PLAN.md step 5).
+// The stadium actions act for the active manager.
+// Sets the ticket price (10..30, manager block +0xE4); false if out of range or unchanged.
 bool Game::set_ticket_price(int price){
     const int a=active_manager_;const size_t manager=manager_block(a);
     if(price<10||price>30||price==mgr_[a].budget.ticket_price)return false;
     mgr_[a].budget.ticket_price=price;save_.state.at(manager+0xe4)=uint8_t(price);return true;
 }
+// First step of a construction: refused while the item's refusal gate is set (Blocked), when the quote is not
+// available or not affordable. Otherwise draws the construction time from the item's week range (stored at block
+// +0x128 + item), sets the refusal gate and draws the discount: rand(0, 10) percent, but 0 when rand(0, 2) == 0.
 StadiumBuildResult Game::begin_stadium_build(int item,int target,StadiumBuildDraft& draft){
     const int a=active_manager_;const size_t manager=manager_block(a);
     if(item<0||item>=11)return StadiumBuildResult::Invalid;
@@ -29,6 +37,10 @@ StadiumBuildResult Game::begin_stadium_build(int item,int target,StadiumBuildDra
     draft={item,quote.target,weeks,discount,quote.nominal_cost};
     return StadiumBuildResult::Prepared;
 }
+// Second step: returns false for a draft that no longer matches the state, and on decline (which clears the stored
+// weeks but leaves the refusal gate set until the daily random reset clears it). On accept the gate is cleared, the discounted price is
+// debited (32-bit wrap-around), the construction time becomes weeks + rand(0, 4) - 2 and the target level (or the
+// new place total) is recorded as under construction.
 bool Game::finish_stadium_build(const StadiumBuildDraft& draft,bool accept){
     const int a=active_manager_;const size_t manager=manager_block(a);
     if(draft.item<0||draft.item>=11||draft.discount<0||draft.discount>10)return false;

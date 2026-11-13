@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Team record refresh before strength screens and its Game entry points; see team_refresh.hpp.
 #include "game/team_refresh.hpp"
 #include "game/game.hpp"
 #include <algorithm>
@@ -21,8 +22,8 @@ TeamRefreshCounts refresh_menu_team(HokFile& h,int manager){
         int occupied=0;
         for(int slot=0;slot<(roster==4?12:29);slot++)
             occupied+=h.state.at(base+size_t(slot)*52+15)!=0;
-        //33B6/16BF do not reject ID0 inside this prefix. Removal can leave
-        //old role/line/skill bytes there; ID0 uses the preceding global record.
+        // The original does not reject ID 0 inside this prefix. A removal can leave old
+        // role/line/skill bytes there; ID 0 uses the dummy record before player 1.
         HokPlayer zero;zero.position=h.state.at(0x4FA5+24);
         const int zero_index=int(players.size());players.push_back(zero);
         for(int slot=0;slot<occupied;slot++){
@@ -78,6 +79,8 @@ TeamRefreshCounts refresh_menu_team(HokFile& h,int manager){
     return counts;
 }
 
+// Runs refresh_menu_team on a decoded copy and copies the refreshed team fields back into the save and its decoded
+// model; then the cached line counts and team strength of every human manager follow.
 void Game::refresh_menu_manager(int manager){
     HokFile next=decode_hok(save_bytes());
     const int id=next.state.at(0x0DCD+size_t(manager)*0x1AF+0x14);
@@ -98,11 +101,13 @@ void Game::refresh_menu_manager(int manager){
         mg.budget.team_strength=team.skill1[0]+team.skill1[1]+team.skill2[0]+team.skill2[1];
     }
 }
+// Entering the strengths screen refreshes the teams of all human managers and of the national coach (block 5).
 void Game::enter_strengths(){
     const int managers=save_.state.at(0x0DC6);
     if(managers<1||managers>4)throw FormatError("Team refresh: invalid human count");
     for(int manager=0;manager<6;manager++)if(manager<managers||manager==5)refresh_menu_manager(manager);
 }
+// Entering the club info of `team` refreshes it if a manager holds it.
 void Game::enter_club_info(int team){
     if(team<0||team>=150)throw FormatError("Team info: invalid team");
     const int owner=save_.teams.at(size_t(team)).raw[0x16];

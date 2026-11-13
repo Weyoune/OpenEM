@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Team schedule of the club info box (see classic_team_schedule.hpp).
 #include "ui/classic_team_schedule.hpp"
 
 #include <algorithm>
@@ -8,28 +9,35 @@
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
+// Save state: league pairings (12 bytes per league), displayed date (u32 day, month - 1, year), season day
+// (u32), season year (u16), next league round per league (one byte each).
 constexpr size_t kPairings=0x8dfd,kDate=0x8e21,kDay=0x8e2d,kYear=0x8e31,kNext=0x8f80;
 
+// Bounds-checked pointer into the save state.
 const uint8_t* bytes(const HokFile& h,size_t at,size_t count) {
     if (at>h.state.size() || count>h.state.size()-at)
         throw FormatError("classic team schedule: truncated native state");
     return h.state.data()+at;
 }
+// League of a domestic team: 0..11 Bundesliga, 12..23 Zweite Liga, everything else up to 51 Oberliga.
 int league_of(int team) {
     if (team<0 || team>=52) throw FormatError("classic team schedule: invalid domestic team");
-    return team<12 ? 0 : team<24 ? 1 : 2; //4996:5AA5 /2
+    return team<12 ? 0 : team<24 ? 1 : 2;
 }
+// Number padded to width with the blank digit '%'.
 std::string number(int value,int width=2) {
     auto result=std::to_string(value);
     if (value>=0 && int(result.size())<width) result.insert(0,size_t(width-int(result.size())),'%');
     return result;
 }
+// The six pairings of league round round (1-based) from the 12-team round-robin table of EM.EXE (11 rows of
+// letters 'a'..'l'), as team indices of league.
 std::array<HokPairing,6> pairings(const ScheduleTables& tables,int league,int round) {
     const auto& source=tables.for_size(12);
     if (source.size()!=11 || round<1 || round>255)
         throw FormatError("classic team schedule: invalid native round table");
-    //The original EXE table is trusted by DOS. Reject malformed host inputs
-    //before the shared zero-based helper could index beyond a source row.
+    // The original trusts the table in EM.EXE. Reject malformed input here
+    // before the shared zero-based helper could index beyond a source row.
     for (const auto& row:source) {
         if (row.size()!=12) throw FormatError("classic team schedule: truncated round row");
         std::array<bool,12> seen{};
@@ -45,21 +53,24 @@ std::array<HokPairing,6> pairings(const ScheduleTables& tables,int league,int ro
         out[i]={generated[i].home+league*12,generated[i].away+league*12};
     return out;
 }
+// Calendar index of the round-th day whose event byte has a bit of mask set. The original tests a bit, so
+// the 0xFF section marker counts as well; Calendar::nth_day/league_day have different semantics and must not
+// substitute for this exact lookup.
 int calendar_day(const SeasonCalendar& calendar,int mask,int round) {
-    //1238:2349 tests a BIT, includingFF. Calendar::nth_day/league_day have
-    //different semantics and must not substitute for this exact lookup.
     for (size_t day=0;day<calendar.events.size();++day)
         if ((calendar.events[day]&mask) && --round==0)
-            return int(static_cast<uint8_t>(day)); //1F35 deliberately stores AL
+            return int(static_cast<uint8_t>(day)); // the original keeps only the low byte of the index
     throw FormatError("classic team schedule: calendar has no requested league round");
 }
+// Date of season day argument (0 = the current season day) in the save's season year.
 GameDate native_date(const HokFile& h,uint32_t argument) {
     uint32_t day=argument ? argument : le32(h.state,kDay);
-    if (day==2000) day=0; //4F6E:1295..12AA special sentinel
+    if (day==2000) day=0; // 2000 is a sentinel for day 0
     if (day>uint32_t(std::numeric_limits<int>::max()-252))
         throw FormatError("classic team schedule: season day outside host date range");
     return date_of_season_day(int(day),le16(h.state,kYear));
 }
+// Team name: up to 22 bytes, ending at the first NUL.
 std::string raw_name(const uint8_t* team) {
     size_t count=0; while (count<22 && team[count]) ++count;
     return {reinterpret_cast<const char*>(team),count};
@@ -67,14 +78,16 @@ std::string raw_name(const uint8_t* team) {
 void put32(Bytes& state,size_t at,uint32_t value) {
     for (size_t i=0;i<4;++i) state[at+i]=uint8_t(value>>(i*8));
 }
+// Writes the displayed date (day, month - 1, year as u32) and mirrors it into h.date.
 void set_date(HokFile& h,const GameDate& date) {
     (void)bytes(h,kDate,16);
     put32(h.state,kDate,uint32_t(date.day));
     put32(h.state,kDate+4,uint32_t(date.month-1));
     put32(h.state,kDate+8,uint32_t(date.year));
     h.date.day=date.day; h.date.month=date.month; h.date.year=date.year;
-    h.date.day_index=int(le32(h.state,kDay)); //counter itself is never written
+    h.date.day_index=int(le32(h.state,kDay)); // the day counter itself is never written
 }
+// Writes the six pairings of league into the save state and the decoded copy.
 void set_pairings(HokFile& h,int league,const std::array<HokPairing,6>& pairs) {
     const size_t at=kPairings+size_t(league)*12;
     (void)bytes(h,at,12);
@@ -84,6 +97,7 @@ void set_pairings(HokFile& h,int league,const std::array<HokPairing,6>& pairs) {
     }
     h.pairings[size_t(league)]=pairs;
 }
+// A standard 57 x 12 button at (x, 215); its corners keep the page underneath.
 void button(ClassicCanvas& c,int x,std::string_view text) {
     constexpr int y=215;
     const std::array<uint8_t,4> corner{c.pixels().at(x,y),c.pixels().at(x+56,y),
@@ -101,7 +115,7 @@ ClassicTeamSchedule classic_team_schedule(const HokFile& h,const ScheduleTables&
     ClassicTeamSchedule out;
     out.league=league_of(team);
     const int next=*bytes(h,kNext+size_t(out.league),1);
-    if (!next) return out; //1B65..1B70: no paint, calendar or pairing access
+    if (!next) return out; // like the original: no paint, calendar or pairing access
     out.available=true;
     out.half=half<0 ? int(next>22) : half;
     out.native_round_button=out.half ? "1.Runde " : "2.Runde ";
@@ -126,12 +140,14 @@ ClassicTeamSchedule classic_team_schedule(const HokFile& h,const ScheduleTables&
                     target.color=cell.color;
                     const auto* opponent=bytes(h,0x17e7+size_t(target.opponent)*61,61);
                     target.native_name=raw_name(opponent);
+                    // table place (league table row +0x31) and the average of the six strength bytes
                     const int position=*bytes(h,0x3bd6+size_t(target.opponent)*80,1)+1;
                     int strength=0; for (size_t k=0;k<6;++k) strength+=opponent[0x18+k];
                     target.native_place_strength=number(position)+". ("+number(strength/6)+")";
                 }
                 cell.played=round<next;
                 if (cell.played) {
+                    // league results: 0x210 bytes per league, 12 per round, (home, away) as signed bytes
                     const auto* score=bytes(h,0x0796+size_t(out.league)*0x210+size_t(round-1)*12+i*2,2);
                     const int own=int(static_cast<int8_t>(score[cell.home ? 0 : 1]));
                     const int other=int(static_cast<int8_t>(score[cell.home ? 1 : 0]));
@@ -142,8 +158,8 @@ ClassicTeamSchedule classic_team_schedule(const HokFile& h,const ScheduleTables&
                     out.last_preview_date=date;
                     cell.native="?:"+number(date.day)+"."+number(date.month)+".";
                 }
-                //The original increments SI only after the second found cell.
-                //Teams36..51 are outside the generated36 clubs and yield no rows.
+                // The original advances the line only from the second found cell on.
+                // Teams 36..51 are outside the 36 league clubs and yield no rows.
                 if (matched>1) y+=8;
             }
         }
@@ -157,7 +173,7 @@ void draw_classic_team_schedule(ClassicCanvas& c,const HokFile& h,const Schedule
     if (!view.available) return;
     c.rect(96,96,301,229,4);
     button(c,103,"Reicht mir"); button(c,173,"Info");
-    //Exact first-pass/page-change clear extends3px beyond the body rectangle.
+    // The original's clear on first draw and page change extends 3 px beyond the body rectangle.
     c.rect(230,105,304,229,4);
     button(c,243,view.native_round_button);
     c.text_native(mini,108,104,"GEGNER",1);
@@ -179,7 +195,7 @@ bool prepare_classic_team_schedule_working(HokFile& working,const ScheduleTables
     const SeasonCalendar& calendar,int team,int half) {
     const auto view=classic_team_schedule(working,tables,calendar,team,half);
     if (!view.available) return false;
-    //Validate all destinations before committing either native working field.
+    // Validate all destinations before writing either working field.
     (void)bytes(working,kPairings+size_t(view.league)*12,12);
     if (view.last_preview_date) (void)bytes(working,kDate,16);
     set_pairings(working,view.league,view.last_pairings);

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// VOC and CMF decoders and the CMF sequencer that drives the OPL2 model like the original FM driver (see sound.hpp).
 #include "formats/sound.hpp"
 
 #include <algorithm>
@@ -166,8 +167,9 @@ CmfSong decode_cmf(const Bytes& d) {
 // ---------------------------------------------------------------- sequencer
 
 namespace {
-constexpr int kModOffset[9] = {0, 1, 2, 8, 9, 10, 16, 17, 18};
-// SBFMDRV fnum table (seg011:0305): 768 entries for one octave, 64 per semitone, from 0x157 (C) up to 0x2AD.
+constexpr int kModOffset[9] = {0, 1, 2, 8, 9, 10, 16, 17, 18};  // modulator register offset per voice
+// The driver's fnum table: 768 entries for one octave, 64 per semitone, from 0x157 (C) up to 0x2AD; computed here
+// from its exponential shape instead of being stored.
 int driver_fnum(int fine) { return int(343.4 * std::exp2(fine / 768.0)); }
 // SBFMDRV level for a note-on velocity (added to the carrier total level).
 int velocity_attenuation(int velocity) {
@@ -203,7 +205,7 @@ void CmfSequencer::set_instrument(int voice, const CmfInstrument& ins, int veloc
 }
 
 void CmfSequencer::set_frequency(int voice, int note, int ch, bool key) {
-    // SBFMDRV: block from the note table at seg011:0285 (block = note / 12 - 1, 0..7), fine pitch with transposition
+    // as in SBFMDRV: block from the driver's note table (block = note / 12 - 1, 0..7), fine pitch with transposition
     int fine = note * 64 + transpose_[ch] / 2;  // transpose in 1/128 semitone
     fine = std::clamp(fine, 0, 127 * 64);
     const int semitone_fine = fine % 768;
@@ -311,6 +313,7 @@ void CmfSequencer::run_to(uint32_t tick) {
     tick_ = tick;
 }
 
+// Advances the song by clock_rate / rate ticks per output sample and resamples the chip output (kRate) linearly.
 bool CmfSequencer::render(float* out, size_t frames, int rate) {
     const double ticks_per_sample = double(song_.clock_rate) / rate;
     const double chip_per_sample = double(Opl2::kRate) / rate;

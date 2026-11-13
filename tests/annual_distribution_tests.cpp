@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Annual redistribution of computer-club players at the season change (game/annual_distribution.cpp):
+// choosing a target club for a player (quality gates, widening thresholds, retry counter), the cyclic
+// weighted target cursors, rebalancing clubs that lack players, the foreign-player quota recount and the
+// exact order of all random draws in the season-change pass. Most cases run on a synthetic state with a
+// scripted random source that checks every draw's range; the last block checks the quotas of three
+// reference saves of the original.
+//
+// Usage: annual_distribution_tests REFERENCES (folder with START.HOK, SAISEND.HOK and NEUSAIS.HOK)
 #include "game/annual_distribution.hpp"
 #include "game/annual_players.hpp"
 #include <algorithm>
@@ -6,16 +14,26 @@
 #include <stdexcept>
 using namespace em;
 namespace {
+// Throws with message `text` when `v` is false.
 void require(bool v,const char* text){if(!v)throw std::runtime_error(text);}
+// State offset of the global player record `id` (1..199, 33 bytes each). Fields used here:
+// +21/+22 skills, +23 form, +26 status, +29 club (255 = none).
 size_t p(int id){return 0x4fa5+size_t(id)*33;}
+// State offset of the team record `id` (61 bytes each). +22 is the "managed by a human" byte, +24..+27 the
+// four quality values the target choice compares.
 size_t t(int id){return 0x17e7+size_t(id)*61;}
+// A zeroed 47761-byte save state with 199 club-less players of status 6 and skills/form 60, and 150 teams
+// whose four quality bytes are 65.
 Bytes blank(){
     Bytes state(47761,0);
     for(int id=1;id<=199;++id){state[p(id)+29]=255;state[p(id)+26]=6;state[p(id)+21]=state[p(id)+22]=state[p(id)+23]=60;}
     for(int team=0;team<150;++team)std::fill_n(state.begin()+std::ptrdiff_t(t(team)+24),4,uint8_t(65));
     return state;
 }
+// One expected random draw: the inclusive range the code must ask for and the value to return.
 struct Draw{int low,high,value;};
+// A scripted random source: draw() checks each request against the next expected Draw and returns its value;
+// done() checks that every expected draw was consumed.
 struct Script {
     std::vector<Draw> calls;size_t cursor=0;
     int draw(int low,int high){require(cursor<calls.size(),"no additional allocation draw");const auto d=calls[cursor++];require(low==d.low&&high==d.high,"exact original allocator range and order");return d.value;}
@@ -84,8 +102,8 @@ int main(int argc,char** argv){try{
         require(state==expected&&cursors==(DistributionCursors{8,0,0}),"post-change quota129: two incumbents plus127 moves; only global club bytes change");
         require(annual_distribution_quotas(state)==(std::array<int,4>{129,0,0,0}),"actual foreign4 is recounted after all random switches");
     }
-    { // 1238:13A1 as a whole: 398 skill draws (1238:1359), then rand(5,15) and
-        // per change rand(1,179) plus the 1238:1838 target draws, nothing between.
+    { // The whole season-change pass: 398 skill draws of the global skill pass, then rand(5,15) for the number
+        // of club changes and per change rand(1,179) for the player plus the target-club draws, nothing between.
         auto state=blank();Script script;
         for(int id=1;id<200;++id){script.calls.push_back({1,7,id==5?7:4});script.calls.push_back({1,7,id==5?1:4});}
         script.calls.push_back({5,15,5});

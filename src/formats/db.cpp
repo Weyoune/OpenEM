@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Decoder and byte-preserving encoder for the names in KB\23.vga (layout in db.hpp).
 #include "formats/db.hpp"
 
 #include <algorithm>
@@ -6,12 +7,13 @@
 namespace em {
 
 namespace {
-constexpr size_t kClubs = 0x4AD;
-constexpr size_t kClubRecord = 0x20B;
+constexpr size_t kClubs = 0x4AD;      // offset of the first club record
+constexpr size_t kClubRecord = 0x20B;  // size of a club record (club name + 25 player records)
 constexpr size_t kClubName = 23;     // flag + 22 characters
 constexpr size_t kPlayerRecord = 20;  // flag + 19 characters
-constexpr size_t kEuropeRecord = 23;
+constexpr size_t kEuropeRecord = 23;  // European club name: 22 characters + NUL
 
+// Text of at most `len` bytes at `off`, up to the first zero byte, converted to UTF-8.
 std::string text(const Bytes& d, size_t off, size_t len) {
     std::string raw;
     for (size_t i = off; i < off + len && d[i] != 0; i++) raw += char(d[i]);
@@ -22,6 +24,7 @@ std::string text(const Bytes& d, size_t off, size_t len) {
 constexpr size_t kEurope = kClubs + kDbClubs * kClubRecord + 1;
 }  // namespace
 
+// European names are read record by record up to the end of the file; empty records are skipped.
 Database decode_db(const Bytes& d) {
     if (d.size() != kDbSize) throw FormatError("DB: KB\\23.vga must be 36648 bytes");
     Database db;
@@ -48,6 +51,9 @@ Database decode_db(const Bytes& d) {
 }
 
 namespace {
+// Stores `utf8` as ISO 646-DE in a field of `width` bytes, zero padded. An empty text either zeroes only the first
+// byte (`clear_only_first`: a deleted player name keeps its hidden text) or the whole field. Throws FormatError
+// when the text does not fit or contains characters the game cannot show.
 void put_text(Bytes& d, size_t off, size_t width, const std::string& utf8, bool clear_only_first) {
     if (utf8.empty()) {
         if (clear_only_first) d[off] = 0;
@@ -79,7 +85,9 @@ Bytes encode_db(const Bytes& original, const Database& db) {
                 put_text(out, o + 1, kPlayerRecord - 1, nc.players[p].name, true);
         }
     }
-    if (db.europe_clubs.size() == old.europe_clubs.size()) {  // fixed table of 23-byte records: 22 characters + NUL
+    // European names are only written when the list still has its original length (records cannot be added or
+    // removed); fixed table of 23-byte records: 22 characters + NUL
+    if (db.europe_clubs.size() == old.europe_clubs.size()) {
         for (size_t i = 0; i < db.europe_clubs.size(); i++) {
             if (db.europe_clubs[i] == old.europe_clubs[i]) continue;
             if (db.europe_clubs[i].empty()) throw FormatError("DB: European club name must not be empty");

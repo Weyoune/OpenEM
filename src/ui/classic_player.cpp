@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Player detail modal (see classic_player.hpp). Reads the player record and the squad record of the save state.
 #include "ui/classic_player.hpp"
 
 #include <algorithm>
@@ -8,8 +9,11 @@
 namespace em::ui {
 namespace {
 constexpr auto kMini = ClassicFontId::Mini;
+// Save-state layout: player table (33-byte records, id 1 at 0x4FC6) and the squads (52-byte slots, 30 per
+// manager, 0x618 bytes per squad, starting at 0x696D).
 constexpr size_t kPlayers = 0x4fc6, kPlayerSize = 33, kSquads = 0x696d, kSquadSize = 52;
 
+// Bounds-checked pointer to length bytes at offset at of the save state.
 const uint8_t* record(const HokFile& h, size_t at, size_t length) {
     if (at > h.state.size() || length > h.state.size() - at)
         throw FormatError("classic player: truncated native record");
@@ -18,6 +22,8 @@ const uint8_t* record(const HokFile& h, size_t at, size_t length) {
 unsigned word16(const uint8_t* p) { return unsigned(p[0]) | unsigned(p[1]) << 8; }
 uint32_t word32(const uint8_t* p) { return uint32_t(word16(p)) | uint32_t(word16(p + 2)) << 16; }
 
+// Decimal text of value, optionally with '.' thousands separators; non-negative values are left-padded to
+// width with '%', the font's blank digit-wide glyph.
 std::string number(int64_t value, int width, bool grouped = false) {
     std::string result = std::to_string(value);
     if (grouped) {
@@ -30,14 +36,17 @@ std::string number(int64_t value, int width, bool grouped = false) {
     return result;
 }
 
-//4495:339A substitutes this original literal for numeric zero.
+// A count of at least two digits; zero is shown as "%-" (blank digit and a dash), as in the original.
 std::string counter(int64_t value, bool grouped = false) {
     return value ? number(value, 2, grouped) : "%-";
 }
 
+// Deterministic market value of a squad slot r with player record p, in internal units (3 units = 1 DM).
+// Weighted score: strength 58, goals 4, games 4, trend (Tendenz) 5, the penalty bytes r[0] * 6 + r[1] 4 and
+// youth 25 (each part capped and scaled to its weight), times 5000, minus 50000 above 55000; a flagged (0x80) player counts 160 %, then
+// * 10 / 3, a goalkeeper (p[0x18] == 0) * 1.6, rounded down to a multiple of 3000.
+// The random branch of the game's valuation is quoted by the caller instead of inventing a seed.
 int64_t market_value(const uint8_t* r, const uint8_t* p) {
-    //5F7C:3D36, mode0, original DS5312 weights58,4,4,5,4,25.
-    //The random branch is quoted by the caller instead of inventing a seed.
     if ((r[9] & 0x80) && r[0x16] <= 63)
         throw FormatError("classic player: native random market quote required");
     int64_t value = ((int(r[0x10]) + r[0x11]) / 2) * 58 / 100;
@@ -56,9 +65,10 @@ int64_t market_value(const uint8_t* r, const uint8_t* p) {
     return value / 3000 * 3000;
 }
 
+// One labelled scale of the modal at (x, y): eight coloured bands and a vertical indicator at value
+// (clamped to 1..94). The stripes are a scale with an indicator; they are not a progress bar filled up to
+// the assessed value.
 void meter(ClassicCanvas& canvas, int x, int y, const char* label, int value) {
-    //1238:0AF5:the stripes are a scale, with a vertical indicator; they
-    //are not a progress bar filled up to the assessed value.
     constexpr std::array<uint8_t, 8> colors{16, 17, 18, 19, 15, 14, 13, 12};
     canvas.text(kMini, x + 47, y + 1, label, 1, -1, x + 47);
     canvas.rect(x + 1, y + 3, x + 99, y + 13, 1);
@@ -69,6 +79,7 @@ void meter(ClassicCanvas& canvas, int x, int y, const char* label, int value) {
     canvas.line(x + value + 1, y + 4, x + value + 1, y + 12, colors[size_t(value / 12)]);
 }
 
+// The "Aha !" button (KB4 sprite at 168,208); its four corner pixels keep the page underneath.
 void aha_button(ClassicCanvas& canvas) {
     constexpr int x = 168, y = 208;
     const std::array<uint8_t, 4> corners{canvas.pixels().at(x, y), canvas.pixels().at(x + 56, y),
@@ -101,7 +112,7 @@ void draw_classic_player(ClassicCanvas& canvas, const HokFile& h, int player,
     const uint8_t* p = record(h, kPlayers + size_t(id - 1) * kPlayerSize, kPlayerSize);
     const int64_t assessed = rawMarketQuote ? *rawMarketQuote : market_value(r, p);
     const bool own = h.state.at(0x0dcd + size_t(manager) * 0x1af + 0x14) == p[0x1d];
-    const int level = h.state.at(0xaeb4); //original DS0ED8
+    const int level = h.state.at(0xaeb4); // game level; below 3 the market value of foreign players is hidden
     const auto name = iso646de_to_utf8(reinterpret_cast<const char*>(p), 18);
 
     canvas.frame(89, 55, 9, 9);

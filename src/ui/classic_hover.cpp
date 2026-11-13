@@ -1,14 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Footer help of the squad lists (contracts, line-up, transfer pages): when
+// the mouse is over a column of a player row, the game prints an
+// explanation of that column in the footer, partly with the player's
+// values, and marks the row with two rules. The help texts and column
+// widths are read from the user's EM.EXE.
 #include "ui/classic_hover.hpp"
 
 #include <algorithm>
 
 namespace em::ui {
 namespace {
+// kDgroup: file offset in EM.EXE of the game's data segment (0x1E00-byte MZ
+// header + 0x14FD0), which holds the help texts, the text pointer table and
+// the column widths; "data offset" below means relative to it. Save state:
+// squads of the
+// managers at 0x696D (0x618 bytes each, 52-byte player records), global
+// player records of 33 bytes at 0x4FC6 (indexed by 1-based player id).
 constexpr size_t kDgroup = 0x16dd0, kSquads = 0x696d, kSquadStride = 0x618;
 constexpr size_t kRecord = 52, kPlayers = 0x4fc6, kPlayerRecord = 33;
+// Columns shown by a list (bit n = column n present) and its right edge.
 struct Layout { uint32_t mask; int right; };
 
+// Column layout of each squad list.
 Layout layout(ClassicRosterKind kind) {
     switch (kind) {
     case ClassicRosterKind::Contracts: return {0x3d146, 255};
@@ -24,15 +37,17 @@ const uint8_t* record(const HokFile& h, size_t at, size_t length) {
     return h.state.data() + at;
 }
 
+// NUL-terminated name of at most 18 bytes.
 std::string name(const uint8_t* p) {
     size_t length = 0;
     while (length < 18 && p[length]) ++length;
     return std::string(reinterpret_cast<const char*>(p), length);
 }
 
+// The game's uppercase conversion: ASCII letters plus the three code page
+// 437 umlauts ü, ä, ö. The ISO 646 braces used for umlauts elsewhere stay
+// unchanged; a Unicode uppercase operation would differ.
 std::string uppercase(std::string text) {
-    //645B:0C8E: ASCII letters plus three CP437 aliases. ISO646 braces
-    //remain unchanged; a Unicode uppercase operation would differ.
     for (char& c : text) {
         uint8_t byte = uint8_t(c);
         if (byte >= 'a' && byte <= 'z') byte -= 32;
@@ -45,6 +60,8 @@ std::string uppercase(std::string text) {
 }
 }
 
+// Reads the 18 column widths (signed bytes at data offset 0x39F) and caches
+// the help texts that are reached through far pointers in the data area.
 ClassicRosterHelp::ClassicRosterHelp(const Bytes& exe) : exe_(exe) {
     if (exe_.size() < kDgroup + 0x50c7 || le16(exe_, 0) != 0x5a4d)
         throw FormatError("classic hover: incompatible EM.EXE layout");
@@ -53,8 +70,9 @@ ClassicRosterHelp::ClassicRosterHelp(const Bytes& exe) : exe_(exe) {
         if (widths_[field] <= 0)
             throw FormatError("classic hover: invalid native field width");
     }
-    // Cache all normal branches; pointer() still handles the original
-    // unguarded trend/status-table arithmetic with bounded EXE reads.
+    // Cache all normal branches; pointer() still handles the game's
+    // unchecked index arithmetic into the trend/status tables with bounded
+    // reads from the executable.
     for (int p = 0x984; p <= 0x9d4; p += 4) strings_.emplace(p, pointer(p));
     for (int p = 0xa00; p < 0xa70; p += 4) strings_.emplace(p, pointer(p));
     for (int p : {0x960, 0x964, 0xb80, 0xb84, 0xb88, 0xb8c, 0xb90, 0xb94,
@@ -62,6 +80,7 @@ ClassicRosterHelp::ClassicRosterHelp(const Bytes& exe) : exe_(exe) {
         strings_.emplace(p, pointer(p));
 }
 
+// NUL-terminated string stored directly at data offset `offset`.
 std::string ClassicRosterHelp::literal(int offset) const {
     if (offset < 0 || size_t(offset) > exe_.size() - kDgroup)
         throw FormatError("classic hover: invalid literal offset");
@@ -71,6 +90,9 @@ std::string ClassicRosterHelp::literal(int offset) const {
     return std::string(exe_.begin() + std::ptrdiff_t(at), end);
 }
 
+// String referenced by the far pointer (u16 offset, u16 segment) stored at
+// data offset `offset`; the segment is relative to the end of the 0x1E00-byte
+// MZ header.
 std::string ClassicRosterHelp::pointer(int offset) const {
     const auto cached = strings_.find(offset);
     if (cached != strings_.end()) return cached->second;
@@ -84,6 +106,15 @@ std::string ClassicRosterHelp::pointer(int offset) const {
     return std::string(exe_.begin() + std::ptrdiff_t(target), end);
 }
 
+// Rows are 6 pixels high starting at y = 29; the column is found by adding
+// the widths of the list's columns from x = 7. Squad record fields used:
+// +0x09 bits 0..1 the status shown in column 14, +0x0A a status flag, +0x0C
+// loan flag, +0x0D a count printed for status 1, +0x0E a value graded in
+// steps of 13 from 30, +0x0F player id,
+// +0x10..+0x12 the three values averaged for column 7, +0x13 (shown as
+// *10/15 on the line-up page), +0x15 (bits 0..6 a count shown in column 0),
+// +0x17 index into a text table. Global record: name at +0, age at +0x14,
+// +0x18 graded in steps of 25.
 ClassicRosterHover classic_roster_hover(const HokFile& h, int manager,
     ClassicRosterKind kind, int x, int y, const ClassicRosterHelp& help) {
     const auto geometry = layout(kind);
@@ -106,8 +137,8 @@ ClassicRosterHover classic_roster_hover(const HokFile& h, int manager,
     }
     ClassicRosterHover result{int(row), field, {}};
     const uint8_t* r = squad + size_t(row) * kRecord;
-    // The native helper does not reject a gap's ID0. Its one-based far
-    // pointer then refers to the preceding33 bytes; keep that bounded read.
+    // The game does not reject an empty slot's id 0. Its one-based index
+    // then refers to the preceding 33 bytes; keep that read, bounded.
     const auto global = [&] {
         const size_t at = size_t(int64_t(kPlayers) + (int(r[15]) - 1) * int64_t(kPlayerRecord));
         return record(h, at, kPlayerRecord);
@@ -153,6 +184,8 @@ ClassicRosterHover classic_roster_hover(const HokFile& h, int manager,
     return result;
 }
 
+// Clears the footer (y 210..218, colour 4), prints the help text and, if
+// drawRules, the two rules above and below the row in colour 16.
 void draw_classic_roster_hover(ClassicCanvas& canvas, ClassicRosterKind kind,
     const ClassicRosterHover& hover, bool drawRules) {
     const auto geometry = layout(kind);

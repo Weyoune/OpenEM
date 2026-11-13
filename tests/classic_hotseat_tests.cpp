@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Hot seat with two managers (src/ui/classic_hotseat.cpp): pixel comparison with captures of the original in
-// dosbox-automation (work/exp/hotseat_20261110) and a run of several menu days through the UI.
+// Hot seat with two managers (src/ui/classic_hotseat.cpp): pixel comparison with reference images of the original
+// (REFERENCE_DIR/raster_goldens), offers between the two managers, and a run of several menu days through the UI.
 //
 // HOT2.HOK is the state of the original after a new game with two managers ("anna", EHC Freiburg, face 4; "bert",
-// SC Preussen Berlin, face 6) and its first match day, read from the running program's memory through
-// re/out/hok_layout.csv at anna's menu of Wednesday 13.09.1993. The captures: anna's menu (main_m0_d1), bert's menu
-// after anna's crest (main_m1_d1) and bert's lineup page (lineup_m1_d1); the start menu with both rows (start2).
+// SC Preussen Berlin, face 6) and its first match day, taken at anna's menu of Wednesday 13.09.1993. The reference
+// images: anna's menu (main_m0_d1), bert's menu after anna's crest (main_m1_d1) and bert's lineup page
+// (lineup_m1_d1); the start menu with both rows (start2).
+//
+// Usage: classic_hotseat_tests DATA REFERENCE_DIR OUTPUT
+// Failed checks are counted; the test fails at the end if any did. EM_DUMP_MISMATCH=<folder> writes the canvas
+// of every differing picture as .bmp.
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include <chrono>
@@ -19,12 +23,16 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
+// A screen rectangle excluded from a comparison.
 struct Rect { int left, top, right, bottom; };  // right/bottom exclusive
 
+// Throws with `message` when `condition` is false.
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+// Number of pixels outside `skip` in which the canvas differs from the raw 320 x 240 RGB reference image
+// `golden`; prints the bounding box of the differences and optionally dumps the canvas (EM_DUMP_MISMATCH).
 size_t differences(const ClassicCanvas& canvas, const fs::path& golden, const std::vector<Rect>& skip = {}) {
     const auto expected = read_file(golden);
     require(expected.size() == 320 * 240 * 3, "native RGB golden size");
@@ -54,11 +62,13 @@ size_t differences(const ClassicCanvas& canvas, const fs::path& golden, const st
     return count;
 }
 
+// Name of `team` read from its raw team record (state 0x17E7, 0x3D bytes per team, zero-terminated, at most 22).
 std::string raw_team(const HokFile& h, int team) {
     std::string s;
     for (size_t k = 0; k < 22 && h.state.at(0x17E7 + size_t(team) * 0x3D + k); k++) s.push_back(char(h.state.at(0x17E7 + size_t(team) * 0x3D + k)));
     return s;
 }
+// Index of the club named `name` among the 48 league clubs; throws if there is none.
 int team_by_name(const HokFile& h, const std::string& name) {
     for (int t = 0; t < 48; t++)
         if (raw_team(h, t) == name) return t;
@@ -193,12 +203,12 @@ int main(int argc, char** argv) {
                 // masked: the pool hover rules of the original (stale from the bid click) and the hover help line, transfer-page
                 // details outside the hot seat
                 check(differences(app.canvas(), rgb("contract_hot3"), {{176, 52, 316, 53}, {176, 68, 316, 69}, {60, 210, 110, 220}}) == 0,
-                      "contract panel for MERK after bert's yes (at the top: ovl11_41db(record, slot, 0))");
+                      "contract panel for MERK after bert's yes (at the top, as in the original)");
                 app.click(40, 89, false);  // "Mach' ich!"
                 app.motion(40, 89);
                 app.draw();
                 // masked: MERK's last column (profile draws of the insertion, OpenEM's Borland stream is not the original's here) and
-                // the footer (the original pads the numbers to width 1 after the contract panel, DS:0374; hover line)
+                // the footer (after the contract panel the original keeps a number width of 1 for the footer; hover line)
                 check(differences(app.canvas(), rgb("after_buy_hot3"), {{148, 40, 154, 46}, {0, 218, 320, 240}}) == 0, "anna's transfer page after the purchase");
                 const Bytes s = decode_hok(app.session().game().save_bytes()).state;
                 const Bytes want = decode_hok(read_file(refs / "HOT3BUY.HOK")).state;
@@ -280,7 +290,7 @@ int main(int argc, char** argv) {
 
             app.click(282, 212, false);  // Los jetzt!
             check(!app.session().loaded(), "the cup question comes before the generator draws the cup");
-            // the DEB cup draw question "An Alle:" over the empty draw board (ovr029:4693..487F), pixel-equal to the original
+            // the DEB cup draw question "An Alle:" over the empty draw board, pixel-equal to the original
             app.motion(281, 213);
             app.draw();
             check(differences(app.canvas(), goldens / "cupq2.rgb") == 0, "cup draw question \"An Alle:\" at the start");
@@ -291,7 +301,7 @@ int main(int argc, char** argv) {
             const HokFile& h = g.save();
             check(raw_team(h, h.state.at(0x0DCD + 0x14)) == "EHC FREIBURG" && raw_team(h, h.state.at(0x0DCD + 0x1AF + 0x14)) == "SC PREUSSEN BERLIN",
                   "the chosen clubs, found by name in the generated world");
-            check(h.state.at(0x01EE) == 4 && h.state.at(0x01EF) == 6, "faces DS:0178 + m");
+            check(h.state.at(0x01EE) == 4 && h.state.at(0x01EF) == 6, "faces of manager m at state 0x01EE + m");
             check(!h.squad_of(1).empty() && h.squad_of(1).front().player > 0, "manager 1 has a squad");
             app.click(295, 55, false);
             check(app.session().active_manager() == 1 && !app.advancing(), "hand-over in the new game");

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// KB image and palette codec (see vga.hpp): classification, RLE decoding with the game's two-buffer layout for tall
+// images, palette expansion, and the greedy RLE packer used by all KB writers.
 #include "formats/vga.hpp"
 
 #include <algorithm>
@@ -33,8 +35,8 @@ Image decode_vga(const Bytes& d) {
     const size_t end = kHeader + le16(d, 4);
     size_t si = kHeader;
 
-    // Decodes one chunk into rows [first_row, last_row) and stops at the 0x80 end marker
-    // (FUN_1bbf_45c6, the memory-target path of the original decoder). Returns the number of
+    // Decodes one chunk into rows [first_row, last_row) and stops at the 0x80 end marker, like the
+    // original decoder when it unpacks into memory. Returns the number of
     // pixels written. The original does not check the destination size; we clip instead.
     auto chunk = [&](int first_row, int last_row) {
         size_t di = size_t(first_row) * img.width, n = size_t(last_row) * img.width, start = di;
@@ -55,7 +57,7 @@ Image decode_vga(const Bytes& d) {
         return di - start;
     };
 
-    // The loader (FUN_199f_098d) keeps images taller than 200 rows in two buffers: rows 0..199
+    // The game's loader keeps images taller than 200 rows in two buffers: rows 0..199
     // and the rest, each filled by one decoder call. The stream therefore holds one chunk per
     // buffer; the second chunk always starts at row 200, however much the first one produced.
     size_t produced;

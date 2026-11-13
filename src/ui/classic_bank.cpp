@@ -9,14 +9,32 @@
 #include <string_view>
 #include <utility>
 
+// The classic "Bank" screen (background KB image 152): the bank account and the loans between
+// human managers in the top row, the four share companies with holdings and the price chart
+// in the lower half, the totals on the right and, while a party is selected, the amount
+// prompt with its bar. Drawing only; input lives in the application.
+//
+// Save state used (raw money is DM x 3):
+//   0x0030 + m * 32 + c * 8   share holding of manager m in company c: +0 i32 purchase cost,
+//                             +4 u32 number of shares
+//   0x00B0 + c * 72           price history of company c: 36 u16 prices in DM, oldest first,
+//                             the last one (+70) is the current price
+//   0x0DCD + m * 0x1AF        manager block: +0 name (20 chars), +0x18F i32 account balance,
+//                             +0x19B i32[4] loan balance with each other manager
+//   0x0DC6                    number of human managers
+
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
+// Per-company colours: holding text, chart line, chart shadow.
 constexpr std::array<uint8_t,4> row_colors{14,22,17,9};
 constexpr std::array<uint8_t,4> line_colors{14,22,17,9};
 constexpr std::array<uint8_t,4> shadow_colors{12,8,16,27};
+// Company names (game text, '{' = ä).
 constexpr std::array<std::string_view,4> stock_names{"Herrenh{user","Play Time","Software 2000","KRON Soft"};
+// Signed i32 from the state.
 int64_t raw32(const Bytes& s, size_t p) { return int32_t(le32(s,p)); }
+// Thousands-grouped number with '.'; positive values padded to `width` with the '%' blank glyph.
 std::string number(int64_t value, int width = 1) {
     const bool negative = value < 0;
     std::string text = std::to_string(negative ? -value : value);
@@ -25,15 +43,19 @@ std::string number(int64_t value, int width = 1) {
     if (int(text.size()) < width) text.insert(0,size_t(width-int(text.size())),'%');
     return text;
 }
+// Raw money (DM x 3) as "<amount> DM".
 std::string money(int64_t raw, int width = 1) { return number(raw/3,width)+" DM"; }
+// Text colour by sign: negative 16, positive 12, zero 30.
 uint8_t sign_color(int64_t raw) { return raw < 0 ? 16 : raw > 0 ? 12 : 30; }
+// The 20-character name at the start of the manager block, as UTF-8.
 std::string manager_name(const Bytes& state, int manager) {
     const size_t at = 0x0DCD + size_t(manager)*0x1AF;
     return iso646de_to_utf8(reinterpret_cast<const char*>(state.data()+at),20);
 }
 
-// RAM line1BBF:3F45, zero error accumulator and inclusive endpoints.
-// The temporary plot is108x133; only106x130 pixels reach the screen.
+// The game's line routine: a Bresenham variant whose error accumulator starts at 0 (not at
+// half the major axis), drawing both endpoints; pixels outside the image are dropped. The chart
+// is drawn into a 108x133 buffer of which only 106x130 pixels reach the screen.
 void plot_line(Image& image, int x, int y, int end_x, int end_y, uint8_t color) {
     const int dx = std::abs(end_x-x), dy = std::abs(end_y-y);
     const int sx = end_x < x ? -1 : 1, sy = end_y < y ? -1 : 1;
@@ -50,8 +72,9 @@ void plot_line(Image& image, int x, int y, int end_x, int end_y, uint8_t color) 
     }
 }
 
-// 7027:1142 clips both endpoint heights to0..130 with signed integer
-// interpolation before drawing the two primary strokes and lower shadow.
+// One chart segment of `company` from (x - 3, previous_y) to (x, y). Both endpoint heights are
+// clipped to 0..130 by integer interpolation along the segment (skipped entirely when both lie
+// on the same side outside); then two strokes in the line colour and one shadow stroke below.
 void plot_segment(Image& image, int x, int y, int previous_y, int company) {
     int previous_x=x-3;
     if ((y>130 && previous_y>130) || (y<0 && previous_y<0)) return;
@@ -65,6 +88,10 @@ void plot_segment(Image& image, int x, int y, int previous_y, int company) {
     plot_line(image,previous_x,previous_y+2,x,y+2,shadow_colors[size_t(company)]);
 }
 
+// The share price chart at (134,107): 36 points per company, 3 pixels apart, at half scale.
+// The vertical window is chosen automatically to show as many points as possible; with a
+// company selected (0..3) its current price sits at the top edge instead. Throws FormatError
+// when no window shows any point.
 void stock_plot(ClassicCanvas& canvas, const Bytes& state, int selectedStock) {
     std::array<std::array<int,36>,4> prices{};
     int16_t sum=0;
@@ -74,8 +101,8 @@ void stock_plot(ClassicCanvas& canvas, const Bytes& state, int selectedStock) {
     }
     const int mean=sum/4;
     int best=0, offset=0;
-    // 17D3..182A counts points in the scale2 window. The stored winner
-    // is the candidate AFTER its +10 increment; retain that native quirk.
+    // Try windows from mean-200 to mean+200 in steps of 10 and count the points inside each.
+    // Quirk of the original kept: the stored winner is the candidate after its +10 increment.
     for (int candidate=std::max(mean-200,0);candidate<mean+200;) {
         int inside=0;
         for (const auto& row:prices) for (const int price:row) {
@@ -89,7 +116,7 @@ void stock_plot(ClassicCanvas& canvas, const Bytes& state, int selectedStock) {
     if (selectedStock>=0) offset=prices[size_t(selectedStock)][35]-130;
     Image plot{108,133};
     for (int company=0;company<4;++company) {
-        int previous=65; // native variable persists, but the first point is never drawn
+        int previous=65; // start value of the original; the first point never draws a segment
         for (int p=0;p<36;++p) {
             const int y=130-prices[size_t(company)][size_t(p)]/2+offset/2;
             if (p) plot_segment(plot,p*3,y,previous,company);
@@ -100,6 +127,17 @@ void stock_plot(ClassicCanvas& canvas, const Bytes& state, int selectedStock) {
 }
 }  // namespace
 
+// Draws the bank screen for `manager` (0..3). `selectedParty`: 0..3 another manager, 4 the bank,
+// 5..8 share company 0..3; it is outlined when `bankSelected`. With `showPrompt` the amount
+// prompt for that party is shown, for a deposit/sale (`deposit`) or a withdrawal/purchase,
+// with `amount` (raw money, or shares) drawn as a bar relative to the allowed limit.
+// Interest shown per month: bank 1% on savings, 4% on a loan; between managers 2.5%.
+// Bar limits: bank deposit up to the balance; bank withdrawal up to the larger of the savings
+// and a credit line of 6,000,000 raw (2 million DM) minus the positive entry stored for this
+// manager in manager block 4; lending to a manager up to the balance, at most 3,000,000 raw
+// minus what is already lent to him; borrowing up to the larger of what this manager has lent
+// to him and min(his balance, 3,000,000 raw minus what he has already lent to this manager);
+// shares: sell up to the holding, buy as many as the balance pays for.
 void draw_classic_bank(ClassicCanvas& canvas, const HokFile& snapshot, const ManagerBudget& budget,
                        int selectedParty, bool bankSelected, int64_t amount, bool deposit, int manager,bool showPrompt) {
     if (manager<0 || manager>=4 || selectedParty<0 || selectedParty>8)

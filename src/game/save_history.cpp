@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Save history (reload guard) of a session; see save_history.hpp.
 #include "game/save_history.hpp"
 #include <algorithm>
 

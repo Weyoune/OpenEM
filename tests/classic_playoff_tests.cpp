@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic play-off page (ui/classic_playoff.cpp): the bracket of quarterfinals, semifinals and
+// final with up to five legs per series, the centred frame, the hidden preview date of the next play-off day and
+// the explicit working date the page writes, the click areas of the club names, and the pages of real saves at
+// several points of the play-offs.
+//
+// Usage: classic_playoff_tests [DATA [REFERENCE]] — with DATA (EM.EXE and graphics) and REFERENCE (START, MONAT1,
+// POCHECK, POPOST, POSEMI1, POSEMIP and SAISEND .HOK) the real saves are checked as well.
+//
+// State fields used: 0x8E91 the play-off pairings (home, away; 0xFF = end), 0x03B6 the cursor of the current
+// round in that list, 0x8F87 the stage (0 quarter, 1 semi, 2 final), 0x0259 the game of the series, 0x0205 the
+// result history (two bytes per pairing, 14 bytes per leg; 100 ends a series; values above 30/60 carry flags).
 #include "ui/classic_playoff.hpp"
 #include <algorithm>
 #include <array>
@@ -8,10 +19,13 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `value` is false.
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
+// Writes `value` little-endian as 4 bytes at state offset `at`.
 void put32(HokFile& h,size_t at,uint32_t value) {
     for(size_t i=0;i<4;++i) h.state.at(at+i)=uint8_t(value>>(8*i));
 }
+// A state on 10.09.1993 without play-off pairings (cursor 0xFF) and clubs named "CLUB<n>".
 HokFile fixture() {
     HokFile h; h.state.assign(47761,0);
     put32(h,0x8e21,10);put32(h,0x8e25,8);put32(h,0x8e29,1993);
@@ -24,9 +38,11 @@ HokFile fixture() {
     }
     return h;
 }
+// A calendar with one play-off day (event 0x40) on day 150 and the end of season (0xFF) on day 232.
 SeasonCalendar calendar() {
     SeasonCalendar c;c.events.assign(233,0);c.events[150]=64;c.events[232]=255;return c;
 }
+// Sets stage, game and cursor and fills `count` pairings 0-1, 2-3, ... into the pairing list.
 void bracket(HokFile& h,int stage,int game,int cursor,int count) {
     h.state.at(0x8f87)=uint8_t(stage);h.state.at(0x259)=uint8_t(game);h.state.at(0x3b6)=uint8_t(cursor);
     for(int p=0;p<count;++p) {
@@ -34,15 +50,17 @@ void bracket(HokFile& h,int stage,int game,int cursor,int count) {
         h.state.at(0x8e92+size_t(p)*2)=uint8_t(2*p+1);
     }
 }
+// The empty bracket before the play-offs: placeholder frame, the hidden preview date, the Liga button and the
+// working date written by prepare_classic_playoff_working.
 void placeholder_and_explicit_date() {
     auto h=fixture();const auto c=calendar();const auto before=h.state;
     const auto v=classic_playoff_view(h,c);
     require(!v.available && v.rows.empty() && v.headings.empty() && v.pair_count==1 &&
             v.frame_top==70 && v.frame_rows==5 && v.native_title=="Play-Off Spiele",
-            "MONAT1/ASM empty bracket forces minimum count only for the native frame");
+            "empty bracket forces minimum count only for the native frame");
     require(v.preview_calendar_index==150 && v.preview_date && v.preview_date->day==6 &&
             v.preview_date->month==2 && v.preview_date->year==1994 && v.native_caption=="   6.2.",
-            "3D77 precedes placeholder: even an unavailable bracket constructs hidden February6 preview");
+            "date lookup precedes placeholder: even an unavailable bracket constructs hidden February6 preview");
     require(h.state==before && h.date.day==10,"raw view leaves canonical and derived dates untouched");
     require(classic_playoff_hit(v,136,201).action==ClassicPlayoffAction::Liga &&
             classic_playoff_hit(v,184,239).action==ClassicPlayoffAction::Liga &&
@@ -68,10 +86,11 @@ void placeholder_and_explicit_date() {
     try {(void)prepare_classic_playoff_working(h,SeasonCalendar{});} catch(const FormatError&) {rejected=true;}
     require(rejected && h.state==no_write,"missing future event fails before date mutation");
 }
+// Result legs of the quarterfinals, highlight of the managers' clubs and the click areas.
 void native_legs_and_hits() {
     auto h=fixture();h.state.at(0xb953)=210;bracket(h,0,3,0,4);
-    //Independent instruction edges: right flag overwrites left2 with1;
-    //100 ends this tie even if later bytes contain a plausible score.
+    // Edge cases of the original's decoding: the right flag overwrites the left flag 2 with 1;
+    // 100 ends this tie even if later bytes contain a plausible score.
     h.state.at(0x205)=62;h.state.at(0x206)=31;
     h.state.at(0x205+14)=100;h.state.at(0x206+14)=0;
     h.state.at(0x205+28)=9;h.state.at(0x206+28)=8;
@@ -103,6 +122,8 @@ void native_legs_and_hits() {
     require(classic_playoff_view(h,SeasonCalendar{}).rows[1].scores.empty(),
             "season-day218 Cup inclusion exception never applies to Play-off type2");
 }
+// Earlier rounds stay above the current one; the complete bracket of seven ties; flag decoding of large values
+// and rejection of invalid states.
 void old_rounds_and_final() {
     auto h=fixture();h.state.at(0xb953)=210;bracket(h,1,0,8,6);
     auto v=classic_playoff_view(h,SeasonCalendar{});
@@ -132,6 +153,7 @@ void old_rounds_and_final() {
     try {(void)classic_playoff_view(broken,SeasonCalendar{});} catch(const FormatError&) {rejected=true;}
     require(rejected,"incomplete native click-array row has no fabricated modal target");
 }
+// The page for real saves of the original before, during and after the play-offs.
 void originals(const std::filesystem::path& data,const std::filesystem::path& refs) {
     const auto c=load_season_calendar(read_file(data/"EM.EXE"));
     for(const char* file:{"START.HOK","MONAT1.HOK"}) {

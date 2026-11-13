@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Implementation of ClassicCanvas: the 320x240 indexed-colour framebuffer
+// that all classic-mode screens draw into, plus asset loading from the
+// user's KB/*.vga files and the mouse cursor read from EM.EXE.
 #include "ui/classic_canvas.hpp"
 #include <algorithm>
 #include <cstdlib>
 
 namespace em::ui {
 
+// Loads the base palette (KB/21.vga), the bitmap fonts and the mouse cursor.
+// The cursor lives in the data block of the game's graphics routines, which
+// starts at file offset 0xD9F0 of EM.EXE (see classic_font.cpp): at +0x563 is
+// the offset of the cursor descriptor (u16 width, u16 height, u16 offset of
+// the pixel data, all relative to that block), and at
+// +0x55F/+0x561 the signed hot-spot offsets (i16 dx, dy) applied when the
+// cursor is drawn. Only the 11x11 cursor of the known game version is
+// accepted; anything else throws FormatError.
 ClassicCanvas::ClassicCanvas(const std::filesystem::path& data)
     : data_(data), base_palette_(decode_palette(read_file(data / "KB" / "21.vga"))),
       palette_(base_palette_), font_(read_file(data / "EM.EXE")) {
@@ -71,7 +82,9 @@ void ClassicCanvas::rect(int left,int top,int right,int bottom,uint8_t color) {
     for(int y=top;y<=bottom;y++)for(int x=left;x<=right;x++)pixels_.at(x,y)=color;
 }
 void ClassicCanvas::line(int x0,int y0,int x1,int y1,uint8_t color) {
-    // Original1BBF:3F45 uses a zero accumulator, not half-error Bresenham.
+    // The original line routine starts its error accumulator at zero instead
+    // of the usual half step of Bresenham's algorithm; reproduced so the
+    // stepped pixels land exactly where the game puts them.
     const int dx=std::abs(x1-x0),sx=x0<x1?1:-1,dy=std::abs(y1-y0),sy=y0<y1?1:-1;
     int error=0;
     for(;;) {
@@ -93,8 +106,9 @@ void ClassicCanvas::frame(int x,int y,int columns,int rows) {
 }
 void ClassicCanvas::text(ClassicFontId face,int x,int baseline,std::string_view value,uint8_t color,int shadow,int right) {
     if(right>=0)x+=(right-x)/2-font_.measure(face,value)/2;
-    // Native wrapper1902:0885 uses opaque black index255 rather than the
-    // transparent key0 for black foreground/shadow ink.
+    // The game's text routine draws "black" ink (colour 0) with the opaque
+    // black palette index 255, because index 0 is the transparent key of the
+    // glyph blitter. The same substitution applies to the shadow.
     if(shadow>=0)font_.draw(pixels_,face,x+1,baseline+1,value,uint8_t(shadow==0?255:shadow));
     font_.draw(pixels_,face,x,baseline,value,color==0?255:color);
 }

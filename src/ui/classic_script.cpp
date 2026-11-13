@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Script runner for headless runs of the classic UI (command reference in classic_script.hpp). It drives a
+// ClassicApplication with a virtual clock and records failures, notices, dialogs and screens in a report.
 #include "ui/classic_script.hpp"
 
 #include <SDL.h>
@@ -14,33 +16,41 @@ namespace fs = std::filesystem;
 namespace em::ui {
 namespace {
 
+// The virtual UI clock in milliseconds; frames advance it, no wall time passes.
 uint64_t script_now = 1000;
 uint64_t script_clock() { return script_now; }
 
+// Installs the virtual clock for the duration of a run and removes it afterwards.
 struct ClockScope {
     ClockScope() { script_now = 1000; set_classic_clock(script_clock); }
     ~ClockScope() { set_classic_clock(nullptr); }
 };
 
+// A script failure that ends the run (bad command, unmet condition while playing, stuck UI).
 struct ScriptError : std::runtime_error { using std::runtime_error::runtime_error; };
 
+// Notice text with line breaks replaced by spaces, for the log.
 std::string one_line(std::string s) {
     std::replace(s.begin(), s.end(), '\n', ' ');
     return s;
 }
 
+// True for the notices OpenEM shows where a part of the UI is not implemented yet.
 bool is_gap_notice(const std::string& text) {
     for (const char* pattern : {"noch nicht", "nicht unterst", "nicht nachgebaut", "Kein weiterer eigener Spieltermin"})
         if (text.find(pattern) != std::string::npos) return true;
     return false;
 }
 
+// Executes one script against an application (which a `restart` command may replace).
 class Runner {
 public:
     Runner(ClassicApplication& app, const fs::path& output, std::ostream* trace, ClassicRestart restart)
         : app_(&app), output_(output), trace_(trace), restart_(std::move(restart)) {}
     ClassicApplication& app() { return *app_; }
 
+    // Runs all lines; a ScriptError or crash ends the run and is reported as a failure, as is every gap notice
+    // not announced with `known-gap`.
     ClassicScriptReport run(std::istream& script) {
         ClockScope clock;
         std::string line;
@@ -66,6 +76,7 @@ public:
 
 private:
     // --- reading the screen --------------------------------------------------------------------------------
+    // Short description of the current screen, modal, category and text for log lines.
     std::string describe() {
         const auto p = app().probe();
         std::string s = classic_screen_name(app().screen());
@@ -86,10 +97,12 @@ private:
         report_.failures.push_back("Zeile " + std::to_string(line_) + ": " + text);
         log("FEHLER: " + text);
     }
+    // year * 1000 + season day, -1 without a game; used to count days and detect a new season.
     long day_key() {
         if (!app().session().loaded()) return -1;
         return long(app().session().game().save().year) * 1000 + app().session().game().season_day();
     }
+    // Everything that changes when the UI moves on; play() fails when it stays the same too long.
     std::string progress_key() {
         const auto p = app().probe();
         return std::to_string(day_key()) + "|" + classic_screen_name(app().screen()) + "|" + p.modal + "|" + p.text + "|" +
@@ -97,6 +110,7 @@ private:
     }
 
     // --- driving the UI ------------------------------------------------------------------------------------
+    // Advances the virtual clock to until (at least 1 ms), ticks and draws one frame, counts days.
     void frame(uint64_t until) {
         script_now = std::max(script_now + 1, until);
         app().tick();
@@ -170,7 +184,7 @@ private:
             const bool yes = contract_count_ >= contracts_no_;
             contract_count_++;
             log(std::string("Vertragsfrage ") + p.text + ": " + (yes ? "Mach' ich!" : "Abbruch"));
-            click(yes ? 38 : 118, (p.slot < 12 ? 80 : 0) + 86, false);  // ovl11_41db sits low for the first twelve
+            click(yes ? 38 : 118, (p.slot < 12 ? 80 : 0) + 86, false);  // the contract panel sits low for the first twelve slots
         } else if (m == "player-detail") click(196, 214, false);
         else if (m == "title" || m == "cup-draw" || m == "cup-draw-key" || m == "game-end") click(160, 120, false);
         else if (m == "cup-page") click(160, 120, true);
@@ -228,6 +242,7 @@ private:
     }
 
     // --- conditions ----------------------------------------------------------------------------------------
+    // Evaluates one COND of the script language (see classic_script.hpp).
     bool condition(const std::string& c) {
         const auto p = app().probe();
         if (c == "idle") return idle();
@@ -251,6 +266,7 @@ private:
     }
 
     // --- commands ------------------------------------------------------------------------------------------
+    // SDL key code of a key name of the short form.
     static int key_code(const std::string& name) {
         if (name == "escape") return SDLK_ESCAPE;
         if (name == "return") return SDLK_RETURN;
@@ -259,11 +275,13 @@ private:
         if (name.size() == 1) return std::tolower(static_cast<unsigned char>(name[0]));
         throw ScriptError("Unbekannte Taste: " + name);
     }
+    // Integer value of name=... in an input-log line.
     static int field(const std::string& line, const std::string& name) {
         const auto at = line.find(name + "=");
         if (at == std::string::npos) throw ScriptError("Feld " + name + " fehlt: " + line);
         return std::stoi(line.substr(at + name.size() + 1));
     }
+    // Executes one script line.
     void command(const std::string& line) {
         std::istringstream in(line);
         std::string word;

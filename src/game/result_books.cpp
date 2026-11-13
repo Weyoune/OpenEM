@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Post-game bookings: series, head-to-head results and club records; see result_books.hpp.
 #include "game/result_books.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -9,14 +10,16 @@
 namespace em {
 
 namespace {
+// State offsets: current series per team, series records per manager, head-to-head blocks per manager.
 constexpr size_t kSeries = 0x9988, kSeriesRecord = 0x9EC8, kHeadToHead = 0x8F88;
+// State offsets: opponent of each club record (8 bytes per team) and the records (8 x u16 per team).
 constexpr size_t kRecordOpponents = 0x9F1C, kRecords = 0xA11C;
-constexpr int kSeriesTeams = 64;        // DS:B57B .. DS:BAB7
-constexpr int kFirstNationalTeam = 52;  // DS:06AD
+constexpr int kSeriesTeams = 64;        // teams with series, head-to-head rows and records
+constexpr int kFirstNationalTeam = 52;  // team index of the first national team
 }  // namespace
 
-// Series (shown on "Totale"): DS:B57B + team * 0x15 (state 0x9988), 7 kinds x {all, home, away}; the manager's
-// records at DS:BABB (state 0x9EC8). Kinds: won, lost, drawn, not won, not lost, without goal against,
+// Series (shown on "Totale"): state 0x9988 + team * 0x15, 7 kinds x {all, home, away}; the manager's
+// records at state 0x9EC8. Kinds: won, lost, drawn, not won, not lost, without goal against,
 // without goal scored.
 void book_series(Bytes& state, int team, int side, int goals_for, int goals_against) {
     if (team < 0 || team >= kSeriesTeams) return;
@@ -41,7 +44,7 @@ void book_head_to_head(Bytes& state, int home, int away, int home_goals, int awa
     auto put = [&](int opp, int side, int own, int against) {
         if (opp < 0 || opp >= kSeriesTeams) return;  // the block has 64 rows
         uint8_t* row = state.data() + kHeadToHead + size_t(manager) * 0x280 + size_t(opp) * 10;
-        // no clamping: the nibbles are shifted and truncated to a byte (REAL-CODE Köln period 277: 1:17 is stored as 0x11)
+        // no clamping: the counts are shifted and truncated to a byte as in the original (1:17 is stored as 0x11)
         const uint8_t v = std::getenv("EM_OLD_H2HCAP") ? uint8_t(std::min(against, 15) << 4 | std::min(own, 15)) : uint8_t((against << 4) | own);
         std::vector<uint8_t*> slots;  // the column, or both for nations and later teams
         if (opp < kFirstNationalTeam) {
@@ -63,8 +66,8 @@ void book_head_to_head(Bytes& state, int home, int away, int home_goals, int awa
     if (away == human_team) put(home, 1, away_goals, home_goals);
 }
 
-// ovl13_3e43, the club records of the opponent info (ovl13_12e5), for every club below 64. Per team (state
-// 0xA11C = DS:BD0F, 8 x u16; opponents at 0x9F1C = DS:BB0F, 8 bytes):
+// The club records shown in the opponent info, for every club below 64. Per team (state
+// 0xA11C + team * 16, 8 x u16; opponents at 0x9F1C + team * 8, 8 bytes):
 //   0 highest home win, 1 highest home defeat, 2 home goals scored, 3 home goals conceded,
 //   4 highest away win, 5 highest away defeat, 6 away goals scored, 7 away goals conceded.
 // A record keeps (a * wa) << 8 | b * wb of the game (a = home goals, b = away goals) and is replaced when

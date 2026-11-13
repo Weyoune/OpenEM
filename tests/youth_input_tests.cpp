@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Tests for the classic UI's youth funding screen. Part 1 renders the screen for five reference
+// positions (youth-*.hok) and compares it pixel by pixel with screens recorded from the original
+// game; rendering must not change the game. Part 2 opens the screen through the menu, checks that
+// keys and clicks just outside the row bands do nothing, then clicks through the same funding
+// edits as youth_actions_tests and requires each resulting save state to match the recorded one.
+// Arguments: the game data folder and the folder holding the reference saves and screens.
 #include "ui/classic_app.hpp"
 #include "game/checkpoint.hpp"
 #include <SDL.h>
 #include <cstdio>
 #include <stdexcept>
 using namespace em;using namespace em::ui;
+// Throws `s` as a test failure unless `v`.
 void require(bool v,const char* s){if(!v)throw std::runtime_error(s);}
+// Compares the 320x240 canvas with a reference screen stored as raw 24-bit RGB (row-major) and
+// fails with the number of differing pixels and the position of the first one.
 void native_rgb(const ClassicCanvas& canvas,const std::filesystem::path& path){
     const auto expected=read_file(path);const auto actual=canvas.argb();
     require(expected.size()==320*240*3,"native youth golden size");size_t count=0,first=0;
@@ -16,6 +25,7 @@ void native_rgb(const ClassicCanvas& canvas,const std::filesystem::path& path){
 int main(int argc,char** argv){try{
     if(argc!=3)throw std::runtime_error("youth_input_tests DATA NATIVE");
     const std::filesystem::path data=argv[1],native=argv[2];
+    // A rendered scene: reference position youth-<name>.hok and the mouse position.
     struct Scene{const char* name;int x,y;};
     const Scene scenes[]{{"entry",187,219},{"step",200,173},{"mixed",190,221},{"max",190,197},{"reduced",110,221}};
     int failures=0;
@@ -30,7 +40,7 @@ int main(int argc,char** argv){try{
     ClassicApplication app(data,native/"unused-saves",native/"youth-entry.hok");
     const auto before=app.session().game().checkpoint_bytes();
     app.click(40,100,false);app.click(187,219,false);
-    require(app.screen()==ClassicScreen::Youth&&app.session().game().checkpoint_bytes()==before,"original Manager3 route is RNG/state neutral");
+    require(app.screen()==ClassicScreen::Youth&&app.session().game().checkpoint_bytes()==before,"original Manager menu item 3 route is RNG/state neutral");
     app.key(SDLK_ESCAPE);app.text_input("a");
     require(app.screen()==ClassicScreen::Youth,"native youth ignores keyboard including Escape");
     for(int y:{167,178,191,202,215,226})app.click(319,y,false);

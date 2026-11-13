@@ -1,4 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Integration test of the classic UI application (ui/classic_app.cpp) driven by synthetic clicks and keys:
+// keyboard translation, training, saving and loading checkpoints, contracts, bank, league fixtures and the
+// play-off/promotion pages, advertising, the WM pages, strengths and club info with the team schedule, cup
+// and European cup pages, stock purchase, lineup and tactics, the transfer page, the save chooser preview and
+// a player purchase. Every route checks that pure viewing neither changes the game state nor draws random
+// numbers, and where reference saves or images of the original are present, that the working state or the
+// screen matches them exactly.
+//
+// Usage: classic_app_tests DATA REFERENCE OUTPUT
+//   DATA      folder with the original game files (EM.EXE, KB, ...)
+//   REFERENCE folder with the reference saves; optional extra references are looked up next to it
+//   OUTPUT    folder for the checkpoints the test writes (a fresh subfolder per run)
 #include "ui/classic_app.hpp"
 #include "ui/classic_keyboard.hpp"
 #include <SDL.h>
@@ -9,7 +21,10 @@
 namespace fs=std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `condition` is false.
 static void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
+// Compares the canvas with a reference image of the original (raw 320 x 240 RGB, 3 bytes per pixel) in every
+// pixel; does nothing when the reference file is not present.
 static void require_native_rgb(const ClassicCanvas& canvas,const fs::path& file){
     if(!fs::exists(file))return;
     const auto rgb=read_file(file);const auto pixels=canvas.argb();
@@ -187,7 +202,7 @@ int main(int argc,char** argv){
         require(wm.session().game().checkpoint_bytes()==wm_before,"WM preview date never leaks into canonical game or RNG");
         require(decode_hok(wm.native_ui_bytes()).state!=decode_hok(wm.session().game().save_bytes()).state,"WM end-round preview has an explicit working date");
         const auto wm_native=references.parent_path()/"exp"/"day_20261103"/"wm-monat1-final.hok";
-        if(fs::exists(wm_native))require(decode_hok(wm.native_ui_bytes()).state==decode_hok(read_file(wm_native)).state,"WM preview matches all47761 bytes of native DOSBox RAM");
+        if(fs::exists(wm_native))require(decode_hok(wm.native_ui_bytes()).state==decode_hok(read_file(wm_native)).state,"WM preview matches all47761 bytes of the original's state");
         wm.click(160,220,false);wm.draw();
         require(wm.canvas().argb()==wm_fixtures2,"WM Gruppe returns to the previous fixtures group");
         wm.click(0,0,true);

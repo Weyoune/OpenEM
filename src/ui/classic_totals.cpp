@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Totale page (see classic_totals.hpp). Offsets are into the save state; block is the manager block.
 #include "ui/classic_totals.hpp"
 
 #include <algorithm>
@@ -11,9 +12,10 @@
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini, flow = ClassicFontId::Flow;
+// Palette indices of the 13-step gradient used by the gauges.
 constexpr std::array<uint8_t, 13> gradient{16,17,18,10,11,8,22,23,24,25,26,27,28};
 
-// 199F:0164 uses the native '%' blank digit, not a normal space. Negative
+// Number text. The game pads with its '%' blank digit, not a normal space. Negative
 // numbers are not padded. Group separators count toward the width.
 std::string number(int64_t value, int width = 1, bool grouped = false) {
     const bool negative = value < 0;
@@ -25,8 +27,10 @@ std::string number(int64_t value, int width = 1, bool grouped = false) {
     return result;
 }
 
+// Series count; zero is shown as "%-".
 std::string series_number(int value) { return value ? number(value, 2) : "%-"; }
 
+// Underlined section heading.
 void heading(ClassicCanvas& canvas, int x, int y, std::string_view original) {
     // Source begins with '!'. The original underline measures length-1
     // bytes from that original pointer, rather than the visible substring.
@@ -36,6 +40,7 @@ void heading(ClassicCanvas& canvas, int x, int y, std::string_view original) {
     canvas.line(x + 1, y + 3, x + width - 1, y + 3, 1);
 }
 
+// Floor of the square root; -1 for negative input.
 int integer_sqrt(int value) {
     if (value < 0) return -1;
     int root = 0;
@@ -45,6 +50,8 @@ int integer_sqrt(int value) {
 
 int64_t signed32(const Bytes& state, size_t at) { return int32_t(le32(state, at)); }
 
+// Goals (or goals against) per game with one decimal for column 0 total, 1 home, 2 away, from the league
+// table row (games at +0x1E/+0x1F, goals at +0x16/+0x17, goals against at +0x1A/+0x1B of row 0x3BA8 + team * 80).
 std::string per_game(const Bytes& state, int team, int column, bool against) {
     const size_t row = 0x3BA8 + size_t(team) * 80;
     int games = 0, goals = 0;
@@ -72,7 +79,7 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
     canvas.frame(12, 201, 8, 2);
     canvas.frame(210, 0, 4, 12);
 
-    // DS4C24, thirteen packed12-bit colors, assigned to DS4C3E in reverse.
+    // The game's thirteen gradient colours (6-bit VGA DAC values), assigned to the gradient indices in reverse.
     constexpr std::array<std::array<int, 3>, 13> dac{{
         {0,48,0},{8,48,0},{16,48,0},{24,48,0},{32,48,0},{40,48,0},{48,48,0},
         {48,40,0},{52,32,0},{52,24,0},{52,16,0},{52,8,0},{52,0,0}
@@ -91,6 +98,8 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
         "GEWONNEN", "VERLOREN", "UNENTSCHIEDEN", "NICHT GEWONNEN", "NICHT VERLOREN",
         "OHNE GEGENTOR", "OHNE TORERFOLG", "TORE/SPIEL", "GEGENTORE/SPIEL"
     };
+    // Series: current series of the club (0x9988, 21 bytes per team) and the manager's record (0x9EC8,
+    // 21 bytes per manager), three bytes (G/H/A) per series; the last two rows are per-game averages.
     for (size_t row = 0; row < series_labels.size(); ++row) {
         const int y = 33 + int(row) * 8;
         canvas.text_native(mini, 19, y, series_labels[row], 1);
@@ -109,6 +118,8 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
         "TORE IN ]BERZAHL", "GEGENTORE IN ]BERZAHL", "TORE IN UNTERZAHL",
         "GEGENTORE IN UNTERZAHL", "]BERZAHL ERFOLG", "UNTERZAHL ERFOLG"
     };
+    // Power play: four u16 counters at block +0x177; the success rates divide by the counters at +0x17F and
+    // +0x181 (the stored values of rows 4 and 5).
     for (size_t row = 0; row < power_labels.size(); ++row) {
         const int y = 130 + int(row) * 8;
         canvas.text_native(mini, 19, y, power_labels[row], 1);
@@ -117,7 +128,7 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
             const int denominator = value;
             if (denominator) {
                 const int goals = le16(state, block + (row == 4 ? 0x177 : 0x17D));
-                // Native IMUL100 discards the high16 bits before division.
+                // The original's 16-bit multiplication by 100 discards the high bits before the division.
                 value = uint16_t(goals * 100) / denominator;
                 if (row == 5) value = 100 - value;
             } else value = row == 5 ? 100 : 0;
@@ -126,8 +137,9 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
         canvas.text_native(mini, 135, y, number(value, 3) + (row >= 4 ? "#" : ""), 30);
     }
 
-    // Native full monthly sums, including the existing single-player bank
-    // formulas. Other active human parties are read from the debt matrix.
+    // The original's full monthly sums, including the single-player bank formulas. Debts between human
+    // managers come from the debt matrix (block +0x19B, i32 per other manager); 2.5 % of a debt is the
+    // monthly interest.
     int64_t income = monthly_income(budget, true);
     int64_t expenses = monthly_expenses(tables, budget, true, true);
     int64_t debt = budget.bank < 0 ? -int64_t(budget.bank) : 0;
@@ -135,20 +147,22 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
     for (int party = 0; party < 4; ++party) {
         if (party == manager) continue;
         const int64_t principal = signed32(state, block + 0x19B + size_t(party) * 4);
-        // 56D1:179B checks the current manager against human_count, and
-        // reads the other party's reciprocal entry (including inactive
-        // parties). Debt/expense helper02E8 instead filters by party.
+        // For income the original checks the current manager against human_count and reads the other
+        // party's reciprocal entry (including inactive parties); the debt/expense side instead filters by
+        // party. Both quirks are kept.
         const int64_t reciprocal = signed32(state, 0x0DCD + size_t(party) * 0x1AF + 0x19B + size_t(manager) * 4);
         if (manager < human_count && reciprocal < 0) income -= reciprocal * 25 / 1000;
         if (party < human_count && principal < 0) {
             debt -= principal;
-            expenses -= principal * 25 / 1000;  // 7027:0843..0872
+            expenses -= principal * 25 / 1000;  // 2.5 % interest per month
         }
     }
+    // BENÖTIGTER SCHNITT: the yearly deficit (expenses - income) * 12, divided by 23, converted to DM and
+    // divided by the ticket price (with the original's 32-bit wrap of the yearly sum).
     const int64_t needed_raw = int32_t(uint32_t((expenses - income) * 12)) / 23;
     const int64_t needed = std::max<int64_t>(0, needed_raw * tables.money_den / tables.money_num / budget.ticket_price);
-    // 38BD leaves numeric width3 active through all right-hand values;
-    // only the monthly figures switch to8 at3BC9.
+    // Internal money as DM with thousands points. The original keeps its pad width through all right-hand
+    // values; only the monthly figures switch to width 8.
     auto money = [&](int64_t raw, int width = 2) {
         return number(raw * tables.money_den / tables.money_num, width, true) + " DM";
     };
@@ -186,8 +200,8 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
     for (int row = 0; row < 13; ++row)
         canvas.rect(218, 106 + row * 3, 298, 108 + row * 3, gradient[size_t(12 - row)]);
 
-    // 3DF2..3F82: plot center is break-even attendance/1000. Preserve
-    // the native signed16 variance accumulator and arithmetic truncation.
+    // Attendance plot of the home games (block +0xFE, thousands per game): the centre is the break-even
+    // attendance / 1000. Preserve the original's signed 16-bit variance accumulator and arithmetic truncation.
     const int center = int(needed / 1000);
     int minimum = 128, maximum = -127;
     int16_t squares = 0;
@@ -210,6 +224,7 @@ void draw_classic_totals(ClassicCanvas& canvas, const HokFile& snapshot,
 
     canvas.rect(223, 179, 293, 188, 0); canvas.outline(222, 178, 294, 189, 6);
     canvas.rect(223, 206, 293, 215, 0); canvas.outline(222, 205, 294, 216, 6);
+    // Gauges: balance from -2,450,000 in steps of 70,000 per pixel; total debt in steps of 25,000 (internal units).
     const int64_t full_debt = debt + std::max<int64_t>(0, -int64_t(budget.balance));
     for (int pixel = 0; pixel < 71; ++pixel) {
         if (budget.balance > -2450000 + int64_t(pixel) * 70000)

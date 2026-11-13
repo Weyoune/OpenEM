@@ -18,19 +18,30 @@
 #include <cstdio>
 #include <stdexcept>
 
+// Core of the classic UI (ClassicApplication, see classic_app.hpp): construction and the match
+// observer, the save snapshot the screens draw from, notices, autosave, the day advance with
+// the match display (replayed or live), input dispatch (click, release, key) and the main menu.
+// The individual screens live in the other classic_*.cpp files.
+
 namespace fs=std::filesystem;
 namespace em::ui {
 namespace {
 constexpr auto mini=ClassicFontId::Mini, flow=ClassicFontId::Flow;
-constexpr uint64_t kMatchBannerMs=900;
+constexpr uint64_t kMatchBannerMs=900;  // how long the "Ligaspiel" banner stays before the own league match
 constexpr uint64_t kChordMs=150;  // a left click on the board middle waits this long for the right button (both buttons)
+// Point-in-rectangle test with inclusive bounds.
 bool inside(int x,int y,int l,int t,int r,int b) {return x>=l&&x<=r&&y>=t&&y<=b;}
+// ASCII upper case.
 std::string upper(std::string s){for(char& c:s)c=char(std::toupper(static_cast<unsigned char>(c)));return s;}
-uint64_t (*ui_clock)()=nullptr;
+uint64_t (*ui_clock)()=nullptr;  // replacement clock of scripted runs; null = SDL ticks
 }
 uint64_t classic_ticks(){return ui_clock?ui_clock():SDL_GetTicks64();}
 void set_classic_clock(uint64_t (*clock)()){ui_clock=clock;}
 
+// Loads the EXE tables the UI needs, installs the match observer (which records one frame per
+// match minute, plus the cup table and league result pages the settings ask for) and the cup
+// draw handlers, then loads `initial` or opens the start menu (or the file dialog when no new
+// game can be started).
 ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::path& initial)
     :data_(std::move(data)),saves_(std::move(saves)),session_(data_),canvas_(data_),roster_help_(read_file(data_/"EM.EXE")),transfer_help_(read_file(data_/"EM.EXE")),calendar_(load_season_calendar(read_file(data_/"EM.EXE"))),schedule_(load_schedule_tables(read_file(data_/"EM.EXE"))) {
     session_.set_match_observer([this](const Game& game,int minute,const std::vector<LiveMatch>& matches){
@@ -38,14 +49,14 @@ ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::pa
         pending_match_frames_.push_back(classic_match_frame(game,minute,matches,game.match_attendance(),game.match_sold_out()));
         pending_match_frames_.back().settings_lamp=live_fast_;
         const bool cup_day=!pending_league_day_&&!(pending_event_&(kEventEuroCup|kEventWorldChampionship));
-        if(cup_day&&(minute==60||minute==65||minute==70)){  // ovl06_2522 -> ovl07_0eba after the regular time and each overtime part
+        if(cup_day&&(minute==60||minute==65||minute==70)){  // cup table after the regular time and each overtime part
             ClassicMatchFrame table=pending_match_frames_.back();table.cup_table=minute;table.cup=classic_cup_live(minute,matches);
             pending_match_frames_.push_back(std::move(table));
         }
         if(pending_league_day_&&(minute==20||minute==40||minute==60)){
-            // ovl06_2522 -> ovl07_0eba(7, league, minute) per league of the day: the Paarungen page with the running scores
-            // after a period (switch Drittelpause, DS:021D + 3 * league) and after minute 60 (Ergebnisse, + 1); not at
-            // Stufe 2 of the goal scenes with a board (DS:5A55)
+            // Per league of the day: the Paarungen page with the running scores after each period
+            // (setting "Drittelpause", settings flag 3 * league) and after minute 60 ("Ergebnisse",
+            // flag 3 * league + 1); not when goal scenes are at Stufe 2 and a board is shown.
             const GameSettings s=game.settings();
             const bool rink=s.flags[9]==2&&!pending_match_frames_.back().boards.empty();
             for(int league=0;league<3&&!rink;league++){
@@ -67,6 +78,11 @@ ClassicApplication::ClassicApplication(fs::path data,fs::path saves,const fs::pa
     if(session_.loaded())table_order_=session_.game().league(division_).ranking;
     if(!session_.loaded()){if(session_.can_start_new_game())open_start_menu();else open_files(false);}
 }
+// The save the screens draw from: the staged day during the season contract talks, else a
+// decoded copy of the game's save, re-decoded only when the session revision changed. While a
+// menu works on its own copy (menu_working_), that copy is returned; on a new revision it is
+// rebuilt from the save, keeping the menu's edited date bytes (state 0x8E21, 12 bytes) and
+// pairings of the shown league (0x8DFD + league * 12).
 const HokFile& ClassicApplication::snapshot(){
     if(season_view_)return *season_view_;  // the contract talks of the season change draw the staged day
     if(!view_||view_revision_!=session_.revision()){
@@ -85,17 +101,23 @@ const HokFile& ClassicApplication::snapshot(){
     return *view_;
 }
 Bytes ClassicApplication::native_ui_bytes(){return encode_hok(snapshot());}
+// Shows a notice box that waits for a click; stops a running day advance.
 void ClassicApplication::notice(std::string text){notice_=std::move(text);native_notice_until_.reset();advancing_=false;}
+// A notice that closes by itself; `return_main` goes back to the main menu (or the file
+// dialog without a game) afterwards.
 void ClassicApplication::timed_native_notice(std::string text,bool return_main){
     notice(std::move(text));native_notice_return_main_=return_main;
-    //199F:08C8 mode75 ->2115:019E divides by3, then waits25 BIOS ticks.
-    //PIT1193182Hz /65536 gives a rounded-up wall interval of1374ms.
+    // The original waits 75 / 3 = 25 BIOS timer ticks (1193182 Hz / 65536 each), which is
+    // 1374 ms rounded up.
     native_notice_until_=classic_ticks()+1374;
 }
+// Runs a game action through the session, drops the cached snapshot and shows the action's
+// message or error as a notice.
 void ClassicApplication::action(const std::function<ActionResult(Game&)>& fn){
     try{const auto result=session_.apply(fn);invalidate();if(!result.message.empty())notice(result.message);}
     catch(const std::exception& e){notice(e.what());}
 }
+// Writes a checkpoint to the first free AUTOnnnn.OEM in the save folder (never overwrites).
 void ClassicApplication::autosave(){
     if(!session_.loaded())return;
     for(int n=1;n<1000000;n++){
@@ -105,29 +127,32 @@ void ClassicApplication::autosave(){
     }
     throw FormatError("Kein freier Name für die automatische Sicherung.");
 }
+// The crest click: starts advancing days until the next own match (tick() does the work).
 void ClassicApplication::start_advance(){
     if(!session_.loaded())return;
-    if(wm_flag_blocked())return;  // ovr034:2372 (classic_wm_mode.cpp)
+    if(wm_flag_blocked())return;  // national coach with too few nominees (classic_wm_mode.cpp)
     if(hand_over_menu())return;  // hot seat (classic_hotseat.cpp): the next manager's menu before the day
     advancing_=true;advance_first_=true;advanced_days_=0;category_=-1;
 }
-// The match display (ovl06_2522): the day is computed at once by Session::advance_day, the observed minutes are shown afterwards.
-// The original shows them when the human club plays or the display switch of the competition is on (ovl06_161d).
+// The match display without a live pump: the day is computed at once by Session::advance_day, the observed minutes are
+// shown afterwards. The original shows them when the human club plays or the display switch of the competition is on.
 void ClassicApplication::prepare_match_view(bool human_match){
     pending_match_frames_.clear();pending_human_match_=human_match;
     pending_league_day_=session_.loaded()&&calendar_.league_day(session_.game().season_day()+1);
     pending_event_=session_.loaded()?calendar_.event(session_.game().season_day()+1):0;
     if(session_.loaded()&&!pending_league_day_)match_before_=std::make_unique<HokFile>(clone_hok(snapshot()));
 }
+// After the day: turns the recorded minute frames into the replay (if the display is wanted).
 void ClassicApplication::begin_match_view(){
     auto frames=std::move(pending_match_frames_);pending_match_frames_.clear();
     if(frames.empty()||!classic_match_display_wanted(session_.game(),pending_human_match_,pending_event_))return;
-    // FUN_162c_23c4 goal flashes between the minutes, then the board messages of ovl14_0690 (speed < 70; with goal scenes,
-    // DS:0226 = flag 9, only the final lines)
+    // Goal flashes between the minutes, then the board messages (speed < 70; with goal scenes,
+    // settings flag 9, only the final lines).
     const GameSettings settings=session_.game().settings();
     match_frames_=classic_board_messages(classic_goal_flashes(std::move(frames)),settings.speed,settings.flags[9],canvas_.data());match_frame_=0;replay_key_=false;
     match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[0],session_.game().settings().speed));
 }
+// Display speed: 70 with the quick switch on, else the speed of the settings.
 int ClassicApplication::live_speed() const{return live_fast_?70:session_.game().settings().speed;}
 // The frames of the observed minutes not shown yet: the goal flashes, board messages and goal scenes are derived from the
 // raw minute frames since live_base_ (a switch of the quick button starts a new base with the new speed / scene setting).
@@ -140,7 +165,7 @@ void ClassicApplication::append_live_frames(){
     if(first&&!match_frames_.empty()){match_frame_=0;match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[0],live_speed()));}
 }
 // Called by the minute observer while the day is played: show the minute, then hand the clicks of the minute to the
-// matches before the next one (ovl06_2522 reads the mouse at the start of every minute, ovl06_3856 writes the team record).
+// matches before the next one (the original reads the mouse at the start of every minute and writes the team record then).
 void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
     append_live_frames();
     live_wait_=false;
@@ -156,8 +181,8 @@ void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
         }
     }
     if(live_idle_){
-        // ovl06_2522 took the Einstellungen instead of this minute: no match plays it; speed and goal scenes are taken anew,
-        // the quick switch is off (ovl14_15c3(10, 0xE4, 0))
+        // The Einstellungen were opened instead of this minute: no match plays it; speed and goal scenes are taken anew,
+        // and the quick switch is turned off.
         live_idle_=false;
         for(const LiveMatch& m:matches)const_cast<MatchRun&>(*m.run).idle_next_minute();
         live_scenes_=session_.game().settings().flags[9];live_fast_=false;rebase_live();
@@ -176,8 +201,8 @@ void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
         }
     }
     live_orders_.clear();
-    g_goal_scenes=live_fast_?0:live_scenes_;  // DS:0226 while the quick switch is on (ovl06_3856)
-    g_match_speed=live_speed();  // DS:0262: the quick switch sets 70 (no message draws), the Einstellungen their speed
+    g_goal_scenes=live_fast_?0:live_scenes_;  // no goal scenes while the quick switch is on
+    g_match_speed=live_speed();  // the quick switch sets 70 (no message draws), the Einstellungen their speed
 }
 // A new processing base after a change of speed / goal scenes: the frames shown so far stay, the next ones follow the new setting.
 void ClassicApplication::rebase_live(){
@@ -186,6 +211,10 @@ void ClassicApplication::rebase_live(){
     live_out_=classic_board_messages(classic_goal_flashes(std::move(base)),live_speed(),live_fast_?0:live_scenes_,canvas_.data()).size();
     for(size_t i=match_frame_;i<match_frames_.size();i++)match_frames_[i].settings_lamp=live_fast_;
 }
+// A click during the live display: right skips the rest of the day's display; a left click on
+// a board may toggle the quick switch, queue an order (effort, offence, line) for the next
+// minute, or (board middle of the own club) start waiting for a second button. Returns false
+// when the click hit nothing on the board.
 bool ClassicApplication::live_click(int x,int y,bool right){
     if(right){live_skip_=true;match_frames_.clear();return true;}
     if(live_in_scene_)return true;  // a scene shown inside a minute (live_scene): the board waits for the minute end
@@ -193,22 +222,23 @@ bool ClassicApplication::live_click(int x,int y,bool right){
     if(!order)return false;
     if(order->quick){live_fast_=!live_fast_;rebase_live();}
     if(order->squad&&order->team==session_.game().human_team()){
-        // ovl14_24bc: the lineup of the clicked club with button 1, the tactics with both buttons (ovl06_2522 reads the button
-        // state once per minute); a left click waits a moment for the right button (click_both)
+        // The lineup of the clicked club with button 1, the tactics with both buttons (the original reads the button
+        // state once per minute); a left click waits a moment for the right button (click_both).
         live_centre_until_=classic_ticks()+kChordMs;return true;
     }
     if(order->team>=0&&(order->effort>=0||order->offence>=0||order->line[0]>=0||order->line[1]>=0))live_orders_.push_back(*order);
     return true;
 }
-// The middle of the own board (ovl14_24bc, mode DS:02D6 = 5): the lineup (button 1) or the tactics (buttons 1 + 2); the
+// The middle of the own board: the lineup (button 1) or the tactics (buttons 1 + 2); the
 // minutes wait until the screen is left, the running match takes the changes before the next minute (live_minute).
 void ClassicApplication::open_live_board_screen(bool tactics){
     live_centre_until_.reset();
     live_screen_=true;live_lineup_=true;live_screen_before_=screen_;
     if(tactics)open_tactics();else open_lineup();
 }
-// g_scene_replay during a live day (ovl14_1dc7): the minutes so far are shown, then this scene at once; r / w during it plays
+// g_scene_replay during a live day: the minutes so far are shown, then this scene at once; r / w during it plays
 // the chance again, and the simulation draws the next scene from the Borland stream like the original. Not at Stufe 2.
+// Returns 1 when a replay was requested, 0 when not, -1 when the scene is not shown live.
 int ClassicApplication::live_scene(const SceneCall& call,const GoalScene& drawn,int play){
     if(!live_day_||live_skip_||live_fast_||finished_||!pump_||live_scenes_!=1||live_screen_||pending_match_frames_.empty()||!call.home||!call.away)return -1;
     struct InScene{bool& flag;~InScene(){flag=false;}} in_scene{live_in_scene_};
@@ -245,13 +275,15 @@ void ClassicApplication::click_both(int x,int y){
     }
     click(x,y,false);
 }
+// Advances the match display by one frame when its time is up. Returns true while the display
+// is running (the caller then does nothing else this tick).
 bool ClassicApplication::tick_match_view(){
     if(match_frames_.empty())return false;
     const uint64_t now=classic_ticks();
-    if(match_frames_[match_frame_].waits())return true;  // the cup table waits for a click (FUN_199f_0118)
+    if(match_frames_[match_frame_].waits())return true;  // the cup table waits for a click
     if(now<match_frame_until_)return true;
     if(match_frames_[match_frame_].after_scene){
-        // ovl14_1dc7: after delay(20) a typed 'r' / 'w' plays the chance again (at most three plays); a scene shown at its
+        // After a short delay a typed 'r' / 'w' plays the chance again (at most three plays); a scene shown at its
         // chance answers the simulation, which draws the replay itself (live_scene)
         if(match_frames_[match_frame_].live_scene)live_replay_=replay_key_;
         else if(replay_key_){
@@ -263,10 +295,14 @@ bool ClassicApplication::tick_match_view(){
     if(match_frame_+1>=match_frames_.size()){if(live_day_){live_wait_=true;return true;}match_frames_.clear();return false;}
     match_frame_++;
     classic_sound_match_frame(match_frames_[match_frame_-1],match_frames_[match_frame_]);  // goal-scene sound (classic_sound.hpp)
-    // the last minute stays a moment (the original waits for the period end, FUN_199f_0118)
+    // the last minute stays a moment (the original waits there for the end of the display)
     match_frame_until_=now+uint64_t(classic_match_frame_ms(match_frames_[match_frame_],live_speed()))+(match_frame_+1==match_frames_.size()&&!live_day_?1000u:0u);
     return true;
 }
+// The UI timer, called every frame: closes timed notices, drives the cup draw and the match
+// display, opens the post-match tables and, while advancing, plays the next day (with the
+// league match banner, live display and season talks); stops before a day with an own match
+// after the first one and autosaves there.
 void ClassicApplication::tick(){
     if(native_notice_until_){
         if(classic_ticks()<*native_notice_until_)return;
@@ -311,7 +347,7 @@ void ClassicApplication::tick(){
         }
         if(++advanced_days_>370){notice("Kein weiterer eigener Spieltermin gefunden.");return;}
         prepare_match_view(match_day);
-        // ovl06_161d end: the leagues of the day whose switch Tabelle (DS:021F + 3 * league) is on show their table
+        // After the day, the leagues of the day whose setting "Tabelle" (flag 3 * league + 2) is on show their table
         post_tables_=0;
         if(pending_league_day_){
             const uint8_t leagues=calendar_.event(session_.game().season_day()+1)&kEventLeagueMask;
@@ -337,6 +373,8 @@ void ClassicApplication::tick(){
         }
     }catch(const std::exception& e){notice(e.what());}
 }
+// Runs a match-playing action (a national friendly) with the match display like a day: live
+// with the pump, else replayed afterwards. Returns whether the action was accepted.
 bool ClassicApplication::play_observed(const std::function<ActionResult(Game&)>& fn){
     pending_match_frames_.clear();
     pending_human_match_=true;pending_league_day_=false;pending_event_=kEventWorldChampionship;
@@ -357,8 +395,10 @@ bool ClassicApplication::play_observed(const std::function<ActionResult(Game&)>&
     pending_match_frames_.clear();live_skip_=false;
     return result.accepted;
 }
+// Window close: finishes or cancels whatever the open screen has pending (committing training
+// and tactics, cancelling a purchase) and asks the quit question.
 void ClassicApplication::request_exit(){
-    if(stadium_build_||native_notice_until_||sale_quote_)return; //native modal phases must finish
+    if(stadium_build_||native_notice_until_||sale_quote_)return; // these modal phases must finish first
     advancing_=false;
     if(screen_==ClassicScreen::Stadium)canvas_.set_button_edge(3);
     advertising_info_=false;if(advert_renewal_)resolve_advert_renewal(false);
@@ -373,6 +413,8 @@ void ClassicApplication::request_exit(){
     }
     notice_.clear();pending_notices_.clear();quit_question_=true;
 }
+// Opens the page of submenu `item` in the selected main-menu category (0 Finanzen/Verein,
+// 1 Mannschaft, 2 Statistiken, 3 Tabellen, 4 Paarungen, 5 Stärken, 6 Disk/Einstellungen).
 void ClassicApplication::route_submenu(int item){
     hover_kind_.reset();roster_hover_={};roster_rules_=false;
     transfer_hover_={};pool_rules_=pool_help_visible_=false;
@@ -398,11 +440,15 @@ void ClassicApplication::route_submenu(int item){
     }
     notice("Dieser Bereich ist noch nicht nachgebaut.");
 }
+// Opens the file dialog: saving starts in the save folder with "SPIEL.OEM", loading in the
+// data folder.
 void ClassicApplication::open_files(bool saving){
     save_mode_=saving;file_directory_=saving?saves_:data_;
     filename_=saving?"SPIEL.OEM":"";filename_focus_=false;file_selection_=-1;file_page_=0;
     file_preview_.reset();screen_=ClassicScreen::Files;refresh_files();
 }
+// The path as the DOS-style dialog shows it: the data folder appears as drive C:, the save
+// folder as D:, upper case with backslashes; other paths are just upper-cased.
 std::string ClassicApplication::virtual_file_path(const fs::path& path) const{
     for(const auto& root:{std::pair{data_,'C'},std::pair{saves_,'D'}}){
         const auto relative=path.lexically_normal().lexically_relative(root.first.lexically_normal());
@@ -413,6 +459,8 @@ std::string ClassicApplication::virtual_file_path(const fs::path& path) const{
     }
     return upper(path_text(path));
 }
+// Re-reads the current folder: ".", "..", then folders before files, sorted by name; .HOK and
+// .OEM files are marked as saves.
 void ClassicApplication::refresh_files(){
     files_.clear();
     files_.push_back({file_directory_,".",true,false});
@@ -426,6 +474,9 @@ void ClassicApplication::refresh_files(){
     std::stable_sort(files_.begin(),files_.end(),[](const FileEntry&a,const FileEntry&b){if(a.directory!=b.directory)return a.directory>b.directory;return a.name<b.name;});
     if(file_page_>=files_.size()&&file_page_)file_page_=0;
 }
+// Executes the file name field: enters a folder, or saves/loads the file (".OEM" / ".HOK" is
+// appended when there is no extension; "C:" and "D:" stand for the data and save folders).
+// Loading autosaves an unsaved running game first.
 void ClassicApplication::accept_file(){
     try{
         if(filename_.empty())return;
@@ -441,8 +492,8 @@ void ClassicApplication::accept_file(){
             if(session_.loaded()&&session_.dirty())autosave();
             session_.load(file);invalidate();close_start_menu();
         }
-        //Live load/save returns within the same native menu invocation.
-        //The selected category/footer survives; startup loading starts at-1.
+        // As in the original, loading or saving returns to the same main menu: the selected
+        // category survives (a load at startup begins with none selected).
         screen_=ClassicScreen::Main;
     }catch(const NativeReloadError& e){timed_native_notice(e.what(),true);}
     catch(const std::exception& e){notice(e.what());}
@@ -452,6 +503,7 @@ void ClassicApplication::finish_timed_native_notice(){
     if(native_notice_return_main_)screen_=session_.loaded()?ClassicScreen::Main:ClassicScreen::Files;
     native_notice_return_main_=false;update_stadium_hover();
 }
+// Opens the player detail box of squad slot `slot`, with the value quote the game computes.
 void ClassicApplication::open_player(int slot,int manager){
     if(manager<0)manager=squad_manager();  // hot seat: the squad of the manager at the menu (national coach: block 5)
     try{
@@ -464,17 +516,19 @@ void ClassicApplication::open_player(int slot,int manager){
         invalidate();roster_rules_=false;player_detail_=PlayerDetail{player,manager,slot,quote};
     }catch(const std::exception& e){notice(e.what());}
 }
+// Mouse press dispatch, in priority order: title, cup draw, game end, match display, modal
+// boxes and questions, then the open screen.
 void ClassicApplication::click(int x,int y,bool right){
-    if(title_){title_=false;return;}  // ovr034:07D8 any press ends the title screen
+    if(title_){title_=false;return;}  // any press ends the title screen
     if(cup_live_){click_cup_live(x,y,right);return;}  // the live DEB cup draw (classic_cup_draw.cpp)
-    if(game_end_==2){finished_=true;return;}  // "Das wars...": a press leaves the program (ovl00_058a)
+    if(game_end_==2){finished_=true;return;}  // "Das wars...": a press leaves the program
     if(!match_frames_.empty()&&!live_screen_){  // live_screen_: a screen opened during the minutes takes the input
         if(live_day_&&!match_frames_[match_frame_].waits()&&live_click(x,y,right))return;
         // a click on the cup table plays on; a right click on the minutes jumps to the next cup table or ends the replay
         size_t next=match_frame_+1;
         if(const int league=match_frames_[match_frame_].league_page){
-            // Amiga FUN_0010e62e mode 2 ends with the right button; a left click on a club opens its Vereinsinfo (DOSBox
-            // 10.11.2026), which a right click or "Zurück" closes. Only a view here: the running day is not touched.
+            // The page ends with the right button; a left click on a club opens its Vereinsinfo, which a right
+            // click or "Zurück" closes. Only a view here: the running day is not touched.
             if(club_info_){if(right||inside(x,y,104,216,159,226))club_info_.reset();return;}
             if(!right){
                 try{
@@ -495,7 +549,7 @@ void ClassicApplication::click(int x,int y,bool right){
         match_frame_=next;match_frame_until_=classic_ticks()+uint64_t(classic_match_frame_ms(match_frames_[next],session_.game().settings().speed));
         return;
     }
-    if(post_table_open_&&screen_==ClassicScreen::Table&&right){  // the table of ovl06_161d ends the match day
+    if(post_table_open_&&screen_==ClassicScreen::Table&&right){  // the table shown after the match day ends it
         screen_=ClassicScreen::Main;post_table_open_=false;
         if(!post_tables_&&news_after_tables_){news_after_tables_=false;show_manager_news();}
         return;
@@ -648,7 +702,7 @@ void ClassicApplication::click(int x,int y,bool right){
                     return;
                 }
             }
-            if(session_.loaded())screen_=ClassicScreen::Main;else if(start_menu_open())screen_=ClassicScreen::NewManager;return;  // ovr027:0EDD: back to the start menu
+            if(session_.loaded())screen_=ClassicScreen::Main;else if(start_menu_open())screen_=ClassicScreen::NewManager;return;  // without a game: back to the start menu
         }
         if(inside(x,y,88,194,290,204)){filename_focus_=true;filename_.clear();return;}
         if(y>=207&&y<=218){
@@ -663,7 +717,7 @@ void ClassicApplication::click(int x,int y,bool right){
             if(index<files_.size()){
                 const auto entry=files_[index];const bool again=file_selection_==int(index);file_selection_=int(index);
                 if(entry.directory){file_directory_=entry.path;filename_.clear();file_page_=0;refresh_files();}
-                else{filename_=path_text(entry.path.filename());filename_focus_=false;if(again&&entry.save)accept_file();} //native: any file fills FILENAME
+                else{filename_=path_text(entry.path.filename());filename_focus_=false;if(again&&entry.save)accept_file();} // as in the original, any file fills the name field
             }
             return;
         }
@@ -682,6 +736,9 @@ void ClassicApplication::click(int x,int y,bool right){
         return;
     }
     if(screen_==ClassicScreen::Bank){
+        // Select the bank or a share company; then the bar (y 90..98) sets the amount
+        // proportionally, the small arrows step it (3000 raw = 1000 DM, or one share), and a
+        // click on the prompt line executes the order. Limits as drawn by draw_classic_bank.
         if(right){screen_=ClassicScreen::Main;return;}
         if(x<106&&y<54){bank_party_=4;bank_selected_=true;bank_amount_=0;return;}
         if(x<47&&y>101){const int company=(y-102)/34;if(company<4){bank_party_=5+company;bank_selected_=true;bank_amount_=0;}return;}
@@ -729,13 +786,15 @@ void ClassicApplication::click(int x,int y,bool right){
     }
     if(right)screen_=ClassicScreen::Main;
 }
+// Mouse button released.
 void ClassicApplication::release(){
-    //7348:1188..11B4 restores the chooser on either mouse-button release.
-    //The pointer position and an additional button-down do not close it.
+    // The save preview closes on the release of either mouse button, as in the original; the
+    // pointer position and another button press do not close it.
     file_preview_.reset();
     stats_hold_.reset();
     career_release();
 }
+// Mouse movement: remembers the pointer and updates the hover effects of the open screen.
 void ClassicApplication::motion(int x,int y){
     mouse_x_=x;mouse_y_=y;
     if(screen_==ClassicScreen::Transfer&&!sale_quote_&&!contract_editor_&&!fee_editor_)transfer_native_si_=int16_t(x);
@@ -748,21 +807,22 @@ void ClassicApplication::motion(int x,int y){
         else if(x>159)bank_deposit_=true;
     }
 }
+// Key press dispatch (SDL key codes); typed characters arrive through text_input.
 void ClassicApplication::key(int key){
     if(title_){title_=false;return;}
-    if(cup_live_){if(cup_live_waiting())click_cup_live(0,0,false);return;}  // sub_19B08 also takes a key
+    if(cup_live_){if(cup_live_waiting())click_cup_live(0,0,false);return;}  // the "press a key" wait also takes a key
     if(game_end_==2){finished_=true;return;}
-    // the key buffer read by ovl14_1dc7 after a goal scene
+    // the key read after a goal scene: 'r' / 'w' replays it
     if(!match_frames_.empty()&&!live_screen_&&(key==SDLK_r||key==SDLK_w)){replay_key_=true;return;}
     if(live_day_&&!live_screen_){  // the day is being played
-        // ovl06_2522: the space key opens the Einstellungen at the start of the next minute, which then passes without play
+        // the space key opens the Einstellungen at the start of the next minute, which then passes without play
         if(key==SDLK_SPACE&&!match_frames_.empty()&&!live_in_scene_){live_screen_=true;live_idle_=true;live_screen_before_=screen_;open_settings();}
         return;
     }
     if(native_notice_until_||sale_quote_)return;
     if(career_key(key))return;
     if(screen_==ClassicScreen::NewManager){key_misc(key);return;}
-    if(screen_==ClassicScreen::Youth)return; //087B is mouse-driven, including Escape
+    if(screen_==ClassicScreen::Youth)return; // the youth screen is mouse-only, Escape included
     if(screen_==ClassicScreen::Stadium){if(!notice_.empty())notice_.clear();return;}
     if(advertising_info_||advert_renewal_)return;
     if(player_detail_||file_preview_||club_info_)return;
@@ -791,11 +851,13 @@ void ClassicApplication::key(int key){
         else if(key==SDLK_BACKSPACE&&!filename_.empty())filename_.pop_back();
     }
 }
+// Typed text: digits for the fee and contract editors (at most 7 / 1 or 6 digits), upper-cased
+// printable ASCII for the file name (at most 64 characters).
 void ClassicApplication::text_input(std::string_view text){
     if(native_notice_until_)return;
     if(screen_==ClassicScreen::NewManager){text_misc(text);return;}
-    //Text input may clear diagnostic errors. Native timed notices above and
-    //pending construction questions retain their own completion rules.
+    // On the stadium screen typing may clear an error notice; timed notices (above) and a
+    // pending construction question keep their own rules for closing.
     if(screen_==ClassicScreen::Stadium){if(!text.empty())notice_.clear();return;}
     if(fee_editor_&&notice_.empty()){
         for(unsigned char c:text)if(c>='0'&&c<='9'&&fee_editor_->digits.size()<7)fee_editor_->digits.push_back(char(c));
@@ -810,6 +872,8 @@ void ClassicApplication::text_input(std::string_view text){
         for(unsigned char c:text)if(c>=32&&c<127&&filename_.size()<64)filename_.push_back(char(std::toupper(c)));
     }
 }
+// Draws the frame: title, cup draw, game end, match display, banner or season talks take the
+// whole screen; otherwise the open screen with its overlays, the dialog box and the pointer.
 void ClassicApplication::draw(){
     if(title_){canvas_.background(197);if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}
     if(cup_live_){draw_cup_live();if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);return;}  // classic_cup_draw.cpp
@@ -868,6 +932,10 @@ void ClassicApplication::draw(){
     draw_dialog();
     if(mouse_x_>=0&&mouse_y_>=0)canvas_.cursor(mouse_x_,mouse_y_);
 }
+// The central message box ("!" for notices, "?" for questions) with the manager's name as the
+// title: the quit question, talent/subsidy question, stadium and advert renewal questions, or a
+// notice (explicit lines, or wrapped to the box width; with three or more lines it gets the
+// "Na gut." buttons).
 void ClassicApplication::draw_dialog(){
     if(manager_question_){draw_manager_question();return;}  // hot seat (classic_hotseat.cpp)
     if(notice_.empty()&&!quit_question_&&!talent_question_&&!advancing_&&!advert_renewal_&&!stadium_build_)return;
@@ -877,7 +945,7 @@ void ClassicApplication::draw_dialog(){
     const bool talent_question=talent_question_&&notice_.empty();
     const bool question=quit_question_||advert_question||stadium_question||talent_question;
     canvas_.frame(75,107,7,4);
-    canvas_.text(flow,105,125,session_.loaded()?manager_name(active_manager()):"",7,0,210);  // FUN_00146858: the name of the manager at the menu
+    canvas_.text(flow,105,125,session_.loaded()?manager_name(active_manager()):"",7,0,210);  // the name of the manager at the menu
     for(const int x:{83,212}){
         canvas_.rect(x,112,x+21,133,question?14:17);canvas_.outline(x+1,113,x+20,132,question?12:16);
         canvas_.text(ClassicFontId::NewBold,x,129,question?"?":"!",0,-1,x+(question?24:23));
@@ -921,6 +989,8 @@ void ClassicApplication::draw_dialog(){
         button(165,166,talent_question?"Lieber nicht.":quit_question_?"Kein Gedanke":advert_question||stadium_question?"Nein.":"Lass' ich!");
     }
 }
+// Puts the UI into a named state for screenshot tests and scripts ("main", "bank",
+// "stadium-quote", "wm-group1", ...) and draws it; an unknown name throws FormatError.
 void ClassicApplication::render_screen(std::string_view name){
     if(screen_==ClassicScreen::Stadium)canvas_.set_button_edge(3);
     hover_kind_.reset();roster_hover_={};roster_rules_=false;

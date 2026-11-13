@@ -1,28 +1,37 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Input handling of the Stadion page: opening it, the hover hint, ticket price arrows, extension quotes and
+// the build question. The page itself is drawn by classic_stadium.cpp, the rules are in Game.
 #include "ui/classic_app.hpp"
 namespace em::ui {
+// Opens the page with a fresh selection. Like the original, which recolours the shared button sprite while
+// the page is open, the canvas draws button edges in colour 2 until the page is left.
 void ClassicApplication::open_stadium(){
-    canvas_.set_button_edge(2); //native0922..095C patches the persistent widget atlas
+    canvas_.set_button_edge(2);
     screen_=ClassicScreen::Stadium;stadium_selection_={};stadium_next_value_width_=2;stadium_build_.reset();update_stadium_hover();
 }
 void ClassicApplication::draw_stadium(){
     draw_classic_stadium(canvas_,snapshot(),session_.finance_tables(),session_.game().stadium_tables(),stadium_selection_,active_manager());
 }
+// Updates the hovered item from the mouse position (not while a quote, the build question or a notice is open).
 void ClassicApplication::update_stadium_hover(){
     if(screen_!=ClassicScreen::Stadium||stadium_selection_.quoteItem>=0||stadium_build_||!notice_.empty())return;
     const auto view=classic_stadium_view(snapshot(),session_.finance_tables(),session_.game().stadium_tables(),stadium_selection_,active_manager());
     const auto hit=classic_stadium_hit(view,mouse_x_,mouse_y_);
     stadium_selection_.hover=hit.action==ClassicStadiumAction::Item?hit.item:-1;
 }
+// Answers the build question (accept = yes) and closes the quote.
 void ClassicApplication::resolve_stadium_build(bool accept){
     if(!stadium_build_)return;
     const auto draft=*stadium_build_;
     action([&](Game& game){game.finish_stadium_build(draft,accept);return ActionResult{};});
-    //645B1156 leaves DS0374=1. A Yes calls04BF immediately with that
-    //width, then its Konto formatter restores2. No leaves old pixels intact.
+    // The original question box leaves the number width at 1. A yes redraws the values at once with that
+    // width, then the balance display restores 2; a no leaves the old pixels intact.
     if(accept){stadium_selection_.numberWidth=stadium_next_value_width_;stadium_next_value_width_=2;}
     stadium_build_.reset();stadium_selection_.quoteItem=-1;stadium_selection_.target=-1;update_stadium_hover();
 }
+// Click on the Stadion page. While the build question is open only its two buttons count. An item still
+// refused by the building firm shows "Die Baufirma ist noch beleidigt..."; an item that cannot be extended
+// any more returns to the main menu, as in the original.
 void ClassicApplication::click_stadium(int x,int y,bool right){
     if(stadium_build_){
         if(!right&&y>=167&&y<=177&&((x>=96&&x<=151)||(x>=166&&x<=221)))resolve_stadium_build(x<160);

@@ -1,9 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic promotion pages "Aufstieg 1./2. Liga" (classic_promotion_view, declared with the
+// European cup pages in ui/classic_euro.hpp): the two promotion groups of four clubs with their fixtures, dates
+// from the season calendar, raw scores and saved tables, and the working date the page writes for its preview.
+// Checked with MONAT1 (no promotion round yet), POCHECK (during the groups) and SAISEND (all games played).
+//
+// Usage: classic_promotion_tests DATA REFERENCE (DATA holds EM.EXE, REFERENCE the .HOK files above)
+//
+// Group results lie at state 0x0520 (two bytes per pairing, 6 bytes per round); 0x8F87 is the stage and
+// 0x0259 the game of the stage.
 #include "ui/classic_euro.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 using namespace em;using namespace em::ui;
+// Throws with message `s` when `b` is false.
 void require(bool b,const char* s){if(!b)throw std::runtime_error(s);}
 int main(int argc,char** argv){try{
     if(argc!=3)throw std::runtime_error("classic_promotion_tests DATA REFERENCE");

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Round-robin schedule tables read from EM.EXE and the matchday pairings; see schedule.hpp.
 #include "game/schedule.hpp"
 
 #include <utility>
@@ -6,10 +7,13 @@
 namespace em {
 
 namespace {
-// DGROUP starts at file offset 0x1E00 (MZ header) + 0x14FD0 (segment 0x14FD of the load image).
+// The data segment starts at file offset 0x1E00 (size of the EXE header) + 0x14FD0 (its position in
+// the program image).
 constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
+// Offsets of the three round tables within the data segment.
 constexpr size_t kTable12 = 0x03C0, kTable6 = 0x0450, kTable4 = 0x0474;
 
+// Reads consecutive NUL-terminated strings starting at data segment offset `ds` until an empty string.
 std::vector<std::string> read_list(const Bytes& exe, size_t ds) {
     std::vector<std::string> out;
     size_t p = kDgroupFile + ds;
@@ -40,7 +44,7 @@ ScheduleTables load_schedule_tables(const Bytes& exe) {
 std::vector<Pairing> round_robin_pairings(const std::vector<std::string>& rounds, int matchday) {
     const int n = int(rounds.size()) + 1;  // teams; a single round robin has n - 1 rounds
     bool swap = false;
-    while (matchday >= n - 1) {  // ovl13_14d7: every further round robin swaps home and away
+    while (matchday >= n - 1) {  // every further round robin swaps home and away
         matchday -= n - 1;
         swap = !swap;
     }

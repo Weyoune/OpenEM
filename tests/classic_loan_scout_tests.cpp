@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Mouse/keyboard flows of the transfer page's loan editor and talent question (M0 reference save).
+// Mouse/keyboard flows of the transfer page's loan editor, the sponsor question of a loan and the talent search
+// question (M0 reference save), with pixel comparisons against reference images of the original.
+//
+// Usage: classic_loan_scout_tests DATA REFERENCE GOLDENS OUTPUT
+//   REFERENCE holds M0.HOK, GOLDENS the reference images talent-question, loan-fee and sponsor-question (.rgb).
+//   EM_DUMP_DIR=<folder> writes the canvas of a differing picture as raw RGB under the reference's file name.
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include <algorithm>
@@ -12,8 +17,10 @@
 namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `ok` is false.
 static void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_error(message); }
-// Pixels that differ from a native DOSBox capture (320 x 240 RGB, work/exp/transfer_20261110), with their box.
+// Number of pixels that differ from a reference image of the original (raw 320 x 240 RGB); prints their
+// bounding box.
 static size_t differences(const ClassicCanvas& canvas, const fs::path& golden) {
     const auto expected = read_file(golden);
     require(expected.size() == 320 * 240 * 3, "native RGB golden size");
@@ -36,6 +43,8 @@ static size_t differences(const ClassicCanvas& canvas, const fs::path& golden) {
     if (count) std::fprintf(stderr, "%s: %zu pixels differ in %d,%d..%d,%d\n", golden.filename().string().c_str(), count, left, top, right, bottom);
     return count;
 }
+// State offsets of the transfer pool rows and of manager 0's squad rows, kRecord bytes per row (+0x0C loan
+// marker, 0x80 set = on loan; +15 global player id; +0x2C market value u32, bit 31 a flag).
 constexpr size_t kPool = 0x81CD, kSquad = 0x696D, kRecord = 52;
 
 int main(int argc, char** argv) {
@@ -62,29 +71,29 @@ int main(int argc, char** argv) {
             require(title > 0, "loan editor title says 'leihen'");
         }
 
-        // Native DOSBox captures from M0 (EM.EXE V1.00): the talent question after a click on "Talent", the loan
+        // Reference images of the original from M0 (EM.EXE V1.00): the talent question after a click on "Talent", the loan
         // editor after a click on Frosch's "(L)" price and the sponsor question of a 130.000 DM loan of Frosch
         // (57.200 DM offer = 171600 raw), drawn over the page as it was before the loan. The software cursor
         // stays where the click was.
         {
             ClassicApplication app(data, output, save);
             app.motion(290, 231); app.render_screen("talent-question");
-            require(differences(app.canvas(), goldens / "talent-question.rgb") == 0, "talent question matches DOSBox");
+            require(differences(app.canvas(), goldens / "talent-question.rgb") == 0, "talent question matches the original");
         }
         {
             ClassicApplication app(data, output, save);
-            // DOSBox moved the pointer from "Lieber nicht." (193,172) to (260,91) through pool rows 7..4.
+            // In the reference the pointer moved from "Lieber nicht." (193,172) to (260,91) through pool rows 7..4.
             app.render_screen("transfer");
             for (const auto& [x, y] : {std::pair{230, 155}, {240, 140}, {245, 125}, {250, 110}, {255, 100}, {260, 91}}) app.motion(x, y);
             app.render_screen("loan-fee");
-            require(differences(app.canvas(), goldens / "loan-fee.rgb") == 0, "loan editor matches DOSBox");
+            require(differences(app.canvas(), goldens / "loan-fee.rgb") == 0, "loan editor matches the original");
         }
         {
             ClassicApplication app(data, output, save);
             app.render_screen("transfer");
             for (const auto& [x, y] : {std::pair{230, 155}, {240, 140}, {245, 125}, {250, 110}, {255, 100}, {260, 91}}) app.motion(x, y);
             app.render_screen("subsidy-question:171600");
-            require(differences(app.canvas(), goldens / "sponsor-question.rgb") == 0, "sponsor question matches DOSBox");
+            require(differences(app.canvas(), goldens / "sponsor-question.rgb") == 0, "sponsor question matches the original");
         }
 
         // Sponsor question: "Lieber nicht." changes nothing, "Aber immer!" books the offer.

@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Independent native operand/text goldens: contracts_ui/HOVER_EXACT.md,
-// hover_sources.json and the original59B5:16A3 assembly. No alternate model.
+// Hover help of the roster pages (ui/classic_hover.cpp): which row and column of the Verträge, Aufstellung and
+// Transfer lists lies under the mouse, the help line the original shows for it (texts from EM.EXE), and the
+// rule lines and footer area the help drawing touches. The expected column boundaries and texts are the
+// original game's, including its quirks.
+//
+// Usage: classic_hover_tests [DATA] — DATA is a folder with EM.EXE and the graphics; without it only the
+// rejection of an empty EXE is checked.
 #include "ui/classic_hover.hpp"
 
 #include <algorithm>
@@ -10,16 +15,24 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Number of failed CHECKs; the test fails when it is not zero at the end.
 int failures = 0;
+// Reports a failed condition with file and line and counts it, without stopping the test.
 #define CHECK(value) do { if (!(value)) { \
     std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #value); \
     ++failures; } } while (0)
+// True when `action` throws a std::exception.
 template<class F> bool throws(F action) {
     try { action(); } catch (const std::exception&) { return true; }
     return false;
 }
+// State offsets: squad rows of manager 0 (52 bytes each; +9 status, +10 reserve, +12 loan, +13 suspension
+// minutes, +14 trend, +15 player id, +0x10..+0x12 condition/technique/form, +0x13 exhaustion, +21 line) and the
+// global record of player id 1 (33 bytes each; name at +0, +0x14 contract years, +0x18 player type).
 constexpr size_t kSquad = 0x696d, kPlayer = 0x4fc6;
 
+// A state with 30 filled squad rows whose players are all called "K\x99LN" (an umlaut byte of the game's
+// character set), trend 50 and one contract year.
 HokFile fixture() {
     HokFile h;
     h.state.resize(0x8dfd);
@@ -36,16 +49,18 @@ HokFile fixture() {
     return h;
 }
 
+// Column boundaries, row geometry, help texts for each status and the drawing of rule lines and footer.
 void original_goldens(const std::filesystem::path& data) {
     const ClassicRosterHelp help(read_file(data / "EM.EXE"));
     auto h = fixture();
     const Bytes before = h.state;
+    // Hover result of manager 0's page `kind` at (x, y); y 29 lies in the first row.
     auto at = [&](ClassicRosterKind kind, int x, int y = 29) {
         return classic_roster_hover(h, 0, kind, x, y, help);
     };
     using K = ClassicRosterKind;
-    // Literal accepted endpoints independently read from DS039F and the
-    // three source caller masks/rightBound operands; include the quirks.
+    // The first and last x of each help column as the original accepts them on each of the three pages,
+    // quirks included. `field` is the help entry the column selects.
     struct Boundary { K kind; int x; int field; };
     const Boundary boundaries[]{
         {K::Contracts,0,1},{K::Contracts,24,1},{K::Contracts,25,2},{K::Contracts,81,2},
@@ -127,7 +142,7 @@ void original_goldens(const std::filesystem::path& data) {
     h.state.resize(3);
     CHECK(throws([&]{at(K::Contracts,25);}));
 
-    // Rule endpoints and footer clear bounds are literal original operands.
+    // Rule endpoints and footer clear bounds are the original's exact coordinates.
     // An empty help string isolates those pixels from text glyph placement.
     ClassicCanvas canvas(data);
     std::fill(canvas.pixels().pixels.begin(),canvas.pixels().pixels.end(),uint8_t(55));

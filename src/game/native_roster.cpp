@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Raw-state squad roster operations (count, find, insert, remove); see native_roster.hpp.
 #include "game/native_roster.hpp"
 
 #include <algorithm>
@@ -6,27 +7,32 @@
 
 namespace em {
 namespace {
-constexpr size_t kSquad = 0x696D, kBlock = 0x618, kRecord = 0x34;
-constexpr size_t kPlayerBase = 0x4FA5, kPlayerRecord = 0x21;
-constexpr int kLastSlot = 29;
+constexpr size_t kSquad = 0x696D, kBlock = 0x618, kRecord = 0x34;  // squad blocks / record size
+constexpr size_t kPlayerBase = 0x4FA5, kPlayerRecord = 0x21;        // player record of ID n at base + n * 0x21
+constexpr int kLastSlot = 29;                                       // scratch slot, last row of a block
 
+// Throws std::out_of_range unless the state reaches past the message table, player records and
+// all six squad blocks.
 void validate_state(const HokFile& h) {
-    // Includes all24 notification records, player records and all6 squad blocks.
     (void)h.state.at(0xB94E);
 }
+// State offset of the record of player `id`. ID 0 maps to a dummy record just before player 1,
+// which the reserved count can read for a hole in a roster.
 size_t player_offset(uint8_t id) {
-    // ID0 is the native dummy record and can be read by331B for a roster hole.
     if (id > 199) throw FormatError("native roster: invalid player ID");
     return kPlayerBase + size_t(id) * kPlayerRecord;
 }
+// State offset of row `slot` of squad block `manager`.
 size_t row_offset(int manager, int slot) {
     return kSquad + size_t(manager) * kBlock + size_t(slot) * kRecord;
 }
+// Position class used for sorting a squad: position value / 25, at most 2.
 int position_class(const HokFile& h, uint8_t id) {
     return std::min(2, int(h.state.at(player_offset(id) + 0x18)) / 25);
 }
+// Number of occupied regular slots of a block: 29 slots (12 in the pool block 4), never the
+// scratch slot 29.
 int occupied_count(const HokFile& h, int manager) {
-    // 645B:0D27 counts all29 regular slots (pool4:12), excluding scratch29.
     const int slots = manager == 4 ? 12 : 29;
     int result = 0;
     for (int slot = 0; slot < slots; ++slot)
@@ -34,8 +40,8 @@ int occupied_count(const HokFile& h, int manager) {
     return result;
 }
 int reserved_count(const HokFile& h,int target) {
-    // 5396:331B uses the occupied count as a PREFIX LENGTH when reading other
-    // managers' owner IDs. Preserve this quirk if the raw roster has holes.
+    // The original uses the occupied count as a PREFIX LENGTH when reading the owners of players
+    // in the other blocks (active human clubs and the pool). This quirk is kept for rosters with holes.
     int result = 0;
     const int humans = h.state.at(0x0DC6);
     for (int manager = 0; manager <= 4; ++manager) {
@@ -52,14 +58,17 @@ int reserved_count(const HokFile& h,int target) {
     }
     return result;
 }
+// Stores a little-endian 32-bit value.
 void put32(Bytes& s, size_t at, uint32_t value) {
     for (size_t byte = 0; byte < 4; ++byte)
         s.at(at + byte) = uint8_t(value >> (8 * byte));
 }
+// Deletes the message linked from the player record at state offset `player` (+0x1E holds the
+// 1-based message index) and clears the link; nothing happens without a valid link.
 void clear_notification(HokFile& h, size_t player) {
     const uint8_t index = h.state.at(player + 0x1E);
     if (index == 0 || index >= 25) return;
-    // 645B:0180 clears entry's first byte and next word, not its whole text.
+    // Like the message delete: only the entry's first three bytes are cleared, not its text.
     const size_t entry = 0xAEB7 + size_t(index - 1) * 0x71;
     std::fill_n(h.state.begin() + long(entry), 3, uint8_t(0));
     h.state.at(player + 0x1E) = 0;
@@ -93,7 +102,7 @@ NativeRosterInsertion native_insert_player(HokFile& h,const ContractTables& tabl
     if (playerId == 0) throw FormatError("native roster: empty incoming player ID");
     const size_t player = player_offset(playerId);
     const uint8_t club = h.state.at(0x0DCD + size_t(manager)*0x1af + 0x14);
-    // 2D27..2D52 bypasses the count if the player is already at the buyer's club.
+    // The capacity check is skipped if the player is already at the buyer's club.
     if (h.state.at(player + 0x1D) != club && reserved_count(h,manager) > 28) return {};
 
     const int incomingClass = position_class(h, playerId);
@@ -122,8 +131,8 @@ NativeRosterInsertion native_insert_player(HokFile& h,const ContractTables& tabl
     h.state.at(row + 0x10) = h.state.at(player + 0x15);
     h.state.at(row + 0x11) = h.state.at(player + 0x16);
     h.state.at(row + 0x12) = h.state.at(player + 0x17);
-    // 2F31 computes salary before2FDA changes the team. Salary valuation has
-    // no RNG path, so the helper's successful insertion has exactly five draws.
+    // The salary is computed before the team changes. Salary valuation draws no random numbers,
+    // so a successful insertion consumes exactly five draws.
     const auto contract = contract_player(h, manager, slot);
     put32(h.state, row + 0x28, uint32_t(player_worth(tables, contract, Worth::Salary, draw)));
     h.state.at(player + 0x1D) = club;

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Sound tests (docs/formats/SOUND.md). Without arguments: VOC/CMF decoders, OPL2 model and the goal-scene mixer on
-// synthetic data. With the original EM directory: KB\237..241 and KB\248 decode and the music renders to its end.
+// Sound tests (src/formats/sound.cpp, src/formats/opl2.cpp, src/ui/classic_sound.cpp). Without
+// arguments: VOC/CMF decoders, OPL2 model and the goal-scene mixer on synthetic data. With the
+// original EM directory: the samples KB\237..241 and the music KB\248 decode and the music renders
+// to its end.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -14,8 +16,9 @@
 using namespace em;
 namespace fs = std::filesystem;
 
-static int failures = 0;
-#define CHECK(cond)                                                                       \
+static int failures = 0;  // number of failed CHECKs; nonzero makes main() fail
+// Records a failure (file, line, expression) and continues.
+#define CHECK(cond)                                                                     \
     do {                                                                                  \
         if (!(cond)) {                                                                    \
             std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
@@ -23,6 +26,8 @@ static int failures = 0;
         }                                                                                 \
     } while (0)
 
+// A 26-byte Creative Voice File header: signature, header size 0x1A at 0x14, version 1.10 at
+// 0x16 and the check word ~version + 0x1234 at 0x18.
 static Bytes voc_header() {
     Bytes b(0x1A, 0);
     std::memcpy(b.data(), "Creative Voice File\x1A", 20);
@@ -34,6 +39,7 @@ static Bytes voc_header() {
     b[0x19] = uint8_t(check >> 8);
     return b;
 }
+// Appends a VOC data block: type byte, 24-bit little-endian body length, body.
 static void block(Bytes& b, uint8_t type, const Bytes& body) {
     b.push_back(type);
     b.push_back(uint8_t(body.size()));
@@ -42,6 +48,8 @@ static void block(Bytes& b, uint8_t type, const Bytes& body) {
     b.insert(b.end(), body.begin(), body.end());
 }
 
+// VOC decoding: sound/silence/repeat blocks expand into 8-bit PCM, an endless repeat marks a
+// loop, and a wrong header check word is rejected.
 static void voc_units() {
     // sound block, finite repeat (2 further plays), silence, end
     Bytes b = voc_header();
@@ -77,6 +85,8 @@ static void voc_units() {
     CHECK(threw);
 }
 
+// A minimal Creative Music File: one sustained instrument, one channel, a single C4 note held
+// for 96 ticks at 96 ticks per second, then end of track 192 ticks later.
 static Bytes cmf_file() {
     Bytes b(0x28, 0);
     std::memcpy(b.data(), "CTMF", 4);
@@ -98,6 +108,8 @@ static Bytes cmf_file() {
     return b;
 }
 
+// CMF decoding, the sequencer's OPL2 register writes (pitch, key on/off, velocity) and
+// rendering until the song ends.
 static void cmf_units() {
     const CmfSong s = decode_cmf(cmf_file());
     CHECK(s.version == 0x0101 && s.clock_rate == 96 && s.ticks_per_quarter == 30);
@@ -109,7 +121,7 @@ static void cmf_units() {
     CHECK(s.events.back().status == 0xFF && s.events.back().tick == 96 + 192);
     CHECK(std::fabs(s.seconds() - 3.0) < 1e-9);
 
-    // the driver's pitch: note 60 -> block 4, fnum 0x157 (seg011:0285 / 0305), keyed on the first voice
+    // the original music driver's pitch table: note 60 -> block 4, fnum 0x157, keyed on the first voice
     CmfSequencer seq(s);
     seq.run_to(0);
     CHECK(seq.chip().channel_keyed(0));
@@ -131,6 +143,9 @@ static void cmf_units() {
     CHECK(!more && play.finished());
 }
 
+// OPL2 model: a pure carrier tone at fnum 0x157, block 4 (about 260 Hz) is measured by counting
+// zero crossings over one second; the envelope holds at the sustain level and decays to full
+// attenuation after key off.
 static void opl_units() {
     Opl2 opl;
     opl.write(0x20, 0x01);
@@ -159,6 +174,8 @@ static void opl_units() {
     CHECK(opl.attenuation_db(0x03) >= 95.8);  // 511 x 0.1875 dB
 }
 
+// Goal-scene mixer: voice 0 loops as background, a scene plays other samples on given frames
+// and then resumes the loop; classic_board_goals() reports which side of a board scored.
 static void mixer_units() {
     using namespace em::ui;
     ClassicSoundMixer m;
@@ -197,6 +214,9 @@ static void mixer_units() {
     CHECK(classic_board_goals(a, a).empty());
 }
 
+// Checks the original sound files in `em`/KB: sample rates (from the VOC time constants) and
+// PCM sizes of KB\237..241 (only 237 loops), and that the music KB\248 (rhythm mode, 14
+// instruments) renders to its end in about its nominal length with sane energy and peak.
 static void original(const fs::path& em) {
     const int rates[5] = {1000000 / (256 - 0x2A), 1000000 / (256 - 0x2A), 1000000 / (256 - 0xAC), 1000000 / (256 - 0x65),
                           1000000 / (256 - 0x65)};

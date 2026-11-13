@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Savegame codec: decryption and decoding into HokFile, writing the decoded fields back into the state, and
+// re-encryption with fresh check bytes. The layout is documented in hok.hpp.
 #include "formats/hok.hpp"
 
 #include <algorithm>
@@ -9,12 +11,14 @@ namespace em {
 
 namespace {
 constexpr char kVersionTag[] = "KRON_0.99";
+// Header (file offsets)
 constexpr size_t kManagerName = 0x12;
 constexpr size_t kClubName = 0x25;
 constexpr size_t kStateStart = kHokHeaderSize + 1;  // 0xBA, right after key0
+// State offsets (indices into HokFile::state); see the map in hok.hpp
 constexpr size_t kTeams = 0x17E7, kTeamRecord = 0x3D, kTeamName = 23;
 constexpr size_t kPlayers = 0x4FC6, kPlayerRecord = 0x21, kPlayerName = 18;
-constexpr size_t kTable = 0x3BAC, kTableRecord = 0x50;
+constexpr size_t kTable = 0x3BAC, kTableRecord = 0x50;  // table row + 4 (the points lie before it)
 constexpr size_t kDate = 0x8E21, kSeasonYear = 0x8E31, kMatchday = 0x8F80;
 constexpr size_t kEuroGroups = 0x03A4, kWmRounds = 0x03B8, kEuroRounds = 0x0448;  // groups 36 bytes apart
 constexpr size_t kEuroGroupsCopy = 0x8E71;
@@ -23,8 +27,10 @@ constexpr size_t kHoldings = 0x30, kSharePrices = 0xB0, kManagerStats = 0x0F40;
 constexpr long kMoneyFactor = 3;  // EM keeps every amount tripled
 constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618, kManagerCount = 0x0DC6;
 
+// Signed tripled i32 amount at `off`, in DM (truncated towards zero).
 long money(const Bytes& s, size_t off) { return long(int32_t(le32(s, off))) / kMoneyFactor; }
 
+// Zero-terminated text of at most `max_len` bytes at `off`, converted to UTF-8.
 std::string field(const Bytes& d, size_t off, size_t max_len) {
     std::string raw;
     for (size_t i = off; i < off + max_len && i < d.size() && d[i] != 0; i++) raw += char(d[i]);
@@ -52,6 +58,8 @@ HokFile clone_hok(const HokFile& source) {
     return copy;
 }
 
+// Reads the slots of one block up to the last occupied one; free slots in between are returned with player = -1.
+// The player id at +0x0F is 1-based and is resolved to the index in h.players by comparing record addresses.
 std::vector<HokSquadPlayer> hok_squad(const HokFile& h, int manager) {
     if (manager < 0 || manager >= kHokManagers) throw FormatError("HOK: invalid squad manager");
     const size_t base = kSquad + size_t(manager) * kSquadBlock;
@@ -99,6 +107,7 @@ std::vector<HokSquadPlayer> hok_squad(const HokFile& h, int manager) {
     }
     return squad;
 }
+// Runs the key stream over the file like the decoder and compares both raw check bytes with the running sum.
 void verify_hok_checksums(const Bytes& d){
     if(d.size()<=kHokCheckByte+1)throw FormatError("HOK: state too short for native check bytes");
     uint8_t key=d[kHokHeaderSize],sum=key;
@@ -223,8 +232,8 @@ HokFile decode_hok(const Bytes& d) {
     h.cup_round = h.state[kCupRound];
     for (size_t i = 0; i + 1 < kCupDrawMax && h.state[kCupDraw + i] != 0xFF; i += 2)
         h.cup_draw.push_back({h.state[kCupDraw + i], h.state[kCupDraw + i + 1]});
-    h.squad = hok_squad(h, 0);  // explicit native player ids also retain called club players
-    // the other human managers (state 0x0DC6 = DS:0386 counts them); an unused block stays empty and is not written back
+    h.squad = hok_squad(h, 0);  // explicit player ids also retain club players called up to the national team
+    // the other human managers (state 0x0DC6 counts them); an unused block stays empty and is not written back
     const int managers = std::clamp(int(h.state.at(kManagerCount)), 1, 4);
     for (int m = 1; m < managers; m++) {
         try {
@@ -257,7 +266,7 @@ HokFile decode_hok(const Bytes& d) {
 }
 
 namespace {
-void put32(Bytes& b, size_t o, uint32_t v) {
+void put32(Bytes& b, size_t o, uint32_t v) {  // little-endian u32, bounds-checked
     for (int i = 0; i < 4; i++) b.at(o + size_t(i)) = uint8_t(v >> (8 * i));
 }
 // the copies of one table row (hok.hpp); r = state + kTable + team * kTableRecord
@@ -280,6 +289,9 @@ void write_table_copies(Bytes& state, const std::vector<HokTableRow>& rows) {
         write_table_row_copies(state.data() + kTable + t * kTableRecord, rows[t]);
 }
 
+// See hok.hpp for which fields are written. Table rows: a row whose results changed also gets its points and,
+// unless keep_table_copies is set, its copies; the career game totals of the squad records grow by the increase
+// of the season counters.
 void store_hok(HokFile& h) {
     Bytes& s = h.state;
     auto at = [&](const uint8_t* raw) { return size_t(raw - s.data()); };
@@ -350,7 +362,7 @@ void store_hok(HokFile& h) {
     put32(s, kDate + 4, uint32_t(h.date.month - 1));
     put32(s, kDate + 8, uint32_t(h.date.year));
     put32(s, kDate + 12, uint32_t(h.date.day_index));
-    s[kSeasonYear] = uint8_t(h.season_year);  // DS:03BB
+    s[kSeasonYear] = uint8_t(h.season_year);  // u16 little endian
     s[kSeasonYear + 1] = uint8_t(h.season_year >> 8);
     for (int l = 0; l < 3; l++) s[kMatchday + size_t(l)] = uint8_t(h.matchday[l]);
     for (size_t l = 0; l < 3; l++)
@@ -371,7 +383,7 @@ void store_hok(HokFile& h) {
             s[kCupDraw + i] = 0xFF;  // end of a shorter list
         }
     }
-    // European cup groups (also at 0x8E71 = DS:5D1B, the draw slots of ovl05_4c7b(1)) and their
+    // European cup groups (also at 0x8E71, where the group draw of a new season places the clubs) and their
     // pairings; the two bytes after the pairs of each round are kept
     for (size_t g = 0; g < 2; g++) {
         for (size_t t = 0; t < 4; t++)
@@ -386,13 +398,14 @@ void store_hok(HokFile& h) {
     for (int m = 0; m < 4; m++)
     for (size_t slot = 0; slot < h.squad_of(m).size() && slot < size_t(kHokSquadSlots); slot++) {
         const HokSquadPlayer& sp = h.squad_of(m)[slot];
-        if (sp.player < 0) continue;  // retain opaque bytes of an unoccupied native slot
+        if (sp.player < 0) continue;  // retain the bytes of an unoccupied slot as they are
         uint8_t* r = s.data() + kSquad + size_t(m) * kSquadBlock + slot * kSquadRecord;
         r[0x00] = uint8_t(sp.major_penalties);
         r[0x01] = uint8_t(sp.minor_penalties);
         r[0x02] = uint8_t(sp.home_line);
         // +0x1C / +0x1E are the career totals of league and cup games (u16, the screens read them): every game adds to the
-        // season byte and the total, and the season change clears only the bytes (REAL-CODE period 31: 44 + 3 = 47)
+        // season byte and the total, and the season change clears only the bytes (e.g. 44 games before the season
+        // change plus 3 after it give a total of 47)
         auto add_total = [&](size_t at, int now, int before) {
             if (now <= before) return;
             const int total = r[at] | (r[at + 1] << 8);
@@ -421,12 +434,14 @@ void store_hok(HokFile& h) {
     }
 }
 
+// Encryption: c = ((p ^ k) + k) & 0xFF, k -= 0x29 per state byte. The first check byte is inserted when the
+// output reaches file offset 0x8F09, the second appended at the end.
 Bytes encode_hok(const HokFile& h) {
     if (h.header.size() != kHokHeaderSize) throw FormatError("HOK: header missing");
     Bytes d(h.header);
     d.push_back(h.key0);
     uint8_t k = h.key0;
-    uint8_t sum = h.key0;  // running check sum (ovl16_0074)
+    uint8_t sum = h.key0;  // running check sum: key0 plus all plain state bytes so far
     for (uint8_t p : h.state) {
         if (d.size() == kHokCheckByte) d.push_back(sum);
         d.push_back(uint8_t(uint8_t(p ^ k) + k));

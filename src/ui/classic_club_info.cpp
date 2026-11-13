@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The classic club-information window (opened e.g. from the "Stärken" page):
+// crest, league position curve, recent-result faces, home/away balance,
+// goal averages, current series, record results, head-to-head history and
+// all-time table points. classic_club_info() computes the content straight
+// from the save state; draw_classic_club_info() renders it. All texts are in
+// the game's own 8-bit encoding ('{' = ä, '|' = ö, '}' = ü, '%' = padding
+// digit space).
 #include "ui/classic_club_info.hpp"
 
 #include <algorithm>
@@ -9,23 +16,31 @@
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
+// Save-state offsets: 150 team records of 61 bytes (name at +0, 22 bytes;
+// strengths at +0x18..+0x1D; crest/reporting byte at +0x34) and the manager
+// records of 0x1AF bytes (own team at +0x14, league at +0xEB).
 constexpr size_t teams = 0x17e7, managers = 0x0dcd;
 
+// Bounds-checked pointer to count bytes of the save state at offset p.
 const uint8_t* bytes(const HokFile& h, size_t p, size_t count) {
     if (p > h.state.size() || count > h.state.size() - p)
         throw FormatError("classic club info: truncated native state");
     return h.state.data() + p;
 }
 uint8_t byte(const HokFile& h, size_t p) { return *bytes(h,p,1); }
-unsigned word(const uint8_t* p) { return unsigned(p[0]) | unsigned(p[1]) << 8; }
-uint32_t dword(const uint8_t* p) { return uint32_t(word(p)) | uint32_t(word(p+2)) << 16; }
+unsigned word(const uint8_t* p) { return unsigned(p[0]) | unsigned(p[1]) << 8; }       // little-endian u16
+uint32_t dword(const uint8_t* p) { return uint32_t(word(p)) | uint32_t(word(p+2)) << 16; }  // little-endian u32
+// Teams 52..63 are national teams; 64..149 are foreign clubs without statistics.
 bool national(int team) { return team >= 52 && team < 64; }
+// Team name in the game's encoding (NUL-terminated, at most 22 bytes).
 std::string name(const HokFile& h, int team) {
     if (team < 0 || team >= 150) throw FormatError("classic club info: invalid team name");
     const auto* p = bytes(h,teams+size_t(team)*61,22);
     size_t n=0; while (n<22 && p[n]) ++n;
     return {reinterpret_cast<const char*>(p),n};
 }
+// Decimal number, left-padded to width with '%' (the font's digit-wide
+// blank) when non-negative.
 std::string number(int64_t n, int width=1) {
     auto s = std::to_string(n);
     if (n>=0 && int(s.size())<width) s.insert(0,size_t(width-int(s.size())),'%');
@@ -35,7 +50,15 @@ void row(ClassicClubInfo& info, int y, std::string text, int x=98, uint8_t color
     info.rows.push_back({x,y,right,color,std::move(text)});
 }
 
-//6668:12E5 returns only AL, the LOW BYTE of the original record word.
+// One record result of a team. kind 0..3 = home records, 4..7 = away
+// records (highest win, highest defeat, goals scored, goals conceded). The
+// record words are at 0xA11C + team*16 + kind*2 (0 = no entry): for the
+// win/defeat kinds the two bytes are the two scores (home records show the
+// high byte first, away records the low byte first), for the goal kinds the
+// count (whichever byte is non-zero). The opponent team index is at 0x9F1C + team*8 + kind.
+// returned is the value the game uses to pick between the home and away
+// record in the combined view: only the LOW byte of the record word, a quirk
+// reproduced here.
 struct Record { std::string text; int returned; };
 Record record(const HokFile& h, int team, int kind) {
     const unsigned w=word(bytes(h,0xa11c+size_t(team)*16+size_t(kind)*2,2));
@@ -49,8 +72,12 @@ Record record(const HokFile& h, int team, int kind) {
     return {std::move(result),int(w&255)};
 }
 
-//5CB4:1490(123,14,team,255,0,0). No opponent curve, overlap nudge,
-// league caption or first-matchday message is reachable with these arguments.
+// League-position curve of a club over the season so far, using the game's
+// general table-curve routine in the configuration of this window (single
+// team, no opponent curve, no overlap nudge, no league caption and no
+// first-matchday message). Positions are packed as nibbles at
+// 0x3BD9 + team*80 (two rounds per byte, low nibble first); y = 63 + 2*pos.
+// The final position is labelled at the end of the curve.
 void graph(ClassicClubInfo& info, const HokFile& h, int team, int manager) {
     if (national(team)) return;
     info.graph.push_back({125,62,125,85,6});
@@ -70,10 +97,13 @@ void graph(ClassicClubInfo& info, const HokFile& h, int team, int manager) {
         x=end_x; y=end_y;
     }
     const int league=byte(h,managers+size_t(manager)*0x1af+0xeb);
-    constexpr std::array<int,6> limits{44,44,44,2,2,2}; //EXE DS07B6
+    constexpr std::array<int,6> limits{44,44,44,2,2,2}; // the game's per-league matchday limits
     if (league>=int(limits.size())) throw FormatError("classic club info: invalid graph manager league");
-    //The native DS07A9 array has8 bytes, not just HokFile::matchday's three
-    //domestic counters. In a national-manager phase its league can be4.
+    // The game keeps eight matchday counters, not just HokFile::matchday's
+    // three domestic ones; the others are read from the save state at
+    // 0x8F80 + league. In a national-manager phase the league can be 4.
+    // The label is nudged one pixel up-left when it has two digits and the
+    // manager's league is past the limit.
     const int raw_next=league<3 ? h.matchday[league] : byte(h,0x8f80+size_t(league));
     const int next=int(static_cast<int8_t>(static_cast<uint8_t>(raw_next)));
     const bool lower=last+1>9 && next>limits[size_t(league)];
@@ -81,6 +111,12 @@ void graph(ClassicClubInfo& info, const HokFile& h, int team, int manager) {
                                 number(last+1)+"."});
 }
 
+// Historical results of the manager's team against the given team: up to
+// five home ("H:") and five away ("A:") games, each a packed byte
+// (goals for in the high nibble, against in the low nibble, 255 = unused)
+// at 0x8F88 + bank*640 + team*10 + 2*game + (1-side). The national-team
+// manager (index 5) uses bank 0, and national teams have a single list
+// without the H/A prefixes.
 std::string head_to_head(const HokFile& h, int team, int manager, bool is_national) {
     const int bank=manager==5 ? 0 : manager;
     std::string result=is_national ? "" : "H: ";
@@ -100,6 +136,10 @@ std::string head_to_head(const HokFile& h, int team, int manager, bool is_nation
     return result;
 }
 
+// Draws one of the three 57x12 buttons at the bottom of the window,
+// preserving the four corner pixels underneath. Either a text button or,
+// with reporting >= 0, the reporting-mode icon (0..2; 3 draws an empty
+// button).
 void button(ClassicCanvas& c, int x, std::string_view text, int reporting=-1) {
     constexpr int y=215;
     const std::array<uint8_t,4> corner{c.pixels().at(x,y),c.pixels().at(x+56,y),
@@ -107,15 +147,25 @@ void button(ClassicCanvas& c, int x, std::string_view text, int reporting=-1) {
     c.blit(4,x,y,17,179,57,12,true,192);
     c.pixels().at(x,y)=corner[0]; c.pixels().at(x+56,y)=corner[1];
     c.pixels().at(x,y+11)=corner[2]; c.pixels().at(x+56,y+11)=corner[3];
-    //645B:0F02 ignores the10A6 caller's nominal color and uses29/shadow1.
+    // The game's button routine ignores the colour its caller asks for and
+    // always uses colour 29 with shadow 1.
     if (reporting<0) c.text_native(mini,x,y+7,text,29,1,x+59);
     else if (reporting<3) c.blit(4,x+23,y+1,19,36+11*reporting,12,10,true,192);
 }
+// Draws a small result face at (x,89): 0 = none, 1 = defeat, 2 = draw,
+// 3 = win.
 void face(ClassicCanvas& c, int index, int x) {
     if (index) c.blit(33,x,89,index==1 ? 19 : 25,index==2 ? 41 : 36,6,5,true,192);
 }
 } // namespace
 
+// Field notes for the statistics block at 0x3BA5 + team*80 used below:
+// +0x07..+0x0E last eight results ('s' win, 'u' draw, 'n' defeat),
+// +0x19/+0x1A goals home/away, +0x1D/+0x1E conceded home/away,
+// +0x21/+0x22 games home/away, +0x29/+0x2A wins, +0x2D/+0x2E defeats,
+// +0x31 league position (0-based), +0x34.. packed position curve,
+// +0x4C all-time table points (i32). Series counters are at
+// 0x9988 + team*21 + kind*3 + column (column 0 total, 1 home, 2 away).
 ClassicClubInfo classic_club_info(const HokFile& h, int team,int mode) {
     if (team<0 || team>=150||mode<0||mode>2) throw FormatError("classic club info: invalid team or mode");
     ClassicClubInfo info;
@@ -130,8 +180,9 @@ ClassicClubInfo classic_club_info(const HokFile& h, int team,int mode) {
     info.schedule=team<52 && dword(bytes(h,0x8e2d,4))!=0;
     int strength=0; for (int i=0;i<6;++i) strength+=t[0x18+i];
     strength/=6;
-    //199F:098D resets width to1 when the modal loads its graphics. Width2
-    //from the Stärken rows is therefore NOT inherited by this caption/balance.
+    // Loading the window's graphics resets the number width to 1, so the
+    // width 2 used by the "Stärken" rows behind it is NOT inherited by this
+    // caption or the balance lines.
     info.native_caption="St{rke:"+number(strength);
     if (team>=64) {
         row(info,120,"Leider sind aus vielerlei Gr}nden keine",93,1,317);
@@ -223,6 +274,9 @@ ClassicClubInfo classic_club_info(const HokFile& h, int team,int mode) {
     return info;
 }
 
+// Renders the window: 9x10 tile frame at (93,44), crest box, curve panel,
+// result faces, text area and the "Reicht mir" / "Spielplan" /
+// reporting-mode buttons.
 void draw_classic_club_info(ClassicCanvas& c, const HokFile& h, int team,int mode) {
     const auto info=classic_club_info(h,team,mode);
     c.frame(93,44,9,10);

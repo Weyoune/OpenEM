@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Goal scenes of ovl14_4938 (see ClassicGoalScene in classic_match_view.hpp).
+// The animated goal-chance scenes of the match display (see ClassicGoalScene
+// in classic_match_view.hpp): a scrolling top-down rink with the puck and up
+// to twelve player sprites, driven by the scene scripts in the user's TORE
+// folder, plus the score panel below it. Also builds the frame sequence of
+// a scene and its optional replays.
 #include "ui/classic_match_view.hpp"
 
 #include <algorithm>
@@ -11,16 +15,18 @@
 namespace em::ui {
 namespace {
 
-// Everything ovl14_4938 loads from KB\231..247 plus the scripts, read once per data directory.
+// Everything a goal scene needs from KB/231..247 plus the parsed scripts,
+// read once per data directory and cached for the session.
 struct SceneData {
-    Bytes tiles_a, tiles_b;
-    std::array<std::unique_ptr<Image>, 5> rinks;  // map KB236 (index 0) or KB242..245
-    std::array<std::vector<Image>, 3> sprites;    // KB233, KB234, KB235
-    Image panel;
-    Bytes palette;                                // KB247: 255 DAC triples
-    std::map<std::string, TorScene> scripts;
+    Bytes tiles_a, tiles_b;                       // rink tile sets KB/231 and KB/232
+    std::array<std::unique_ptr<Image>, 5> rinks;  // rink built from map KB/236 (index 0) or KB/242..245, on demand
+    std::array<std::vector<Image>, 3> sprites;    // sprite sets KB/233, KB/234, KB/235
+    Image panel;                                  // score panel KB/246
+    Bytes palette;                                // KB/247: 255 DAC triples
+    std::map<std::string, TorScene> scripts;      // TORE scripts by file name
 };
 
+// The cached scene data of a data directory, loaded on first use.
 SceneData& scene_data(const std::filesystem::path& data) {
     static std::map<std::filesystem::path, std::unique_ptr<SceneData>> cache;
     auto& slot = cache[data];
@@ -37,15 +43,18 @@ SceneData& scene_data(const std::filesystem::path& data) {
     return *slot;
 }
 
+// The 672 x 1152 rink picture for an arena: arenas 1..4 use map KB/(241 +
+// arena), any other value the default map KB/236.
 const Image& rink(const std::filesystem::path& data, int arena) {
     SceneData& d = scene_data(data);
-    const int index = arena >= 1 && arena <= 4 ? arena : 0;  // ovl14_4938: entry 5 of the load loop is 236 or 0xF1 + arena
+    const int index = arena >= 1 && arena <= 4 ? arena : 0;
     auto& r = d.rinks[size_t(index)];
     if (!r) r = std::make_unique<Image>(decode_rink(d.tiles_a, d.tiles_b,
                                                     read_file(data / "KB" / (std::to_string(index ? 241 + index : 236) + ".vga"))));
     return *r;
 }
 
+// The parsed scene script TORE/<name>, cached.
 const TorScene& script(const std::filesystem::path& data, const std::string& name) {
     SceneData& d = scene_data(data);
     auto it = d.scripts.find(name);
@@ -53,20 +62,22 @@ const TorScene& script(const std::filesystem::path& data, const std::string& nam
     return it->second;
 }
 
-// Renderer state after n frames: FUN_1bbf_5250 starts the camera at the script position minus (16, 32), clamped at 0;
-// FUN_1bbf_4d98 clamps every camera move to 0..0x160 / 0..0x3B8 (the 320 x 200 window inside the 672 x 1152 rink).
-// FUN_1bbf_5316 moves the puck freely and an object whose frame word is not zero; the object type is the frame's sprite.
+// Renderer state after n frames. The camera starts at the script position minus (16, 32), clamped at 0; every camera
+// move is clamped to 0..0x160 / 0..0x3B8 (the 320 x 200 window inside the 672 x 1152 rink). The puck moves freely, and
+// an object moves when its sprite or move word in the frame is not zero; the object type is the frame's sprite.
 struct View {
-    int cam_x = 0, cam_y = 0, puck_x = 0, puck_y = 0;
-    std::array<TorObject, kTorObjects> objects{};
+    int cam_x = 0, cam_y = 0, puck_x = 0, puck_y = 0;  // camera (top left of the window) and puck, rink pixels
+    std::array<TorObject, kTorObjects> objects{};      // the twelve objects
 };
 
+// Applies one camera move d to pos, clamping only in the direction moved.
 int clamp_move(int pos, int d, int max) {
     if (d > 0) return std::min(pos + d, max);
     if (d < 0) return std::max(pos + d, 0);
     return pos;
 }
 
+// Replays the first n frames of a script from its start state.
 View play(const TorScene& s, int n) {
     View v{std::max(0, s.camera_x - 16), std::max(0, s.camera_y - 32), s.puck_x, s.puck_y, s.objects};
     for (int i = 0; i < n && size_t(i) < s.frames.size(); i++) {
@@ -87,9 +98,9 @@ View play(const TorScene& s, int n) {
     return v;
 }
 
-// FUN_1bbf_4ecf / FUN_1bbf_4fe7: an object at (0, 0) is skipped; its top left corner is (x - 0x50, y - 0x60) in rink
-// pixels; types 0 and 1 are the 5 x 5 bitmaps of the renderer, 2..0x29 / 0x2A..0x51 / 0x52..0x5D the sprites of KB233 /
-// KB234 / KB235, higher types draw nothing. Colour 0 is transparent.
+// Draws one object into the 320 x 200 rink window. An object at (0, 0) is skipped; its top left corner is
+// (x - 0x50, y - 0x60) in rink pixels; types 0 and 1 are the built-in 5 x 5 dot and puck bitmaps, 2..0x29 / 0x2A..0x51 /
+// 0x52..0x5D the sprites of KB/233 / KB/234 / KB/235, higher types draw nothing. Colour 0 is transparent.
 void draw_object(Image& screen, const SceneData& d, const View& v, int type, int x, int y) {
     if (x == 0 && y == 0) return;
     const uint8_t* pixels = nullptr;
@@ -113,22 +124,27 @@ void draw_object(Image& screen, const SceneData& d, const View& v, int type, int
         }
 }
 
-constexpr auto kSceneFont = ClassicFontId::Flow;  // native font 2 (ovl14_504d)
+constexpr auto kSceneFont = ClassicFontId::Flow;  // the game's font 2, used for the whole panel
 
-// sub_19CB2 / sub_19B54 with DS:0374 = 2 (set by ovl14_504d / ovl14_5258): at least two characters, padded in front with
-// '%', a blank glyph as wide as a digit in the game fonts (native encoding)
+// The panel prints numbers with a minimum width of two: at least two characters, padded in front with '%', a blank
+// glyph as wide as a digit in the game fonts (native encoding).
 std::string two_places(int n) { return (n >= 0 && n < 10 ? "%" : "") + std::to_string(n); }
 
 }  // namespace
 
+// Number of frames of scene script <name>.
 int classic_goal_scene_length(const std::filesystem::path& data, const std::string& name) {
     return int(script(data, name).frames.size());
 }
 
+// Draws one frame of a goal scene: the rink window (rows 0..199) and the
+// score panel below it (names, chance description, minute, goals).
 void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
     const std::filesystem::path& data = c.data();
     const SceneData& d = scene_data(data);
-    // FUN_1bbf_47f0(0, 0xFF, KB247): DAC 0..254; 255 stays; then the shirt colours (ovl14_4938 4D99..4DF6)
+    // Palette entries 0..254 from KB/247 (255 stays), then the two shirt
+    // colours in entries 0xFE (home) and 0xFD (away). A shirt colour packs
+    // 6-bit R in bits 6..11, G in bits 2..7 and B in bits 0..3 (shifted up by 2).
     c.reset_palette();
     for (int i = 0; i < 255 && size_t(i) * 3 + 2 < d.palette.size(); i++)
         c.set_dac(i, d.palette[size_t(i) * 3], d.palette[size_t(i) * 3 + 1], d.palette[size_t(i) * 3 + 2]);
@@ -141,9 +157,9 @@ void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
     const Image& r = rink(data, s.arena);
     for (int y = 0; y < 200; y++)
         for (int x = 0; x < 320; x++) screen.at(x, y) = r.pixels[size_t(v.cam_y + y) * size_t(r.width) + size_t(v.cam_x + x)];
-    draw_object(screen, d, v, 1, v.puck_x, v.puck_y);  // FUN_1bbf_51eb: the puck first, then the 12 objects
+    draw_object(screen, d, v, 1, v.puck_x, v.puck_y);  // the puck first, then the 12 objects
     for (const TorObject& o : v.objects) draw_object(screen, d, v, o.sprite, o.x, o.y);
-    // ovl14_504d on the split screen panel (y + 200)
+    // the score panel in the split-screen area below the rink (y + 200)
     for (int y = 0; y < kTorPanelHeight; y++)
         for (int x = 0; x < kTorPanelWidth; x++) screen.at(x, 200 + y) = d.panel.pixels[size_t(y) * kTorPanelWidth + size_t(x)];
     constexpr int Y = 200;
@@ -153,9 +169,9 @@ void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
     c.text(kSceneFont, 0xA9, Y + 0x0D, s.names[1], 7, 0, 0x137);
     c.rect(8, Y + 0x1A, 0xBC, Y + 0x22, 4);
     c.text(kSceneFont, 8, Y + 0x21, s.info, 7, 0);
-    c.rect(0xE8, Y + 0x1A, 0x12D, Y + 0x22, 4);  // ovl14_5258: "<minute>.MINUTE" (DS:5518)
+    c.rect(0xE8, Y + 0x1A, 0x12D, Y + 0x22, 4);  // "<minute>.MINUTE"
     c.text_native(kSceneFont, 0xE8, Y + 0x21, two_places(s.minute) + ".MINUTE", 7, 0);
-    const int w = c.font().measure(kSceneFont, "00");  // DS:5515
+    const int w = c.font().measure(kSceneFont, "00");  // the score box is as wide as "00"
     for (int side = 0; side < 2; side++) {
         const int x0 = side ? 0xA9 : 9, x1 = side ? 0x137 : 0x97;
         const int bx = 0x47 - w / 2 + x0;
@@ -164,14 +180,24 @@ void draw_classic_goal_scene(ClassicCanvas& c, const ClassicGoalScene& s) {
     }
 }
 
+// Script name "<n>.<h|a><t|v>[e|j]": n the scene number, h/a the attacking
+// side (home/away), t/v goal or miss, e penalty shot, j the "six" variant.
+// Penalty shots and six-scenes always start at scene 2 (there are only two
+// scenes of each, see TORE/anzahl).
 std::string classic_goal_scene_script(int n, int side, bool goal, bool penalty_shot, bool six) {
-    if (penalty_shot || six) n = 2;  // rand(2, e / j count) with two scenes each (TORE\anzahl)
+    if (penalty_shot || six) n = 2;
     std::string name = std::to_string(n) + (side ? ".a" : ".h") + (goal ? "t" : "v");
     if (penalty_shot) name += "e";
     else if (six) name += "j";
     return name;
 }
 
+// Frame sequence of one scene on top of the match frame base: one frame per
+// script step (one BIOS tick, about 54 ms each), then the final frame with
+// the goal counted (held for six delay units of a third tick, ~109 ms), then
+// a pause of 20 delay units (~366 ms) that remembers the scene for a replay.
+// With rink_stays the pause keeps the rink on screen; otherwise it returns
+// to base.
 std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::path& data, const ClassicMatchFrame& base,
                                                          ClassicGoalScene scene, int side, bool goal, bool rink_stays) {
     std::vector<ClassicMatchFrame> out;
@@ -191,12 +217,12 @@ std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::
         scene.frame = k;
         out.push_back(frame(scene, 54925 / 1000));  // one BIOS tick
     }
-    // ovl14_4938 4F49..: the goal is added (ovl14_504d mode 2), then delay(6) = two ticks
+    // after the script the goal is added to the panel, then delay(6) = two ticks
     ClassicGoalScene end = scene;
     if (goal) end.goals[size_t(side)]++;
     end.final = true;
     out.push_back(frame(end, 6 * 54925 / 3000));
-    // ovl14_1dc7 (seg ovr038:21A3..21CA): delay(20), then a typed 'r' / 'w' plays the chance again
+    // delay(20); during it a typed 'r' / 'w' plays the chance again
     ClassicMatchFrame after = rink_stays ? frame(end, 20 * 54925 / 3000) : base;
     if (!rink_stays) {
         after.message.reset();
@@ -212,6 +238,9 @@ std::vector<ClassicMatchFrame> classic_goal_scene_frames(const std::filesystem::
     return out;
 }
 
+// Frames of a replay requested during the pause frame after: the next scene
+// of the same kind with the score from before the chance. At most three
+// replays (play < 3); returns no frames otherwise.
 std::vector<ClassicMatchFrame> classic_goal_scene_replay(const std::filesystem::path& data, const ClassicMatchFrame& after) {
     if (!after.after_scene || after.after_scene->play >= 3) return {};
     ClassicGoalScene s = *after.after_scene;

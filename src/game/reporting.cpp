@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Reporting/camera mode of a team and its Game wrapper; see reporting.hpp.
 #include "game/reporting.hpp"
 #include "game/game.hpp"
 namespace em {

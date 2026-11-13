@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Implementation of the OPL2 model (see opl2.hpp): register decoding, envelope and phase generators, operator
+// output with feedback and FM/AM connection, and the five rhythm instruments.
 #include "formats/opl2.hpp"
 
 #include <algorithm>
@@ -19,7 +21,7 @@ constexpr int kKslShift[4] = {8, 1, 2, 0};
 // further step of 4 in the effective rate halves them.
 constexpr double kAttackSeconds = 2.826, kDecaySeconds = 39.28;
 
-bool valid_offset(int o) { return o >= 0 && o < 22 && (o & 7) < 6; }
+bool valid_offset(int o) { return o >= 0 && o < 22 && (o & 7) < 6; }  // offsets 6, 7, 14, 15 have no operator
 
 }  // namespace
 
@@ -199,6 +201,8 @@ double Opl2::attenuation_db(int offset) const {
     return op_[size_t(offset)].att * 0.1875;
 }
 
+// One sample: advances LFOs and noise, steps every operator's envelope and phase, then mixes the melodic
+// channels (all nine, or 0..6 in rhythm mode) and, in rhythm mode, the drum outputs at double weight.
 float Opl2::sample() {
     // LFOs: tremolo 3.7 Hz (1 or 4.8 dB), vibrato 6.1 Hz (7 or 14 cents)
     am_phase_ += 3.7 / kRate;

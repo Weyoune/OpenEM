@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Sale offers of computer clubs for a manager's players; see sale_quote.hpp.
 #include "game/sale_quote.hpp"
 #include "game/native_roster.hpp"
 #include <algorithm>
@@ -6,21 +7,29 @@
 
 namespace em {
 namespace {
+// Wrap-around conversions and multiplication matching the original's 16/32-bit arithmetic.
 int16_t i16(int n){return std::bit_cast<int16_t>(uint16_t(n));}
 int32_t i32(uint32_t n){return std::bit_cast<int32_t>(n);}
 int32_t product(int32_t a,int32_t b){return i32(uint32_t(uint64_t(uint32_t(a))*uint32_t(b)));}
+// State offset of squad row `slot` of block `block`.
 size_t row_at(int block,int slot){return 0x696d+size_t(block)*0x618+size_t(slot)*52;}
+// Stores a little-endian 32-bit value.
 void put32(Bytes& s,size_t at,int32_t value){for(size_t b=0;b<4;++b)s.at(at+b)=uint8_t(uint32_t(value)>>(8*b));}
-int buyer_mean(const Bytes& s,int buyer,int16_t incoming_si){
-    //A read past the native team allocation needs guest heap context, not HOK table bytes.
-    const auto shifted=std::ptrdiff_t(buyer)*61+incoming_si;
+// Mean of the two bytes at +24 and +26 (defence skill 1 and skill 2) of the team record at
+// buyer * 61 + leftover_offset. Throws FormatError when that lands outside the 150 team records: the
+// original would then read memory that is not part of the save state.
+int buyer_mean(const Bytes& s,int buyer,int16_t leftover_offset){
+    const auto shifted=std::ptrdiff_t(buyer)*61+leftover_offset;
     if(shifted<0||shifted+26>=150*61)throw FormatError("sale: buyer register outside native team data");
     const size_t at=0x17e7+size_t(shifted);
     return (int(s.at(at+24))+s.at(at+26))/2;
 }
+// Strengthens the buying team with the sold player: delta = clamp((strength - mean + 10) / 3, 1, 10),
+// then for a random kind (0 = defence, 1 = attack) skill 1 (+24) and skill 2 (+26) of the team record
+// each rise by rand(delta - 1, delta + 1), wrapping at 256. `mean` is the value from buyer_mean.
 void adjust_buyer(Bytes& s,int buyer,int strength,int mean,BorlandRandom& rng){
     const size_t team=0x17e7+size_t(buyer)*61;
-    //175C reads the same SI-offset pair twice before SI becomes random kind0/1.
+    // The original reads the same offset pair twice (for the mean) before the kind is drawn at random.
     const int delta=std::clamp((strength-mean+10)/3,1,10);
     const size_t kind=size_t(native_sale_range(rng,0,1));
     s.at(team+24+kind)=uint8_t(s.at(team+24+kind)+native_sale_range(rng,delta-1,delta+1));
@@ -47,7 +56,7 @@ SaleAmounts native_sale_amounts(int32_t value,bool listed,bool foreign,int years
     return result;
 }
 bool begin_native_sale(const HokFile& h,const ContractTables& tables,BorlandRandom& rng,
-    int block,int slot,int16_t incoming_si,SaleQuote& output,int manager){
+    int block,int slot,int16_t leftover_offset,SaleQuote& output,int manager){
     if(manager<0||manager>=4)return false;
     if((block!=manager&&block!=4)||slot<0||slot>=(block==4?11:29))return false;
     const size_t at=row_at(block,slot);const int id=h.state.at(at+15);
@@ -56,7 +65,7 @@ bool begin_native_sale(const HokFile& h,const ContractTables& tables,BorlandRand
     if(block!=4&&(h.state.at(at+0x18)&0x80))return false;
     const int bidder=h.state.at(at+22);if(bidder>=150)return false;
     SaleQuote quote;quote.block=block;quote.slot=slot;quote.id=id;quote.bidder=bidder;quote.manager=manager;
-    quote.years=h.state.at(at+11);quote.native_si=incoming_si;
+    quote.years=h.state.at(at+11);quote.native_si=leftover_offset;
     std::copy_n(h.state.begin()+std::ptrdiff_t(at),52,quote.row.begin());
     const auto player=contract_player(h,block,slot);
     const int32_t value=int32_t(player_worth(tables,player,Worth::Value,rng));
@@ -87,7 +96,8 @@ bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool se
     if(q.block!=4){
         put32(h.state,cash,i32(le32(h.state,cash)+uint32_t(q.amounts.net)));
         native_remove_storage_row(h,q.block,q.slot,29);
-        //0F69 reads the old pointer after the shift, including its bidder/skills.
+        // The original reads the row pointer again after the rows moved up, so bidder and skills
+        // come from the row that now occupies the slot.
         buyer=h.state.at(at+22);h.state.at(global+29)=uint8_t(buyer);
         const int strength=(int(h.state.at(at+16))+h.state.at(at+17)+h.state.at(at+18))/3;
         if(buyer<64)adjust_buyer(h.state,buyer,strength,mean,rng);

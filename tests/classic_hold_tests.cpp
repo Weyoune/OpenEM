@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Held scroll arrows (sub_586C8 without wait, ovr028:493A / 259E): Statistiken -> Frueher keeps scrolling
-// while the button is held and stops at release(); a single click scrolls one step.
+// Held scroll arrows: on Statistiken -> Frueher the list keeps scrolling while the mouse button is held on an
+// arrow (the original polls the button without waiting for its release) and stops at release(); a single click
+// scrolls one step.
+//
+// Usage: classic_hold_tests DATA REFERENCE OUTPUT (REFERENCE holds M0.HOK)
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include <chrono>
@@ -13,6 +16,7 @@
 namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `ok` is false.
 static void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_error(message); }
 
 // Canvas of the Frueher page after `clicks` single presses on the lower arrow.

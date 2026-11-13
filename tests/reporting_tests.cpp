@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Tests for the match reporting mode of a team (set_team_reporting, src/game/reporting.cpp).
+// Part 1 (only when the reference saves exist): switching ESV (team 4) to intermediate
+// reporting and then to camera reporting must reproduce the complete save states recorded with
+// the original game, draw no random numbers, and switching back to 0 restores the start state.
+// Part 2 uses a synthetic state to check the arbitration of the four camera places.
+// Arguments: the game data folder (EM.EXE) and the folder holding the reference saves.
 #include "game/reporting.hpp"
 #include "game/game.hpp"
 #include "game/checkpoint.hpp"
@@ -6,7 +12,11 @@
 #include <filesystem>
 #include <stdexcept>
 using namespace em;
+// Throws `why` as a test failure unless `ok`.
 static void require(bool ok,const char* why){if(!ok)throw std::runtime_error(why);}
+// State offset of the 61-byte team record of `team` (0..149). Fields used: +0x16 the human
+// manager running the team (0 = none), +0x34 crest/reporting byte (bits 6..7 = reporting
+// mode, 0x80 = camera; the low bits belong to the crest and must be preserved).
 static size_t record(int team){return 0x17E7+size_t(team)*61;}
 int main(int argc,char**argv){
     try{
@@ -23,6 +33,7 @@ int main(int argc,char**argv){
             g.set_team_reporting(4,0);
             require(decode_hok(g.save_bytes()).state==decode_hok(read_file(native/"gui-h0-reload.hok")).state,"report cycle restores original HOK state");
         }
+        // Synthetic arbitration cases: teams 0..3 already hold the four club camera places.
         HokFile h;h.state.resize(record(150));
         for(int t=0;t<4;t++)h.state[record(t)+0x34]=uint8_t(0x80+t+1);
         h.state[record(5)+0x34]=17;

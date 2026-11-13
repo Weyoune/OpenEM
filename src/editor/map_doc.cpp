@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Hall map editor document: loading, rendering, editing and saving the goal scene rink maps (see map_doc.hpp).
 #include "editor/map_doc.hpp"
 
 #include <algorithm>
@@ -15,6 +16,8 @@ const std::vector<int>& MapDoc::numbers() {
 
 MapDoc::MapDoc(const fs::path& data) : kb_(data / "KB") {}
 
+// Copies the cell's tile into the rendered rink, flipped vertically when the mirror bit is set. Cells that refer
+// to a tile beyond the loaded set are left as they are.
 void MapDoc::draw_cell(int c, int r) {
     const int t = tile(c, r);
     const bool mirror = mirrored(c, r);
@@ -27,6 +30,8 @@ void MapDoc::draw_cell(int c, int r) {
     }
 }
 
+// The two tile files are packed KB blocks of raw 8-bit pixels; their concatenation is cut into 16 x 16 tiles.
+// The map itself is stored unpacked as big-endian u16 entries.
 bool MapDoc::load(int number) {
     try {
         Bytes a = unpack_kb_block(read_file(kb_ / "231.vga")), b = unpack_kb_block(read_file(kb_ / "232.vga"));

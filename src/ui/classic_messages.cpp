@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The message field of the classic main menu (see classic_messages.hpp).
 #include "ui/classic_messages.hpp"
 
 #include <string>
@@ -7,11 +8,14 @@
 
 namespace em::ui {
 namespace {
-constexpr auto kFont = ClassicFontId::Mini;  // native font 3 (sub_1A0CD(screen, 3))
-constexpr uint8_t kKey = 0xC0;
-constexpr size_t kEntryMinusOneText = 0x42;  // DS:D226 = D294 - 0x71 + 3, inside the share block DS:D214 (state 0x30)
+constexpr auto kFont = ClassicFontId::Mini;  // the game's font 3
+constexpr uint8_t kKey = 0xC0;               // transparent colour of KB/6
+// Where the game's address arithmetic puts the text of "entry -1": one entry size (0x71) before the first entry's
+// text, which lands at save-state offset 0x42, inside the share block that starts at 0x30.
+constexpr size_t kEntryMinusOneText = 0x42;
 
-// The text bytes of entry `index` as the routine addresses them (DS:D297 + index * 0x71).
+// The text bytes of entry `index` as the game addresses them (entry base + index * entry size + 3), up to the first
+// NUL or kMessageText bytes; index -1 reads kEntryMinusOneText.
 std::string raw_text(const Bytes& s, int index) {
     const size_t at = index < 0 ? kEntryMinusOneText : kMessageBase + size_t(index) * kMessageSize + 3;
     std::string t;
@@ -22,7 +26,7 @@ std::string raw_text(const Bytes& s, int index) {
 
 void ClassicMessageField::open(const Bytes& state, int manager) {
     manager_ = manager;
-    index_ = native_next_message(state, -1, true, manager);  // sub_5863D(0xFF, 1)
+    index_ = native_next_message(state, -1, true, manager);  // the first (newest) entry of the manager
     active_ = true;
     pressed_ = -1;
 }

@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Format tests. Without arguments: unit tests on synthetic data. With the original EM directory
-// as argument: every KB\*.vga is classified, all images decode, and the number of images the RLE
-// scheme fills completely must not drop below the known count (regression guard while the
-// remaining variants are worked out).
+// Format and game-logic tests. Without arguments: unit tests of the VGA/palette codec on synthetic
+// data. With the original game folder as argument: every KB\*.vga is classified and decoded (and
+// re-encoded), the savegames, the master database KB\23.vga and the goal-scene scripts in TORE\
+// are read. With a second argument (the folder of reference saves made with the original game) the
+// game core is checked against them: calendar, finances, attendance, contracts, transfers, sponsors,
+// training, season end and season change, the day loop, saving/loading (.HOK and the OpenEM
+// checkpoint), cups, play-offs, European cup and WM, injuries, penalties, lineups and tactics, the
+// match engine and its statistics.
+//
+// Each test function is independent; failed CHECKs are counted and the program fails at the end if
+// any did.
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -40,7 +47,9 @@
 using namespace em;
 namespace fs = std::filesystem;
 
+// Number of failed CHECKs.
 static int failures = 0;
+// Reports a failed condition with file and line and counts it, without stopping the test.
 #define CHECK(cond)                                                       \
     do {                                                                  \
         if (!(cond)) {                                                    \
@@ -49,6 +58,8 @@ static int failures = 0;
         }                                                                 \
     } while (0)
 
+// VGA image codec on synthetic data: header (width, height, data size as u16), RLE runs (0x80 | n-1, value) and
+// literals (n-1, bytes), the 200-row chunks of tall images, incomplete streams, palette scaling and the encoder.
 static void unit_tests() {
     // 4x2 image: run of 5 x 0x07 (0x84), literal of 3 bytes (0x02 a b c)
     Bytes d = {4, 0, 2, 0, 6, 0, 0x84, 0x07, 0x02, 1, 2, 3};
@@ -74,8 +85,8 @@ static void unit_tests() {
     p[0] = 63;
     CHECK(classify_vga(p) == VgaKind::Palette);
     CHECK(decode_palette(p).rgb[0][0] == 255);
-    // Native KB21 starts with E4 EC F0 after black. Its high bits are not an
-    // eight-bit RGB indicator: native PNG color is exactly 92 B2 C3.
+    // KB21 of the original starts with E4 EC F0 after black. Its high bits are not an
+    // eight-bit RGB indicator: the original shows exactly 92 B2 C3 (only the low six bits count).
     p[0] = 228; p[1] = 236; p[2] = 240;
     CHECK((decode_palette(p).rgb[0] == std::array<uint8_t,3>{146,178,195}));
 
@@ -94,6 +105,8 @@ static void unit_tests() {
     CHECK(decode_palette(withpal, withpal.size() - 765).rgb[3] == pal.rgb[3]);
 }
 
+// Every KB\*.vga of the original: 114 files, 94 images (88 plain, 6 with palette), all decode completely and
+// survive an encode/decode round trip; embedded palettes re-encode to their six-bit values.
 static void original_kb(const fs::path& em_dir) {
     int images = 0, complete = 0, files = 0;
     for (auto& e : fs::directory_iterator(em_dir / "KB")) {
@@ -218,7 +231,7 @@ static void original_db(const fs::path& em_dir) {
 
 // Goal scenes: every TORE script parses up to its 0xAAAA end mark with the frame count implied by
 // the file size, and all objects stay on (or just beside) the 672 x 1152 portrait rink. The rink
-// and sprite graphics unpack to the sizes the loader allocates (DS:5400).
+// and sprite graphics unpack to the sizes the game's loader allocates for them.
 static void original_tore(const fs::path& em_dir) {
     int files = 0;
     bool frames_ok = true, bounds_ok = true;
@@ -294,9 +307,11 @@ static void calendar_vs_saves(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(cal.league_matchday_day(10) == 32);  // MONAT1: Wednesday 11.10., matchday 10
 }
 
-// Monthly finances (ovl08) against the "Totale" screen: AKTIE is MONAT1 with 134000 DM put into
+// Monthly finances against the "Totale" screen: AKTIE is MONAT1 with 134000 DM put into
 // the savings book; the screen shows income 14715 DM and expenses 482566 DM, and the save holds
-// the income ovl08_16b7 computed for it. MONAT1 still holds the START value 40000.
+// the income the original computed for it. MONAT1 still holds the START value 40000. Amounts are
+// raw money units (3 per DM). Also: daily interest over a month, loan and overdraft interest, and
+// the level byte (state 0xAEB4) and cost factor (state 0x06B0) read from the save, not from EM.EXE.
 static void finances(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "AKTIE.HOK") || !fs::exists(ref_dir / "MONAT1.HOK")) return;
     FinanceTables t = load_finance_tables(read_file(em_dir / "EM.EXE"));
@@ -328,7 +343,7 @@ static void finances(const fs::path& em_dir, const fs::path& ref_dir) {
     loan.balance = -90000;
     CHECK(loan_interest(loan) == 12000 && monthly_income(loan, true) == 40125);
     CHECK(monthly_expenses(t, loan, true, true) == 1447700 + 12000 + 9000);
-    // DS:0ED8 and DS:02BC are runtime HOK fields, not immutable EXE defaults.
+    // The game level and the cost factor are fields of the save, not immutable EXE defaults.
     const Bytes exe = read_file(em_dir / "EM.EXE");
     const long base_cost = monthly_expenses(t, b, false, false);
     for (int level : {0, 5}) {
@@ -346,7 +361,7 @@ static void finances(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(monthly_expenses(load_finance_tables(exe, a), b, false, false) == base_cost + 35000);
 }
 
-// Attendance (ovl08_21e5): Köln played four home games before MONAT1, all sold out (7500 places,
+// Attendance: Köln played four home games before MONAT1, all sold out (7500 places,
 // total 30000). With the MONAT1 teams and table every first-division guest should fill the hall
 // nearly always at 13 DM; at 30 DM fewer come, and the ticket money is booked.
 static void attendance(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -424,9 +439,9 @@ static void attendance(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("\n");
 }
 
-// Market value and salary (ovl11_3d36): START holds the values the game computed for the Köln
-// squad at the start (ovl03_0135); all 25 must come out exactly. Renewal demands (ovl11_41db)
-// grow with the contract length and shrink with the age at the season end.
+// Market value and salary: START holds the values the game computed for the Köln squad when the
+// new game was created; all 25 must come out exactly. Renewal demands grow with the contract
+// length and with the progress of the season.
 static void contracts(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     ContractTables t = load_contract_tables(read_file(em_dir / "EM.EXE"));
@@ -452,9 +467,9 @@ static void contracts(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(one == 51300L * 112 / 100 && three > one && late > three);
 }
 
-// Transfer market (overlay 11): the listed players of START and MONAT1 (squad block 4) are on the
-// list (+0x1A = 4) with form 45..55 and value / salary as ovl11_3d36 computes them; bids, offers
-// and contract answers behave as decoded.
+// Transfer market: the listed players of START and MONAT1 (squad block 4) are on the list
+// (+0x1A = 4) with form 45..55 and value / salary as the market value formula computes them; bids
+// for a seller, sale offers and the players' contract answers behave as the original's rules say.
 static void transfers(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "MONAT1.HOK")) return;
     ContractTables t = load_contract_tables(read_file(em_dir / "EM.EXE"));
@@ -504,8 +519,10 @@ static void transfers(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(yes > 150);
 }
 
-// Sponsors (ovl08_2893 / 2ba7): MONAT1 stores image 70 from an earlier refresh.
-// Current packed history is decoded independently; generated offers stay in range.
+// Competition factors of the club image: how far the manager's club is in the play-offs (or
+// relegation), the DEB cup and the European cup, read from the pairing lists and phase bytes of the
+// save (cup round 0x8ED1, cup pairings 0x8E51, European phase 0x8F86, play-off cursor 0x03B6 and
+// pairings 0x8E91, relegation stage 0x8F87/0x0259).
 static void image_competitions(const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     HokFile source = decode_hok(read_file(ref_dir / "START.HOK"));
@@ -559,6 +576,10 @@ static void image_competitions(const fs::path& ref_dir) {
     CHECK(rejected);
 }
 
+// Sponsors and the club image: MONAT1 stores image 70 from an earlier refresh. The stadium score
+// and the packed rank history (fever curve) are decoded from the save; the image formula stays in
+// 0..100 and gives exact values for fixed inputs, including the original's order of random draws;
+// generated offers stay in their ranges, and a sponsor renews only for a high enough image.
 static void sponsors(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "MONAT1.HOK")) return;
     SponsorTables t = load_sponsor_tables(read_file(em_dir / "EM.EXE"));
@@ -636,7 +657,7 @@ static void sponsors(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(sponsor_renews(c, 100, rng) && !sponsor_renews(c, 50, rng));
 }
 
-// Training (146e:0653 / 00bc): the plan saved in START and MONAT1 (state 0x070C) is the default
+// Training (weekly plan and morale trend): the plan saved in START and MONAT1 (state 0x070C) is the default
 // plan; four weeks of it applied to the START squad move condition / technique about as far as
 // the original did until MONAT1 (most players lose 0..2 points).
 static void training(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -689,7 +710,7 @@ static void training(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK((q.trend & 15) == 3);
     }
     CHECK(up > 60 && up < 90);
-    // 146e:0c89 renews an expired trend via ovl11_307a. The old
+    // The weekly morale step renews an expired trend with a fresh morale profile. The old
     // movement is discarded, including the old morale itself. Borland
     // seed 6 draws 1,49,13,2,1 for the movement check and fresh profile.
     TrainingPlayer expired;
@@ -714,7 +735,11 @@ static void training(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(zero_rng.state() == 136172863u);  // zero -> -1 does not renew in the original
 }
 
-// Season end (ovl02_0000): prize money, retirement chances and the replacement players.
+// Season end: the financial licence (withdrawn below -2.000.000 DM raw balance unless a
+// competition exempts the club) and the relegation it causes, prize money, the manager's career
+// record (four bytes per season at manager block +0x18, 50 seasons, counter at +0xEE), the weekly
+// stadium construction step, the scorer and goalkeeper titles, retirement chances and the
+// replacement players.
 static void season_end() {
     CHECK(!financial_license_due(-2000000, 0, 0, 0));
     CHECK(financial_license_due(-2000001, 0, 0, 0));
@@ -726,7 +751,7 @@ static void season_end() {
     {
         std::array<int, 4> work{11, 9, 12, 19};
         insert_financial_relegation(work, {2, 3, 0, 1}, 0, 7, 0);
-        CHECK((work == std::array<int, 4>{7, 9, 12, 19}));  // native LIC_summary working bytes
+        CHECK((work == std::array<int, 4>{7, 9, 12, 19}));  // the original's relegation working bytes
         work = {0, 1, 12, 13};
         insert_financial_relegation(work, {0, 1, 2, 3}, 0, 7, 0);
         CHECK((work == std::array<int, 4>{12, 1, 7, 13}));
@@ -837,7 +862,7 @@ static void day_loop(const fs::path& em_dir, const fs::path& ref_dir) {
     for (int l = 0; l < 3; l++) {
         CHECK(g.next_matchday(l) == 20);
     }
-    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+    {  // the pair-table error of the original (reproduced) moves games between teams, the total stays
         int all = 0;
         for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
         CHECK(all == 36 * 19);
@@ -850,8 +875,9 @@ static void day_loop(const fs::path& em_dir, const fs::path& ref_dir) {
                 g.budget().balance / 3, g.image());
 }
 
-// ovl14_2630 records only league home attendance, including the 22 graph bytes.
-// The September cup home still sells tickets; it must not shift that graph.
+// The attendance history records only league home games, including the 22 graph bytes (manager
+// block +0xFE, attendance / 1000 per home game). The September cup home game still sells tickets;
+// it must not shift that graph.
 static void attendance_history(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game game(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 6);
@@ -872,10 +898,9 @@ static void attendance_history(const fs::path& em_dir, const fs::path& ref_dir) 
         }
     }
     CHECK(ticket_games == 5 && game.budget().home_games == 4);
-    //The former1495754 was a historical synthetic RNG snapshot, not a
-    //native cash reference. The recovered eleven daily construction-reset
-    //draws legitimately change this trajectory. Still require that updating
-    //the attendance graph never makes exported money disagree with the model.
+    // The exact balance depends on every random draw of the month and is not pinned here. Still
+    // require that updating the attendance graph never makes the exported money (manager block
+    // +0x18F) disagree with the model.
     CHECK(int32_t(le32(decode_hok(game.save_bytes()).state,0x0DCD+0x18F))==game.budget().balance);
     std::printf("attendance history: 4 league homes, 5 ticket sales; cup excluded from graph\n");
 }
@@ -885,11 +910,11 @@ static void attendance_history(const fs::path& em_dir, const fs::path& ref_dir) 
 static void full_season(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 9);
-    for (int i = 0; i < 231; i++) {  // day 231 (28.04.) is the last one played; the next call changes the season (REAL-CODE period 30)
+    for (int i = 0; i < 231; i++) {  // day 231 (28.04.) is the last one played; the next call changes the season, as in the original
         g.advance_day();
         g.clear_log();
     }
-    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+    {  // the pair-table error of the original (reproduced) moves games between teams, the total stays
         int all = 0;
         for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
         CHECK(all == 36 * 44);
@@ -921,7 +946,7 @@ static void full_season(const fs::path& em_dir, const fs::path& ref_dir) {
 }
 
 // Season change: after the last day the relegation group winners from below play in the upper
-// division (team indices swapped like ovl06_0c29), the year advances, tables start empty and
+// division (team indices swapped as the original does it), the year advances, tables start empty and
 // the second season plays its 44 matchdays again.
 static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
@@ -956,9 +981,9 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     std::vector<std::string> oberliga_down;  // 11th and 12th go to the regional league
     for (int s = 0; s < 12; s++)
         if (g.league(2).rows[size_t(s)].position >= 10) oberliga_down.push_back(g.save().teams[size_t(24 + s)].name);
-    const int euro = g.euro_champion();  // a German European cup winner enters again (ovl05_51a5)
+    const int euro = g.euro_champion();  // a German European cup winner enters again
     const std::string euro_winner = euro >= 0 && euro < 64 ? g.save().teams[size_t(euro)].name : champion;
-    g.advance_day();  // the season change stops in the menu before the first matchday (REAL-CODE period 30)
+    g.advance_day();  // the season change stops in the menu before the first matchday, as in the original
     CHECK(g.seasons_completed() == 1 && g.season_day() == 0);
     g.advance_day();  // new season, day 1
     CHECK(g.seasons_completed() == 1 && g.save().year == 1994 && g.season_day() == 1);
@@ -980,12 +1005,12 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
             kept++;
             const int d1 = pl.skill_a - before[i][1], d2 = pl.skill_b - before[i][2];
             if (std::abs(d1) > 15 && std::abs(d2) > 15) continue;  // a slot refilled by a replacement of the same age (not the same player)
-            if (!(d1 >= -3 && d1 <= 3 && d2 >= -3 && d2 <= 3 && pl.skill_a >= 30 && pl.skill_b <= 99)) bad++;  // a transfer-list refresh regenerates the skills of a player (ovr035:381E)
+            if (!(d1 >= -3 && d1 <= 3 && d2 >= -3 && d2 <= 3 && pl.skill_a >= 30 && pl.skill_b <= 99)) bad++;  // a transfer-list refresh regenerates the skills of a player
             moved += d1 != 0 || d2 != 0;
         }
         CHECK(kept > 150 && moved > kept * 3 / 4 && bad <= kept / 10);
     }
-    // ovl16_0480 assigns DB names before the late1238/146E club allocation.
+    // The season change gives free players names from the database before the later club allocation.
     // That later phase changes only the club, so names can belong to another
     // DB roster. Their original DB foreigner byte and uniqueness still hold.
     {
@@ -996,7 +1021,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
             names[pl.name]++;
             const size_t rec = size_t(pl.raw - g.save().state.data() - 0x4FC6) / 0x21;
             if (pl.raw[0x1A] != 6 || pl.team == g.human_team()) continue;
-            // Owner 4 is excluded from ovl16_0480. The next day's transfer refresh
+            // Owner 4 (transfer list) is excluded from the renaming. The next day's transfer refresh
             // may release him to owner 6 afterwards, retaining his previous name.
             if (const auto old = listed_names.find(rec); old != listed_names.end() && old->second == pl.name) {
                 market_releases++;
@@ -1027,7 +1052,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
             for (size_t k = 0; k < 3; k++) titles[k] += st[0x3BA5 + t * 0x50 + k];
         CHECK(titles[0] == 1 && titles[1] == 1);
     }
-    {  // ovl14_47ea: eternal table after the first season (u32 at state 0x3BF1 + team * 0x50)
+    {  // eternal table after the first season (u32 at state 0x3BF1 + team * 0x50)
         auto eternal = [&](size_t t) { return int(le32(g.save().state, 0x3BF1 + t * 0x50)); };
         for (size_t t = 0; t < 24; t++) {
             const int v = eternal(t), lo = t < 12 ? 41 : 21, hi = t < 12 ? 52 + 15 + 25 + 40 + 10 : 35 + 25 + 40;
@@ -1046,7 +1071,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
             if (g.save().teams[t].name == name) idx = int(t);
         CHECK(idx >= 36 && idx <= 41);  // regional slots of the draw rand(36, 41)
     }
-    // European cup draw (ovl05_4c7b(1)): eight different clubs, the German champion among them
+    // European cup draw of the new season: eight different clubs, the German champion among them
     // (and a German European cup winner), the others European clubs; every pair of a group
     // meets twice in the six rounds
     std::vector<int> drawn;
@@ -1071,7 +1096,7 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     // saved and decoded again, the draw stays
     const HokFile again = decode_hok(g.save_bytes());
     CHECK(again.euro_groups == g.save().euro_groups);
-    CHECK(std::find(drawn.begin(), drawn.end(), int(again.state[0x0DC8])) != drawn.end());  // DS:D0E6
+    CHECK(std::find(drawn.begin(), drawn.end(), int(again.state[0x0DC8])) != drawn.end());  // state 0x0DC8: the German champion
     CHECK(again.state[0x8E33] == again.state[0x0DC8] && again.state[0x8E3D] == again.state[0x0DC8]);
     CHECK(again.state[0x8E3D + size_t(german)] == 0x80);
     std::printf("season change: European cup groups");
@@ -1089,15 +1114,15 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
         g.advance_day();
         g.clear_log();
     }
-    {  // the pair-table error of the original moves games between teams (DEVIATIONS.md), the total stays
+    {  // the pair-table error of the original (reproduced) moves games between teams, the total stays
         int all = 0;
         for (int l = 0; l < 3; l++) for (const HokTableRow& r : g.league(l).rows) all += r.total(r.games);
         CHECK(all == 36 * 44);
     }
-    for (int t = 0; t < 36; t++) {  // new season values in the class bounds (162c:1c5b)
-        if (t == g.human_team()) continue;  // follows its squad (162c:146c)
+    for (int t = 0; t < 36; t++) {  // new season values of the computer clubs within the class bounds
+        if (t == g.human_team()) continue;  // the human club's record follows its squad
         const HokTeam& tm = g.save().teams[size_t(t)];
-        // the twice-weekly drift of the daily loop (162c:1c5b mode 1) lets the values wander over the season: only 1..99 holds
+        // the twice-weekly drift of the daily loop lets the values wander over the season: only 1..99 holds
         const int lo = 1, hi = 99;
         for (int k = 0; k < 2; k++)
             CHECK(tm.skill1[k] >= lo && tm.skill1[k] <= hi && tm.skill2[k] >= lo && tm.skill2[k] <= hi);
@@ -1105,10 +1130,6 @@ static void season_change(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("season change: %zu promoted, second season played to day %d\n", promoted.size(), g.season_day());
 }
 
-// HOK writer: decode -> store_hok -> encode_hok gives every reference save back byte for byte.
-// Transfer list refresh in the day loop (ovl11_34ef): after 60 days the list holds only listed
-// players (+0x1A = 4) of computer clubs, sorted by class, with value and salary from ovl11_3d36,
-// and every listed player is on the list.
 // A regional manager has no row in any of the three simulated league tables.
 // This controlled import exercises the image update without inventing league results.
 static void regional_manager_image(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -1138,6 +1159,12 @@ static void regional_manager_image(const fs::path& em_dir, const fs::path& ref_d
     std::printf("regional manager: image update without a league row, save/load and continuation checked\n");
 }
 
+// The season change of three April saves of the original: LICCHK22 (in debt: the licence is
+// withdrawn and the club goes down), LICRICH1 (rich) and LICCUP02 (in debt, but rescued by the
+// cup). Checked against the original's September saves (LICPOST2, RCHPOST1, CUPPOS02): career
+// record bytes (state 0x0DE5..0x0DE8), the season-end flags (manager block +0xF3), relegation
+// pairings, advertising months, the attendance statistics of the new season and continuation
+// after a checkpoint reload.
 static void financial_license_save(const fs::path& em_dir, const fs::path& ref_dir) {
     const Bytes exe = read_file(em_dir / "EM.EXE");
     for (const char* name : {"LICCHK22", "LICRICH1", "LICCUP02"}) {
@@ -1149,9 +1176,9 @@ static void financial_license_save(const fs::path& em_dir, const fs::path& ref_d
         if (cup_rescue) {
             Game april(exe, read_file(path), 6);
             for (int day = 0; day < 13; day++) april.advance_day();
-            // Without a national coach the squad day (sub_15369, with the training) runs on the WM match dates of
-            // the weekly rhythm only: 217 and 221 up to day 229, then 231 (REAL-CODE period 30, whose trend nibbles
-            // fall by 3 up to the season change). Five blanket weekly calls were incorrect.
+            // Without a national coach the squad day (with the training) runs on the WM match dates of the weekly
+            // rhythm only: 217 and 221 up to day 229, then 231 (the original's trend nibbles fall by 3 up to the
+            // season change), not on every week of April.
             const HokFile before_review = decode_hok(april.save_bytes());
             for (int slot : {1, 2, 3, 4, 5, 6}) {
                 const size_t at = 0x696D + size_t(slot) * 0x34 + 0x14;
@@ -1185,7 +1212,7 @@ static void financial_license_save(const fs::path& em_dir, const fs::path& ref_d
         CHECK(game.budget().home_games <= 1);
         CHECK(game.budget().attendance_total == game.budget().attendance_record);
         CHECK(game.budget().attendance_min == (game.budget().home_games ? game.budget().attendance_total : 99999));
-        // Native NEUSAIS keeps the old graph until each new league home overwrites its entry.
+        // The original keeps the old graph until each new league home game overwrites its entry.
         for (size_t i = size_t(game.budget().home_games); i < 22; i++)
             CHECK(saved.state[0x0DCD + 0xFE + i] == source.state[0x0DCD + 0xFE + i]);
         Game restored(exe, game.checkpoint_bytes(), 999);
@@ -1195,6 +1222,9 @@ static void financial_license_save(const fs::path& em_dir, const fs::path& ref_d
     }
 }
 
+// The manager's club wins promotion from the second division (PROMO01): it plays the next season
+// in the Bundesliga, gets the 700000 DM prize, its career record and season-end flags match the
+// original's September save PROMPOS1, and all eleven advertising slots get the option bit 0x80.
 static void human_promotion(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "PROMO01.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -1208,7 +1238,7 @@ static void human_promotion(const fs::path& em_dir, const fs::path& ref_dir) {
                                saved.state[0x0DE7], saved.state[0x0DE8]} ==
            std::array<uint8_t,4>{13,1,2,0}));
     CHECK(std::find(game.log().begin(), game.log().end(), "prize money 700000 DM") != game.log().end());
-    // PROMO02_personal confirms the option bit in all eleven slots, even empty ones.
+    // The original sets the option bit in all eleven slots, even empty ones.
     for (size_t slot = 0; slot < 11; slot++) CHECK(saved.state[0xACFC + slot * 10 + 6] & 0x80);
     if (fs::exists(ref_dir / "PROMPOS1.HOK")) {
         const HokFile actual = decode_hok(read_file(ref_dir / "PROMPOS1.HOK"));
@@ -1223,6 +1253,9 @@ static void human_promotion(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(game.save_bytes() == resumed.save_bytes());
 }
 
+// The manager's Oberliga club finishes 11th (OLHUM01) and goes down to the regional league: the
+// career record matches the original's OLPOST01, the balance is reset and the game continues
+// identically after a checkpoint reload.
 static void human_oberliga_relegation(const fs::path& em_dir, const fs::path& ref_dir) {
     const fs::path path = ref_dir / "OLHUM01.HOK";
     if (!fs::exists(path)) return;
@@ -1239,7 +1272,7 @@ static void human_oberliga_relegation(const fs::path& em_dir, const fs::path& re
     CHECK(le16(saved.state, 0xB951) == 1);
     CHECK((std::array<uint8_t,4>{saved.state[0x0DE5],saved.state[0x0DE6],saved.state[0x0DE7],saved.state[0x0DE8]} ==
            std::array<uint8_t,4>{36,2,2,0}));  // native OLPOST01
-    // Native OL01_overall resets the previously positive 30M account to
+    // The original resets the previously positive 30M account to
     // 1.2M raw. The summer then consumes money; no promotion bonus applies.
     CHECK(game.budget().balance < 1200000);
     Game resumed(exe, game.checkpoint_bytes(), 999);
@@ -1249,10 +1282,14 @@ static void human_oberliga_relegation(const fs::path& em_dir, const fs::path& re
     CHECK(resumed.save_bytes() == game.save_bytes());
 }
 
+// The finances of the summer break replayed day by day (season days 234..365 and September 10)
+// from the state of the original during the season review (OLPERS01) must give exactly the
+// balance, accrued interest, stored income and advertising months of the original's September
+// save OLPOST01.
 static void native_summer_finances(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "OLPERS01.HOK") || !fs::exists(ref_dir / "OLPOST01.HOK")) return;
-    // OLPERS01 is explicitly RAM-derived during the native personal review;
-    // OLPOST01 is the original dialog's September save from that same run.
+    // OLPERS01 is the original's state taken during its personal review;
+    // OLPOST01 is the original's September save of the same game.
     const HokFile personal = decode_hok(read_file(ref_dir / "OLPERS01.HOK"));
     const HokFile september = decode_hok(read_file(ref_dir / "OLPOST01.HOK"));
     const FinanceTables tables = load_finance_tables(read_file(em_dir / "EM.EXE"));
@@ -1278,12 +1315,15 @@ static void native_summer_finances(const fs::path& em_dir, const fs::path& ref_d
                 replay.balance, replay.accrued, replay.stored_income);
 }
 
+// Injuries heal and stadium construction goes on during the summer break: an injured player with
+// 24 weeks left is down to one week at the season change, a disabled player (255 weeks) leaves the
+// squad, and a construction of 21 weeks finishes (manager block +0x116 level, +0x128 weeks).
 static void summer_healing_and_construction(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "LICRICH1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
     HokFile source = decode_hok(read_file(ref_dir / "LICRICH1.HOK"));
-    // Two prepared healing/stadium dates remain in April, two WM-branch healings (day % 7 == 0, REAL-CODE Köln period 146), then
-    // nineteen multiples of seven in the native May 1..September 9 summer interval.
+    // Two prepared healing/stadium dates remain in April, two healings on WM days (day % 7 == 0), then
+    // nineteen multiples of seven in the original's summer interval May 1..September 9.
     source.state[0x696D + 9] |= 2;
     source.state[0x696D + 13] = 24;
     source.state[0x696D + 0x34 + 9] |= 2;
@@ -1312,6 +1352,8 @@ static void summer_healing_and_construction(const fs::path& em_dir, const fs::pa
     CHECK(resumed.save_bytes() == game.save_bytes());
 }
 
+// The sponsor offers (state 0xA52C, 500 bytes) of MONAT4 stay untouched up to 13 February and are
+// regenerated on 14 February; a checkpoint reload just before gives the same result.
 static void february_sponsor_boundary(const fs::path& em_dir, const fs::path& ref_dir) {
     const fs::path path = ref_dir / "MONAT4.HOK";
     if (!fs::exists(path)) return;
@@ -1333,6 +1375,8 @@ static void february_sponsor_boundary(const fs::path& em_dir, const fs::path& re
     CHECK(resumed.save_bytes() == game.save_bytes());
 }
 
+// The economy value of the save (state 0x06B4, u32) scales new sponsor offers by (economy - 20):
+// with 20 every amount is zero while boards, months and the other fields equal a normal game.
 static void saved_economy(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "MONAT4.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -1356,6 +1400,11 @@ static void saved_economy(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(positive > 0 && normal.image() == zero_margin.image());
 }
 
+// Forfeits: the match load of a human squad (squad_match_load), and a game with fewer than nine
+// selected players is lost 0:2 without any minute draws. The forfeit is checked in the league,
+// cup, European cup, play-offs, relegation and WM (with the 600000 raw fine of the national
+// team), against the original's saves FORFPOS1 (eight players, the computer opponent still gets
+// its statistics) and INS64POS (empty roster, overdraft interest), and across checkpoint reloads.
 static void forfeits(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -1479,7 +1528,7 @@ static void forfeits(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(game.checkpoint_bytes() == resumed.checkpoint_bytes());
     }
 
-    // Genuine native eight-player probe: awarded result/fine, no own appearances,
+    // The original's own eight-player game: awarded result/fine, no own appearances,
     // but the CPU opponent still receives its normal league statistics.
     if (fs::exists(ref_dir / "FORFPR01.HOK") && fs::exists(ref_dir / "FORFPOS1.HOK")) {
         const Bytes bytes = read_file(ref_dir / "FORFPR01.HOK");
@@ -1527,6 +1576,8 @@ static void forfeits(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("forfeits: eight/nine selected players, no minute RNG, native fine/results/statistics checked\n");
 }
 
+// The contract mood marker of a squad row (+0x18) counts down by one every few days to 0; values
+// above 99 (127, 128, 255) are left alone. Continues identically after a checkpoint reload.
 static void contract_cooldowns(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -1536,7 +1587,7 @@ static void contract_cooldowns(const fs::path& em_dir, const fs::path& ref_dir) 
     Game game(exe, encode_hok(source), 6);
     for (int day = 0; day < 2; day++) game.advance_day();
     for (size_t slot = 0; slot < 5; slot++) CHECK(game.save().state[0x696D + slot * 0x34 + 0x18] == initial[slot]);
-    game.advance_day();  // preparation of season day 4 (a mood marker above 99 is not counted down: 146e:119D)
+    game.advance_day();  // preparation of season day 4 (a mood marker above 99 is not counted down)
     constexpr uint8_t once[] = {0, 1, 127, 128, 255};
     for (size_t slot = 0; slot < 5; slot++) CHECK(game.save().state[0x696D + slot * 0x34 + 0x18] == once[slot]);
     Game resumed(exe, game.checkpoint_bytes(), 999);
@@ -1546,6 +1597,12 @@ static void contract_cooldowns(const fs::path& em_dir, const fs::path& ref_dir) 
     CHECK(game.checkpoint_bytes() == resumed.checkpoint_bytes());
 }
 
+// Buying a player from the transfer pool (manager block 4 of the squad rows) in KAUFPR01: invalid
+// arguments change nothing, a purchase books fee and salary, moves the player into the squad with
+// the original's contract fields (checked against the original's save KAUFPOS1), keeps the
+// existing players' statistics, and leaves the 30th (scratch) row alone. Also the seller's and
+// the player's refusals (bit 0x81 in the pool row), missing money, the purchase subsidy, a full
+// squad and a squad with a hole.
 static void transfer_purchases(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "KAUFPR01.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), input = read_file(ref_dir / "KAUFPR01.HOK");
@@ -1562,7 +1619,7 @@ static void transfer_purchases(const fs::path& em_dir, const fs::path& ref_dir) 
     CHECK(game.checkpoint_bytes() == untouched);
     Game unchanged_salary(exe, input, 6);
     CHECK(unchanged_salary.buy_transfer_player(6, 750000, 1, 3300) == PurchaseResult::Purchased);
-    // The physical thirtieth record is native scratch, not a purchasable place.
+    // The physical thirtieth record is the original's scratch row, not a purchasable place.
     HokFile scratch = decode_hok(input);
     const size_t scratch_at = 0x696D + 29 * 0x34;
     scratch.state[scratch_at + 0x17] = 21;
@@ -1712,6 +1769,11 @@ static void transfer_purchases(const fs::path& em_dir, const fs::path& ref_dir) 
     std::puts("transfer purchases: native ownership/fee/contract fields, refusals, capacity, subsidy and checkpoints checked");
 }
 
+// Player insurance (squad row +0x30 premium u32, +0x2F bit 0x80 = locked until the month end): the
+// premium is half the fresh salary, booked as squad costs without random draws (checked against
+// the original's INSPOST1); injured, loaned or departing players cannot be insured; with a fixed
+// random stream insured players pay out 12000 raw per injury, and a disabled insured player pays
+// 180000 raw and is replaced (checked against the original's INSPOS01).
 static void player_insurance(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "KAUFCPP1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), input = read_file(ref_dir / "KAUFCPP1.HOK");
@@ -1795,8 +1857,8 @@ static void player_insurance(const fs::path& em_dir, const fs::path& ref_dir) {
         covered_disability.set_contract_decider([&](const ContractPlayer& p, long) { CHECK(p.age != 0); callbacks++; return 2; });
         for (int day = 0; day < 17; day++) { covered_disability.advance_day(); uncovered_disability.advance_day(); }
         CHECK(callbacks == 0);  // the disabled player's two-year contract is removed before expiry talks
-        // the payout only: the season change follows the WM final directly, without the April month-end that charged
-        // one more premium (REAL-CODE period 30)
+        // the payout only: in the original the season change follows the WM final directly, without an April
+        // month-end that would charge one more premium
         CHECK(covered_disability.budget().balance - uncovered_disability.budget().balance == 180000);
         CHECK(covered_disability.save().squad.size() == 24 && uncovered_disability.save().squad.size() == 24);
         for (const auto& player : covered_disability.save().squad)
@@ -1826,6 +1888,10 @@ static void player_insurance(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("player insurance: native premium, month-end lock, checkpoint and %d injury payouts checked\n", payouts);
 }
 
+// Contract talks during the season: invalid offers change nothing, an unchanged deal neither
+// changes the state nor draws, a raise is booked as squad costs (and equals the original's
+// CNTPOS01 byte for byte), a refusal sets a cooldown of 10..18 (row +0x18) that blocks new talks
+// until it has counted down, and shortening a contract needs an explicit confirmation.
 static void contract_negotiations(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "KAUFCPP1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), input = read_file(ref_dir / "KAUFCPP1.HOK");
@@ -1883,6 +1949,11 @@ static void contract_negotiations(const fs::path& em_dir, const fs::path& ref_di
     std::puts("contract negotiations: explicit bids, unchanged/raised deals, saved refusal, cooldown and confirmed shortening checked");
 }
 
+// Editing the training plan: recovery units cost money by league (33000/25800/18600 raw for the
+// first unit) and by the cost factor; the fee is charged with the next weekly update, not by the
+// editor; editing writes only the plan (state 0x070C..0x0727) and the pending cost (0x0F60), draws
+// nothing, survives saves and reloads, is refused for a national coach and equals the original's
+// TRNPOS01.
 static void training_actions(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -1964,6 +2035,11 @@ static void training_actions(const fs::path& em_dir, const fs::path& ref_dir) {
     std::puts("training actions: native league fees, plan/cost-only change, no RNG and 60 checkpoint days checked");
 }
 
+// Bank transfers between cash and the savings book or loan: deposits and withdrawals equal the
+// original's saves (BANKD001, BANKLN01, BANKPAY1) byte for byte; the credit limit is 6.000.000 raw,
+// cash cannot go below zero, nothing is drawn, only cash (0x0F5C), the bank account (0x0F78) and
+// the two sides of the counter account (0x1618 and 0x1624) change, each side posted on its own;
+// large savings, reloads and the national coach (no bank) are covered.
 static void bank_actions(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "AKTIE.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -2032,7 +2108,7 @@ static void bank_actions(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(game.checkpoint_bytes() == resumed.checkpoint_bytes());
 
     if (fs::exists(ref_dir / "START.HOK")) {
-        // Native postings update each stored matrix side independently;
+        // The original's postings update each stored side of the counter account independently;
         // they do not normalize an imported asymmetric counter account.
         HokFile asymmetric = decode_hok(read_file(ref_dir / "START.HOK"));
         for (int byte = 0; byte < 4; byte++) asymmetric.state.at(0x1624 + size_t(byte)) = uint8_t(3000000u >> (8 * byte));
@@ -2074,6 +2150,10 @@ static void bank_actions(const fs::path& em_dir, const fs::path& ref_dir) {
     std::puts("bank actions: four-sided postings, cash/credit limits, no RNG, cached income and checkpoint checked");
 }
 
+// Listing an own player on the transfer list and recalling him: equals the original's LISTPOS1 and
+// RECLPOS1; the whole squad row moves to the pool (reserve byte +10 cleared) and back, no fee, five
+// draws for the market profile when listed, statistics and insurance kept; at most three own and
+// eleven players in total on the list; a player with a running contract mood (0x80) cannot be listed.
 static void owned_transfers(const fs::path& em_dir, const fs::path& ref_dir) {
     const auto path = ref_dir / (fs::exists(ref_dir / "CNTREF01.HOK") ? "CNTREF01.HOK" : "KAUFCPP1.HOK");
     if (!fs::exists(path)) return;
@@ -2169,7 +2249,7 @@ static void owned_transfers(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(limits.checkpoint_bytes() == three);
 
     // Eleven occupied slots are valid; a twelfth listing is not. Index 10 is
-    // both a usable entry and the native end record cleared by removal.
+    // both a usable entry and the original's end record cleared by removal.
     HokFile last = decode_hok(input);
     std::vector<int> cpu;
     for (const auto& p : last.players) if (p.raw[0x1A] >= 4 && p.team != last.state[0x0DE1])
@@ -2205,6 +2285,10 @@ static void owned_transfers(const fs::path& em_dir, const fs::path& ref_dir) {
     std::puts("own transfers: contracts/insurance/stats, no fee, five draws, three-own/eleven-total limits and checkpoint checked");
 }
 
+// Own players still on the transfer list at the season change return to the squad with a one-year
+// contract, their insurance kept and loan/mood bytes cleared (also in the original's POOLPR01); a
+// listed player whose contract ends goes to the contract talks, a disabled one leaves with the
+// insurance payout. Checked with a fresh checkpoint reload every day.
 static void owned_transfer_seasons(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "LICRICH1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -2307,6 +2391,10 @@ static void owned_transfer_seasons(const fs::path& em_dir, const fs::path& ref_d
     std::puts("own transfer seasons: three returns, expiry/disability review, contracts, insurance and daily checkpoints checked");
 }
 
+// Transfer list refresh in the day loop: after 60 days the list holds only listed players
+// (+0x1A = 4) of computer clubs, sorted by class, with value and salary from the market value
+// formula, and every listed player is on the list. An own player on the list keeps his contract
+// and ownership through refreshes.
 static void transfer_list(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -2378,7 +2466,7 @@ static void transfer_list(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("transfer list: %d refreshes in 60 days, %zu players listed\n", refreshes, listed.size());
 }
 
-// Injuries (1000:3d1a, 146e:0c89, ovl06_364f): tables from EM.EXE, match injuries only of types
+// Injuries (in matches and in the weekly squad update): tables from EM.EXE, match injuries only of types
 // 0-21, weeks within the type's range; over a season the human club has a plausible number of
 // injuries, an injured player has no role and comes back when fit.
 static void injuries(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -2420,7 +2508,7 @@ static void injuries(const fs::path& em_dir, const fs::path& ref_dir) {
         }
         CHECK(direct.save().state.at(record + 13) == 0);
         CHECK((direct.save().state.at(record + 9) & 3) == 0);
-        // 146e:1732 clears the injury and requests ordinary auto_lineup.
+        // Healing clears the injury and requests the ordinary automatic lineup.
         // With manual selection it never restores the remembered role.
         CHECK(automatic ? direct.save().state.at(record + 10) != 0 : direct.save().state.at(record + 10) == 0);
         CHECK(decode_game_checkpoint(direct.checkpoint_bytes()).injured_roles[slot] == 0);
@@ -2446,8 +2534,11 @@ static void injuries(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("injuries: %d in three seasons, %d back (2000 draws: %d careers over)\n", hurt, fit, career);
 }
 
-// Offers to the manager (146e:0c89, 1000:3bb8, ovl11_05f1): find an offer in a bounded set of
-// seasons, then check the actual sale. A single random stream depends on unrelated cup results.
+// Offers of computer clubs for the manager's players: find an offer in a bounded set of seeds,
+// then check that it survives a save, can be accepted (sale quote) or declined, that a listed
+// player's offer comes from the pool row (+9 bit 0x80, bidder at +0x16) and the actual sale
+// (balance, squad costs, player's new club). A single random stream depends on unrelated cup
+// results, hence the seed search.
 static void manager_offers(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -2540,7 +2631,7 @@ static void manager_offers(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("offers: seed %u, day %d %s sold for %ld DM\n", unsigned(offered_seed), days, name.c_str(), long(sale.amounts.net / 3));
 }
 
-// Contract expiry (ovl02_0000): START contracts have 2 years, so they run out at the second
+// Contract expiry at the season change: START contracts have 2 years, so they run out at the second
 // season change. The decider lets the first player go and offers the rest 2 years: the one let
 // go leaves for half his value, the others either sign (2 years, new salary) or refuse and leave.
 static void contract_expiry(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -2592,7 +2683,7 @@ static void save_years(const fs::path& em_dir, const fs::path& ref_dir) {
                 h.year, h.season_year);
 }
 
-// Scorers of the computer clubs (1000:3228 / 2fb6): after 9 league matchdays from START the
+// Scorers of the computer clubs: after 9 league matchdays from START the
 // first division clubs look like MONAT1 (skaters 291 goals, 285 assists; goalkeepers 5940 minutes).
 static void club_scorers(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK") || !fs::exists(ref_dir / "MONAT1.HOK")) return;
@@ -2620,9 +2711,11 @@ static void club_scorers(const fs::path& em_dir, const fs::path& ref_dir) {
                 g1, g2, a1, a2, m1, m2, n1, n2);
 }
 
-// Head-to-head block (ovl13_22b8): after 9 matchdays from START Köln has a result against the same
-// first division opponents in the same column (home / away) as in MONAT1, and the results agree
-// with the table (wins, draws, losses).
+// Statistics of the human club's own players after a match: goals, the goal bytes, assists, games,
+// goalkeeper minutes and goals conceded are booked in the fields of the competition (league, cup,
+// or the "other" fields for European cup/play-offs). Checked on pairs of the original's saves
+// before and after a match (CUPCHECK/CUPPOST, EUCHECK/EUPOST, POSEMI1/POSEMIP, EUOWN/EUOWNR), for a
+// cup shoot-out, and for a match OpenEM plays from START, CUPCHECK, EUCHECK and POSEMI1.
 static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_dir) {
     const Bytes exe = read_file(em_dir / "EM.EXE");
     const auto calendar = load_season_calendar(exe);
@@ -2662,7 +2755,7 @@ static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_d
         CHECK(games > 0 && player_games == (full ? games : 0));
         CHECK(minutes == (full ? 60 : 0) && conceded == (full ? against : 0));
     };
-    // Independent native observations establish the competition-specific field meanings.
+    // The original's own before/after saves establish the competition-specific field meanings.
     for (const auto& p : {std::array<const char*, 2>{"CUPCHECK", "CUPPOST"}, {"EUCHECK", "EUPOST"}, {"POSEMI1", "POSEMIP"}}) {
         if (!fs::exists(ref_dir / (std::string(p[0]) + ".HOK")) || !fs::exists(ref_dir / (std::string(p[1]) + ".HOK"))) continue;
         const bool cup = std::string(p[0]) == "CUPCHECK", full = std::string(p[0]) == "EUCHECK";
@@ -2674,7 +2767,7 @@ static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_d
     if (fs::exists(ref_dir / "CUPCHECK.HOK")) {
         // Equalise the opponent's team strength for this field-booking probe.
         // CUPCHECK's actual Memmingen/Köln strength gap made a sampled draw
-        // depend on unrelated daily RNG calls. Native reference pairs above
+        // depend on unrelated daily RNG calls. The original's save pairs above
         // still validate the competition's real, unmodified field meanings.
         HokFile balanced = decode_hok(read_file(ref_dir / "CUPCHECK.HOK"));
         const int human = balanced.state.at(0x0DE1);
@@ -2764,7 +2857,7 @@ static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_d
         if (own >= 0) check(before, after, own, against, cup ? 1 : euro ? 2 : 0, league, shootout_goals);
         Game restored(exe, game.save_bytes(), 12);
         {
-            // loading recomputes the club record (162c:146c); inside a step it is not refreshed (REAL-CODE Köln period 277)
+            // loading recomputes the club record from the squad; inside a step the original does not refresh it
             HokFile x = decode_hok(game.save_bytes()), y = decode_hok(restored.save_bytes());
             const int own = x.state.at(0x0DCD + 0x14);
             if (own >= 0 && own < kHokTeams)
@@ -2775,6 +2868,10 @@ static void human_match_statistics(const fs::path& em_dir, const fs::path& ref_d
     std::printf("human statistics: native and simulated goals, assists, games and goalkeeper fields across competitions checked\n");
 }
 
+// Head-to-head block (state 0x8F88, 10 bytes per opponent; one result per byte, own goals in the
+// low nibble, 0xFF = none): after 9 matchdays from START Köln has a result against the same first
+// division opponents in the same column (home / away) as in MONAT1, and the results agree with the
+// table (wins, draws, losses). Also the club records (state 0xA11C, eight u16 per team).
 static void head_to_head(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK") || !fs::exists(ref_dir / "MONAT1.HOK")) return;
     Game g(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "START.HOK"), 3);
@@ -2796,7 +2893,7 @@ static void head_to_head(const fs::path& em_dir, const fs::path& ref_dir) {
     const HokTableRow& row = ours.table[size_t(g.human_team())];
     CHECK(same == 24 && entries == 9);
     CHECK(w == row.total(row.wins) && l == row.total(row.losses) && d == 9 - w - l);
-    // club records (ovl13_3e43): highest home defeat / away win never fill (unsigned compare), like MONAT1
+    // club records: highest home defeat / away win never fill (the original compares unsigned), like MONAT1
     auto rec = [](const HokFile& h, size_t t, size_t r) { return int(h.state[0xA11C + t * 16 + r * 2] | h.state[0xA11D + t * 16 + r * 2] << 8); };
     int filled = 0, filled_orig = 0, best_home = 0;
     for (size_t t = 0; t < 12; t++) {
@@ -2812,6 +2909,8 @@ static void head_to_head(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("head to head: 9 results in the same slots as MONAT1, %d-%d-%d\n", w, d, l);
 }
 
+// HOK writer: decode -> store_hok -> encode_hok gives every save in the game folder and every
+// reference save back byte for byte.
 static void hok_round_trip(const fs::path& em_dir, const fs::path& ref_dir) {
     int files = 0;
     for (const fs::path& dir : {em_dir, ref_dir})
@@ -2852,7 +2951,7 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(rejected);
     }
     if (fs::exists(ref_dir / "SAISEND.HOK")) {
-        // Empty native records remain at their original slots across a season
+        // Empty squad records remain at their original slots across a season
         // boundary; they are not player -1 in the retirement membership table.
         HokFile depleted = decode_hok(read_file(ref_dir / "SAISEND.HOK"));
         for (size_t slot : {size_t(0), size_t(7), size_t(12)}) depleted.state[0x696D + slot * 52 + 15] = 0;
@@ -2870,7 +2969,7 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
             CHECK(decode_hok(resumed.save_bytes()).state[0x696D + slot * 52 + 15] == 0);
     }
     Game g(exe, read_file(ref_dir / "START.HOK"), 6);
-    // The cup books the series too (ovl13_2f93, DS:D0C2 = 8): the league-form check runs before the first cup date.
+    // The cup books the series too (as competition 8): the league-form check runs before the first cup date.
     auto check_series = [](const HokFile& h) {
         for (int t = 0; t < 12; t++) {  // series (state 0x9988): the current streaks follow the form string
             const std::string& form = h.table[size_t(t)].form;
@@ -2890,7 +2989,7 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(saved.size() == read_file(ref_dir / "START.HOK").size());
     HokFile h = decode_hok(saved);
     CHECK(h.date.day_index == 31 && h.matchday[0] == g.next_matchday(0) && h.year == 1993);
-    CHECK(le16(h.state, 0xB953) == h.date.day_index);  // DS:4F59 drives the original's event calendar
+    CHECK(le16(h.state, 0xB953) == h.date.day_index);  // state 0xB953 drives the original's event calendar
     for (int t = 0; t < 36; t++) {  // table rows as EM.EXE expects them: points, copies, fever curve
         const size_t b = 0x3BA8 + size_t(t) * 0x50;
         const HokTableRow& r = h.table[size_t(t)];
@@ -2920,7 +3019,10 @@ static void game_save(const fs::path& em_dir, const fs::path& ref_dir) {
 }
 
 // Interest already accrued in the original must survive loading and subsequent saves.
-// Advertising records use native HOK offsets, independently of the game serializers.
+// Advertising records use the HOK offsets of the original, independently of the game serializers:
+// contracts at state 0xACFC (10 bytes each: amount u32, sponsor, months left, option flags, sponsor
+// id, required image u16), offers at 0xA52C. Also the other monthly costs at 0x06C1 (three signed
+// components per manager, 0x15 bytes per manager).
 static void finance_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -2928,9 +3030,9 @@ static void finance_save(const fs::path& em_dir, const fs::path& ref_dir) {
     auto put = [&](size_t o, uint32_t v) {
         for (int i = 0; i < 4; i++) h.state[o + size_t(i)] = uint8_t(v >> (8 * i));
     };
-    put(0, uint32_t(-12345));  // DS:02A0, manager 0's accrued interest
+    put(0, uint32_t(-12345));  // state 0x0000: manager 0's accrued interest
     put(0x0F78, 402000);      // savings: 4020 raw interest per month
-    put(0xACFC, 90000);       // DS:C15B, first advertising contract, raw amount
+    put(0xACFC, 90000);       // first advertising contract, raw amount
     h.state[0xAD00] = 7;     // board sponsor
     h.state[0xAD01] = 3;     // months left
     h.state[0xAD02] = 12;    // option
@@ -2980,8 +3082,8 @@ static void finance_save(const fs::path& em_dir, const fs::path& ref_dir) {
         finance_day(tables, b, day, 31);
     }
     CHECK(a.balance == b.balance && a.accrued == 0 && b.accrued == 0);
-    // DS:A07E is now located through the complete writer block map. Its three
-    // signed cost components must contribute without rewriting their native split.
+    // The other monthly costs (state 0x06C1, three signed components per manager) must
+    // contribute their sum without rewriting the stored split.
     const ManagerBudget no_other = budget_from_save(h, 0);
     put(0x06C1, 10000);
     put(0x06C5, 20000);
@@ -3014,14 +3116,20 @@ static void cup_save_dates(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("cup save: all three first-round date boundaries continue without replay or skipped rounds\n");
 }
 
+// The DEB cup's best-of-three series in the save: after each of the 15 cup days (two seeds) the
+// round (0x8F84), games played (0x031B), the result history (0x031C, 32 bytes per game, values
+// above 30/60 mark overtime/shoot-out) and the wins per pairing (0x037C) agree with the series of
+// the game, the manager's furthest round (manager block +0xE6) is right, and a reload continues
+// identically. Also the original's saves CUPPOST, CUPSHOT and CUPSHRP.
 static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), start = read_file(ref_dir / "START.HOK");
     const SeasonCalendar calendar = load_season_calendar(exe);
     auto check = [](Game& game, int days) {
         const HokFile h = decode_hok(game.save_bytes());
-        // the third final day closes the final (sub_42756 at game index 2, REAL-CODE period 57): winner and runner-up
-        // booked, wins 0, game index stays 2, DS:D0E4 = 1, the grid pair keeps both finalists; nothing is booked earlier
+        // the third final day closes the final (at game index 2, as in the original): winner and runner-up booked,
+        // wins 0, game index stays 2, the pending flag (state 0x077C) = 1, the grid pair keeps both finalists; nothing
+        // is booked earlier
         if (days == 15 && game.cup_winner() >= 0) {
             CHECK(h.cup_round == 5 && h.state[0x031B] == 2 && h.state[0x037C] == 0 && h.state[0x037D] == 0 && h.state[0x077C] == 1);
             CHECK(h.state[0x0DC7] == game.cup_winner() && h.state[0x0DCC] != game.cup_winner() && h.state[0x8E51] != h.state[0x8E52]);
@@ -3074,14 +3182,14 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
             const Bytes bytes = game.save_bytes();
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
-            // Loading recomputes the club record from the squad (162c:146c, as the original after loading). After a cup day
-            // without a game that was also a training day the saved record still holds the weekly drift (REAL-CODE period 49),
+            // Loading recomputes the club record from the squad (as the original does after loading). After a cup day
+            // without a game that was also a training day the saved record still holds the weekly drift of the original,
             // so only skill1/skill2/form of the own club may change; everything else must survive the round trip.
             {
                 HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
                 const int own = x.state.at(0x0DCD + 0x14);
-                // Since Köln period 94 every cup day of the own club that does not end the step skips the evening refresh, so the
-                // skater count +0x32 of the record (recounted by 146c) may change on loading too.
+                // Every cup day of the own club that does not end the step skips the evening refresh, so the
+                // skater count +0x32 of the record (recounted on loading) may change on loading too.
                 if (own >= 0 && own < kHokTeams)
                     for (size_t f : {0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x32}) x.state.at(0x17E7 + size_t(own) * 61 + f) = y.state.at(0x17E7 + size_t(own) * 61 + f);
                 bool same = x.state == y.state;
@@ -3136,8 +3244,10 @@ static void cup_series_save(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("Cup save: best of three, 15 boundaries x 2 seeds, winner and single results checked\n");
 }
 
-// Original re-entry into the manager menu automatically changes three lineup
-// bytes in FINMRW. Compare every selected role and line with a guest-RAM capture.
+// When the original re-enters the manager menu, its automatic lineup changes three lineup bytes
+// in FINMRW. Compare every selected role and line with the original's state after loading
+// (FINEVLOD), and check the penalty effort adjustment, manual mode and the replacement of an
+// injured first-choice player.
 static void original_club_lineup(const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "FINMRW.HOK") || !fs::exists(ref_dir / "FINEVLOD.HOK")) return;
     HokFile h = decode_hok(read_file(ref_dir / "FINMRW.HOK"));
@@ -3178,10 +3288,10 @@ static void original_club_lineup(const fs::path& ref_dir) {
     h.squad[17].skill_a = h.squad[17].skill_b = h.squad[17].form = 255;
     CHECK(auto_lineup(h, 0) && h.squad[17].role == 0);
     CHECK(h.state[injured + 9] & 2);
-    std::puts("original club lineup: all 29 roles/lines match DOSBox; manual mode and injury replacement retained");
+    std::puts("original club lineup: all 29 roles/lines match the original; manual mode and injury replacement retained");
 }
 
-// Native DOSBox continuation of FINMRW: Sep 27 -> cup Sep 29 -> Oct 1, saved as FINMONP.
+// The original continued FINMRW: Sep 27 -> cup Sep 29 -> Oct 1, saved as FINMONP.
 // The monthly snapshot had team strength 320 (stored income 130000 raw), while the live
 // post-save team is 321. Check the settlement using the actual snapshot used by the original.
 static void original_finance_month(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -3202,8 +3312,8 @@ static void original_finance_month(const fs::path& em_dir, const fs::path& ref_d
     CHECK(b.adverts[0].months_left == actual.adverts[0].months_left && actual.adverts[0].months_left == 2);
     CHECK(actual.adverts[0].flags == 12);
     // The original's automatic lineup changes strength 321 -> 320 immediately after
-    // loading FINMRW (read-only DOSBox capture FINEV_loaded, 2026-11-02). The whole
-    // day loop must use that lineup and export Oct 1's already-booked finances.
+    // loading FINMRW. The whole day loop must use that lineup and export Oct 1's
+    // already-booked finances.
     Game resumed(read_file(em_dir / "EM.EXE"), read_file(ref_dir / "FINMRW.HOK"), 6);
     CHECK(resumed.budget().team_strength == 320);
     for (int day = 18; day <= 21; day++) resumed.advance_day();
@@ -3213,12 +3323,14 @@ static void original_finance_month(const fs::path& em_dir, const fs::path& ref_d
     CHECK(model.adverts[0].months_left == actual.adverts[0].months_left);
     CHECK(model.balance == actual.balance && model.bank == actual.bank);
     CHECK(model.stored_income == actual.stored_income);
-    std::printf("original finance month: settlement %ld raw, accrued %ld raw, contract %d months as in DOSBox\n",
+    std::printf("original finance month: settlement %ld raw, accrued %ld raw, contract %d months as in the original\n",
                 actual.balance, actual.accrued, actual.adverts[0].months_left);
 }
 
-// EuroCup native tables and results must survive saves in either phase, including the
-// transition to the final group and resuming an actual original mid-tournament reference.
+// European cup tables and results in the save layout of the original (schedule 0x03B8, results
+// 0x04D8, goals for/against 0x02BB/0x02EB, points 0x0628, phase 0x8F86, final group 0x03AC) must
+// survive saves in either phase, including the transition to the final group and resuming the
+// original's own saves in the middle of the tournament (MONAT2, EUPOST, EUOWN/EUOWNR).
 static void euro_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), start = read_file(ref_dir / "START.HOK");
@@ -3305,7 +3417,7 @@ static void euro_save(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(g.euro_champion() == 83);  // Slovan Bratislava, 10:2 points in the native final group
     }
     if (fs::exists(ref_dir / "EUPOST.HOK")) {
-        // EUCHECK (OpenEM's re-export of MONAT2) was loaded and continued in DOSBox.
+        // EUCHECK (OpenEM's re-export of MONAT2) was loaded and continued in the original.
         // The original played four further EuroCup dates before this Nov 29 menu save.
         Game g(exe, read_file(ref_dir / "EUPOST.HOK"), 6);
         check(g, 11);
@@ -3365,7 +3477,10 @@ static void euro_save(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("EuroCup save: group/final phase, five save boundaries and native references checked\n");
 }
 
-// Native advertising deals: capacity, whole-record placement and options across reloads.
+// Accepting advertising deals as the original does: free board capacity, whole-record placement of
+// multi-board deals (a shared board owner id from the counter at state 0x01F2), the facility levels
+// that qualify for kinds 3/4, renewal options that resolve all boards of a deal exactly once, the
+// month-start expiry, and the original's saves ADSPOST and ADRENOK.
 static void sponsor_contracts(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -3444,7 +3559,7 @@ static void sponsor_contracts(const fs::path& em_dir, const fs::path& ref_dir) {
     }
     if (fs::exists(ref_dir / "ADSCHECK.HOK") && fs::exists(ref_dir / "ADSPOST.HOK")) {
         // Original UI: two JWE-Service boards at 30000 DM each, 24 months plus
-        // 12-month option. ADSPOST was written by the native save dialog.
+        // 12-month option. ADSPOST was written by the original's save dialog.
         Game native_case(exe, read_file(ref_dir / "ADSCHECK.HOK"), 12);
         CHECK(native_case.accept_sponsor_offer(0, 0));
         const HokFile model = decode_hok(native_case.save_bytes());
@@ -3473,7 +3588,7 @@ static void sponsor_contracts(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(model.state[0xAD33] == 12 && model.state[0xAD34] == 0);
         CHECK(model.state[0xAD3D] == 12 && model.state[0xAD3E] == 0);
     }
-    {  // Month-start expiry clears the amount but retains native metadata (ovl08_1d61).
+    {  // Month-start expiry clears the amount but retains the other fields of the record, as the original does.
         ManagerBudget b = budget;
         b.adverts[0] = {90000, 1, 0, 8, 9, 70};
         finance_day(load_finance_tables(exe), b, 1, 30);
@@ -3483,7 +3598,13 @@ static void sponsor_contracts(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("sponsor contracts: capacity, facilities, grouped renewal/expiry and save/load checked\n");
 }
 
-// A loaded WM retains its group results and winner/loser bracket through all placements.
+// The national team (manager block 5, squad rows at 0x696D + 5 * 0x618): the squad of NATAUTO
+// (3 goalkeepers, 10 defenders, 16 forwards, all German players of nation 56), the federation grant
+// by WM place, releasing and calling up players without touching the club rows, the automatic
+// selection, statistics of a WM match (nomination counter +0x19, games, goals, energy cap 90),
+// saturated counters, a nation out after the groups, the energy rule of the original's NATENGP, the
+// return of the squad after the WM (NATRETR), and the choice of the national coach before the WM
+// (NATPRE1) including the cases without one.
 static void national_squads(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "NATAUTO.HOK")) return;
     const Bytes native_bytes = read_file(ref_dir / "NATAUTO.HOK");
@@ -3721,7 +3842,7 @@ static void national_squads(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(ended.state[0x164C] == 0xFD && le32(ended.state, 0x17C7) == 1500000);
         CHECK(ended.state[0x0788] == 0 && ended.state[0x0789] == 0);
         CHECK(!restored.auto_select_national_squad());
-        restored.advance_day();  // after the WM final (day 231) the next call changes the season (REAL-CODE period 30)
+        restored.advance_day();  // after the WM final (day 231) the next call changes the season, as in the original
         CHECK(restored.seasons_completed() == 1 && restored.national_coach() == -1);
         CHECK(restored.national_squad().empty());
         CHECK((decode_hok(restored.save_bytes()).state[0x0DCD + 0xF3] & 0x40) != 0);
@@ -3730,6 +3851,8 @@ static void national_squads(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("national squads: native 3/10/16 selection, explicit ids, club preservation and release checked\n");
 }
 
+// A loaded WM retains its group results (0x04D8, 36 bytes per group) and winner/loser bracket
+// (0x8EB1, cursor 0x03B7, phase 0x8F85) through all placements, saved and reloaded on every WM day.
 static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "SAISEND.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), start = read_file(ref_dir / "SAISEND.HOK");
@@ -3772,8 +3895,7 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
                 if (rounds >= stage + 6)
                     for (int pair = 0; pair < 4; pair++) {
                         const size_t o = 0x8F60 + size_t(stage * 8 + pair * 2);
-                        // the quick shoot-out of the original can leave a level score (the away team wins, REAL-CODE
-                        // periods 28 and 30)
+                        // the quick shoot-out of the original can leave a level score (the away team wins then)
                         CHECK(h.state[o] % 30 >= h.state[o + 1] % 30);
                     }
             }
@@ -3814,8 +3936,8 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
         CHECK(pending.seasons_completed() == 1);
     }
     if (fs::exists(ref_dir / "WMNATIVE.HOK")) {
-        // Read-only RAM reference from the original at its world-champion screen;
-        // all 94 native state blocks, with SAISEND's header/key (see probe provenance).
+        // The original's complete game state at its world-champion screen,
+        // stored with SAISEND's header and key.
         Game native(exe, read_file(ref_dir / "WMNATIVE.HOK"), 12);
         check(native, 8);
         CHECK(native.world_champion() == 63);
@@ -3831,7 +3953,7 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
         Game reloaded(exe, bytes, 12);
         CHECK(reloaded.save_bytes() == bytes && reloaded.world_ranking() == ranking);
     }
-    // Empty, nearly full and full native history columns. Prefixes must survive;
+    // Empty, nearly full and full WM history columns (16 places per nation). Prefixes must survive;
     // the seventeenth tournament discards only the oldest entry for every nation.
     for (const int years : {0, 15, 16}) {
         HokFile h = decode_hok(start);
@@ -3856,12 +3978,16 @@ static void world_save(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("WM save: all eight boundaries, group results and winner/loser bracket checked\n");
 }
 
+// League results in the save (state 0x0796, 0x210 bytes per league, 12 bytes per matchday, home
+// and away goals per pairing): rebuilt from the schedule they give the table rows of MONAT1 and of
+// a game played by OpenEM; earlier results survive a reload, and the new season starts with
+// cleared results and a fresh cup draw.
 static void league_results_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
     const ScheduleTables schedule = load_schedule_tables(exe);
     auto check = [&](const HokFile& h) {
-        // The pair-table error of the original (DEVIATIONS.md) books Oberliga results to team 0, so those rows
+        // The pair-table error of the original (reproduced) books Oberliga results to team 0, so those rows
         // are checked only through the totals over all leagues.
         std::array<int, 10> total{}, booked{};
         for (size_t league = 0; league < 3; league++) {
@@ -3928,6 +4054,11 @@ static void league_results_save(const fs::path& em_dir, const fs::path& ref_dir)
     std::printf("League result save: native MONAT1, three league tables, resume and new-season clearing checked\n");
 }
 
+// Play-offs and relegation in the save: after each of the 15 play-off days (two seeds) the
+// relegation groups (pairings 0x0400, results +0x120), the best-of-five series (pairings 0x8E91,
+// wins 0x024B, results 0x0205 with 14 bytes per game), stage (0x8F87), cursor (0x03B6) and game
+// (0x0259) agree with the game and survive a reload; also the original's SAISEND, POPOST and
+// POSEMI1/POSEMIP.
 static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), start = read_file(ref_dir / "START.HOK");
@@ -3997,8 +4128,8 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
             Game resumed(exe, bytes, seed);
             check(resumed, checkpoint);
             {
-                // loading recomputes the club record (162c:146c), which inside a step is not refreshed in the evening (REAL-CODE
-                // Köln period 277): only skill1/skill2/form and the skater count of the own club may change
+                // loading recomputes the club record from the squad, which the original does not refresh in the evening
+                // inside a step: only skill1/skill2/form and the skater count of the own club may change
                 HokFile x = decode_hok(bytes), y = decode_hok(resumed.save_bytes());
                 const int own = x.state.at(0x0DCD + 0x14);
                 if (own >= 0 && own < kHokTeams)
@@ -4042,7 +4173,7 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
         const HokFile actual = decode_hok(read_file(ref_dir / "POSEMIP.HOK"));
         const std::array<int, 4> bracket{3, 7, 0, 10};
         for (size_t i = 0; i < bracket.size(); i++) CHECK(input.state[0x8E99 + i] == bracket[i]);
-        // Native UI accepted the two semifinal pairings and played their first game.
+        // The original accepted the two semifinal pairings and played their first game.
         // Current teams/history are reversed for game 2: Düsseldorf beat Köln 5:2.
         CHECK(actual.state[0x8F87] == 1 && actual.state[0x0259] == 1 && actual.state[0x03B6] == 8);
         Game resumed(exe, read_file(ref_dir / "POSEMIP.HOK"), 12);
@@ -4063,7 +4194,7 @@ static void playoff_save(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("Play-off/relegation save: 15 boundaries x 2 seeds, original final and title holders checked\n");
 }
 
-// The human club's team record (162c:146c): line strengths of lines 0..2 / 3 per kind give the
+// The human club's team record, recomputed from its squad: line strengths of lines 0..2 / 3 per kind give the
 // stored values of the reference saves.
 static void human_team_record(const fs::path& ref_dir) {
     int checked = 0, exact = 0;
@@ -4088,16 +4219,17 @@ static void human_team_record(const fs::path& ref_dir) {
     CHECK(checked == 0 || exact * 10 >= checked * 8);
 }
 
-// Knock-out competitions with the clubs of MONAT1: the stored Achtelfinale draw gives 8 winners,
-// favourites go through more often, a best-of-five ends at 3 wins, the play-offs produce a champion
-// from the first eight (the leader more often than the eighth) and the relegation two survivors.
+// DEB cup draws: the first-round draw of the 32 clubs and the draw of a later round give exactly
+// the original's pairings for fixed Borland seeds (and leave the generator in the same state);
+// for 100 seeds the first round holds 32 different clubs of the three leagues, every human club,
+// and the club of the lower league always plays at home.
 static void cup_draws() {
     auto flatten = [](const std::vector<HokPairing>& draw) {
         std::vector<int> result;
         for (const auto& pair : draw) { result.push_back(pair.home); result.push_back(pair.away); }
         return result;
     };
-    // Independently calculated from the extracted native loops and Borland LCG.
+    // Calculated independently from the original's draw rules and the Borland random generator.
     BorlandRandom first(1), next(3);
     CHECK(flatten(draw_initial_cup({7}, first)) == (std::vector<int>{
         22,2,28,10,25,27,16,4,14,19,24,12,35,9,13,11,26,17,5,3,31,0,21,20,30,15,34,7,33,18,29,1}));
@@ -4121,6 +4253,11 @@ static void cup_draws() {
     CHECK(draw_cup_round({}, empty).empty());
 }
 
+// Knock-out competitions with the clubs of MONAT1: the stored Achtelfinale draw gives 8 winners,
+// a knockout game that is level after 60 minutes goes to sudden-death overtime (at most 10
+// minutes, marker 30) and then a shoot-out (marker 60), favourites go through more often, a
+// best-of-five ends at 3 wins, the play-offs produce a champion from the first eight (the leader
+// more often than the eighth) and the relegation two survivors.
 static void competitions(const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "MONAT1.HOK")) return;
     HokFile h = decode_hok(read_file(ref_dir / "MONAT1.HOK"));
@@ -4181,13 +4318,14 @@ static void competitions(const fs::path& ref_dir) {
     CHECK(rel.size() == 2 && (rel[0].stays_up() == rel[0].upper || rel[0].stays_up() == rel[0].lower));
 }
 
-// Scorer choice (ovl06_3191): Köln's 27 league goals of the first 9 matchdays went 24 to forwards
-// and 3 to defenders (MONAT1). Credit 27 goals to the START squad many times and compare.
+// Match energy: before a match the players' exhaustion (capped at 150) gives their fitness (at
+// most 90), a rest restores fitness, exhaustion during play lowers the line strength, and a
+// computer team whose saved current line is the empty fourth line keeps it for the whole match.
 static void match_energy() {
     HokTeam team;
     std::vector<HokSquadPlayer> squad(5);
     const int raw[] = {50, 80, 120, 150, 255};
-    const int prepared[] = {90, 90, 85, 82, 69};  // 162c:05f2-062e
+    const int prepared[] = {90, 90, 85, 82, 69};  // fitness the original derives from these exhaustion values
     for (size_t i = 0; i < squad.size(); i++) {
         squad[i].player = int(i);
         squad[i].raw_exhaustion = raw[i];
@@ -4225,6 +4363,9 @@ static void match_energy() {
     CHECK(empty_fourth.line_minutes[0][3] == 60 && empty_fourth.line_minutes[1][3] == 60);
 }
 
+// Tactics of the human club: with effort and offence under the manager's control the computer
+// setup keeps his values; apply_effort changes the current effort only as the situation demands
+// (flags bits 4..6 hold the situation); without control the computer chooses its own values.
 static void tactic_controls() {
     std::vector<HokSquadPlayer> squad;
     std::vector<HokPlayer> players;
@@ -4253,9 +4394,11 @@ static void tactic_controls() {
     CHECK(t.effort_base == 59 && t.effort_current == 79 && t.offence[kDraw] != 7);
 }
 
+// The cached line energies of the human club (team record) recomputed from the squad equal the
+// original's values at minute 60 of a match; the goalkeeper's fitness does not count.
 static void human_line_energy(const fs::path& ref_dir) {
-    // Native live capture, stopped at minute 60 of the second uninterrupted
-    // LINEMN22 match. This is RAM evidence, not a menu-loadable reference save.
+    // The original's state at minute 60 of the second match played from LINEMN22.
+    // It is taken during the match, not a save the game menu could load.
     const fs::path capture = ref_dir.parent_path() / "exp/evening_20261102/LINE_second_60.hok";
     if (!fs::exists(capture)) return;
     const HokFile native = decode_hok(read_file(capture));
@@ -4278,6 +4421,9 @@ static void human_line_energy(const fs::path& ref_dir) {
         for (int line = 0; line < 4; line++) CHECK(recalculated.energy[kind][line] == expected[kind][line]);
 }
 
+// Line changes of the human club: automatic rotation by quotas (line_control 4, minutes per line
+// and the rotation carried to the next match), manual control 5 that keeps the chosen lines, a
+// fourth line only with an assigned player, and no shift ageing for an empty line.
 static void line_controls() {
     std::vector<HokSquadPlayer> squad;
     std::vector<HokPlayer> players;
@@ -4332,6 +4478,8 @@ static void line_controls() {
     CHECK(empty.final_teams[0].shift[0] == 0 && empty.final_teams[0].shift[1] == 0);
 }
 
+// The line control mode (state 0x01F9) and quotas (0x025B..0x0262) of the original's LINEPS22 are
+// read into the tactics, kept through a match day and its save, and the current lines are 0 after it.
 static void line_control_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "LINEPS22.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), source = read_file(ref_dir / "LINEPS22.HOK");
@@ -4350,6 +4498,9 @@ static void line_control_save(const fs::path& em_dir, const fs::path& ref_dir) {
     CHECK(reloaded.save().teams[7].current_line[0] == 0 && reloaded.save().teams[7].current_line[1] == 0);
 }
 
+// The OpenEM checkpoint (.OEM): every field round-trips, and the older versions 1..9 (shorter
+// files with header version at +8, payload size at +12 and CRC-32 at +16 patched) still load with
+// the documented defaults for the fields they lack.
 static void checkpoint_format() {
     GameCheckpoint source;
     source.hok = {1, 2, 3};
@@ -4488,6 +4639,10 @@ static void checkpoint_format() {
     CHECK(range_rejected);
 }
 
+// Table rules: the fever curve (position history, 13 after the last matchday), the league sort of
+// the original (fewer games played before goal difference, non-adjacent swaps that can displace
+// equal entries), the four-team group order with its signed byte goal difference, quick
+// competition matches of empty teams, and goal counters that wrap at 256.
 static void table_ordering() {
     HokTableRow history;
     history.position_history[0] = 10;
@@ -4514,7 +4669,7 @@ static void table_ordering() {
     league.rows[1].goals_against[0] = 20;
     sort_league(league);
     CHECK(league.rows[1].position == 0 && league.rows[0].position == 1);
-    // Native non-adjacent swaps can displace equally ranked entries.
+    // The original's non-adjacent swaps can displace equally ranked entries.
     league = League{};
     for (int team = 0; team < kHokLeagueSize; team++) league.rows[size_t(team)].position = team;
     league.rows[2].games[0] = league.rows[2].wins[0] = 1;
@@ -4548,10 +4703,12 @@ static void table_ordering() {
     CHECK(prolific.rows[0].games[0] == 22 && prolific.rows[0].wins[0] == 22);
 }
 
+// Two days from NIGHTCP1 (the evening preparation of 13 September included) give the balance,
+// accrued interest, image, club, league and career bytes the original had at that point (NITLOAD1).
 static void native_night_preparation(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "NIGHTCP1.HOK") || !fs::exists(ref_dir / "NITLOAD1.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
-    const HokFile actual = decode_hok(read_file(ref_dir / "NITLOAD1.HOK"));  // read-only native RAM alias
+    const HokFile actual = decode_hok(read_file(ref_dir / "NITLOAD1.HOK"));  // the original's state at that point
     Game game(exe, read_file(ref_dir / "NIGHTCP1.HOK"), 6);
     game.advance_day(); game.advance_day();  // Sep 11 -> prepared Sep 13, before its match
     const HokFile saved = decode_hok(game.save_bytes());
@@ -4568,6 +4725,8 @@ static void native_night_preparation(const fs::path& em_dir, const fs::path& ref
                      actual.state.begin() + 0x0DE5));
 }
 
+// Loading a save of the original into a Game and saving it again without playing gives the file
+// back byte for byte, for every listed reference save.
 static void native_game_noop(const fs::path& em_dir, const fs::path& ref_dir) {
     const Bytes exe = read_file(em_dir / "EM.EXE");
     for (const char* name : {"FINMONP", "ADSPOST", "ADRENOK", "PENPST22", "TACMAN22", "TACPOS22",
@@ -4583,12 +4742,17 @@ static void native_game_noop(const fs::path& em_dir, const fs::path& ref_dir) {
     }
 }
 
+// A game saved as checkpoint and restored after every day must play exactly like an uninterrupted
+// game (same events, offers, checkpoint and final save), for several saves and seeds; the caller's
+// seed is ignored when a checkpoint is restored. Also the league pairing cache around the last
+// matchday, that HokFile clones are independent, and that a checkpoint is refused for another
+// EM.EXE or with inconsistent player ids.
 static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_dir) {
     const Bytes exe = read_file(em_dir / "EM.EXE");
     const Database db = decode_db(read_file(em_dir / "KB/23.vga"));
-    { // The exported round44 preview and the retained native menu cache
-      // differ. At round45 the cache becomes visible again; OEM must retain
-      // that phase instead of retaining its round44 export as a new cache.
+    { // The exported round 44 preview and the pairing cache the original keeps for its menu
+      // differ. At round 45 the cache becomes visible again; OEM must retain
+      // that phase instead of retaining its round 44 export as a new cache.
         Game direct(exe,read_file(ref_dir/"MONAT4.HOK"),6);
         direct.set_database(db);
         for(int day=0;day<20&&decode_hok(direct.save_bytes()).matchday[0]<44;++day)direct.advance_day();
@@ -4597,16 +4761,16 @@ static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_
         for(int day=0;day<20&&decode_hok(direct.save_bytes()).matchday[0]<45;++day){direct.advance_day();restored.advance_day();}
         CHECK(decode_hok(direct.save_bytes()).matchday[0]==45);
         CHECK(direct.checkpoint_bytes()==restored.checkpoint_bytes());
-        // After the last league day the original sets up the play-off phase at once: the pair table DS:5D7B then holds
-        // the relegation round, not round44 (REAL-CODE Köln period 33). Leagues 1 and 2 keep their round44 pairs behind it.
+        // After the last league day the original sets up the play-off phase at once: the pair table (state 0x8DFD) then
+        // holds the relegation round, not round 44. Leagues 1 and 2 keep their round 44 pairs behind it.
         const auto last=round_robin_pairings(load_schedule_tables(exe).teams12,43);
         for(size_t league=1;league<3;++league)for(size_t pair=0;pair<6;++pair){
             const size_t at=0x8dfd+league*12+pair*2;
             CHECK(direct.save().state.at(at)==int(league)*12+last[pair].home);
             CHECK(direct.save().state.at(at+1)==int(league)*12+last[pair].away);
         }
-        // Independently distinct export-preview bytes must not replace the
-        // native working cache when an OEM is restored at the no-write round.
+        // Export-preview bytes that differ must not replace the working cache
+        // when an OEM is restored at the round in which the original writes nothing.
         auto phase=decode_game_checkpoint(direct.checkpoint_bytes());auto preview=decode_hok(phase.hok);
         for(size_t league=0;league<3;++league)for(size_t pair=0;pair<6;++pair)
             preview.pairings[league][pair]={int(league*12+pair*2),int(league*12+pair*2+1)};
@@ -4697,6 +4861,9 @@ static void checkpoint_continuation(const fs::path& em_dir, const fs::path& ref_
     }
 }
 
+// CPPOST22 (a save of the original in the middle of the European cup) imported and saved again keeps
+// balance, phase, the competition block 0x0796..0x0DC5 and the players' penalty counters, and a
+// checkpoint after one more day restores exactly.
 static void native_checkpoint_export(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "CPPOST22.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), source = read_file(ref_dir / "CPPOST22.HOK");
@@ -4715,6 +4882,9 @@ static void native_checkpoint_export(const fs::path& em_dir, const fs::path& ref
     CHECK(resumed.checkpoint_bytes() == imported.checkpoint_bytes());
 }
 
+// A European cup final group that ends with all four teams level (TIELIVE2): the order the original
+// gives such a group (0x061C), points and goal bytes after the last round, and the champion 81, as
+// in the original's TIEPOST2.
 static void native_group_ties(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "TIELIVE2.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -4736,6 +4906,9 @@ static void native_group_ties(const fs::path& em_dir, const fs::path& ref_dir) {
     }
 }
 
+// Tactics in the save (effort control 0x01FF, offence control 0x01F3): the manual values of the
+// original's TACMAN22 (effort 59/79, offence 7 when level) are read, kept through match days and
+// saves; with mode 2 the live effort stays fixed.
 static void tactic_save(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "TACMAN22.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE"), source = read_file(ref_dir / "TACMAN22.HOK");
@@ -4761,7 +4934,7 @@ static void tactic_save(const fs::path& em_dir, const fs::path& ref_dir) {
     Game resumed(exe, saved, 6);
     resumed.advance_day();
     CHECK(resumed.save().teams[7].effort_base == 59 && resumed.save().teams[7].offence[kDraw] == 7);
-    // Native mode 2 keeps the live value fixed instead of applying score/fatigue
+    // Mode 2 keeps the live value fixed instead of applying score/fatigue
     // changes. This is a controlled derivative, not an original UI observation.
     HokFile fixed = decode_hok(source);
     fixed.state[0x01FF] = fixed.state[0x01F3] = 2;
@@ -4777,6 +4950,10 @@ static void tactic_save(const fs::path& em_dir, const fs::path& ref_dir) {
     std::puts("tactics save: native SEMI 59/7 retained; independent controls and fixed live values checked");
 }
 
+// Penalties of the human club's players: power play / penalty kill counters with their rollback
+// and booking after goals, the penalty box (at most two players, timers, return after a goal
+// against, byte counters that wrap), the choice of the penalized player from the current line with
+// the Borland stream, and a depleted squad.
 static void personal_penalties() {
     PenaltyOpportunities opportunities;
     const int pp = opportunities.record(1, 4, 5, false, true);
@@ -4853,6 +5030,9 @@ static void personal_penalties() {
     for (size_t i = 0; i < squad.size(); i++) CHECK(stats.final_squads[0][i].role == squad[i].role);
 }
 
+// Penalty counters in the save: after 30 days the players' major/minor penalty counters and the
+// teams' penalty minutes survive save and load; the original's own saves (FINEVMON, PENCHK22 ->
+// PENPST22) show the same fields being counted, and the season change clears the counters.
 static void personal_penalty_saves(const fs::path& em_dir, const fs::path& ref_dir) {
     if (!fs::exists(ref_dir / "START.HOK")) return;
     const Bytes exe = read_file(em_dir / "EM.EXE");
@@ -4881,11 +5061,11 @@ static void personal_penalty_saves(const fs::path& em_dir, const fs::path& ref_d
         const HokFile native = decode_hok(read_file(ref_dir / "FINEVMON.HOK"));
         int major = 0, minor = 0;
         for (const auto& p : native.squad) { major += p.major_penalties; minor += p.minor_penalties; }
-        CHECK(major == 2 && minor == 9);  // original league + cup, individually observed in guest RAM
+        CHECK(major == 2 && minor == 9);  // league + cup penalties of the original's own players
     }
     if (fs::exists(ref_dir / "PENCHK22.HOK") && fs::exists(ref_dir / "PENPST22.HOK")) {
-        // C++ counters 7/43 were retained by the original; its next league match
-        // added one major and two minors. PENPST22 is a real native dialog save.
+        // The counters 7/43 written by OpenEM were kept by the original; its next league match
+        // added one major and two minors. PENPST22 was written by the original's save dialog.
         const HokFile input = decode_hok(read_file(ref_dir / "PENCHK22.HOK"));
         const HokFile native = decode_hok(read_file(ref_dir / "PENPST22.HOK"));
         int major_delta = 0, minor_delta = 0;
@@ -4929,11 +5109,15 @@ static void personal_penalty_saves(const fs::path& em_dir, const fs::path& ref_d
     std::printf("personal penalties: %d assessed player counters survive save/load; native major/minor fields checked\n", personal);
 }
 
+// Scorer choice: Köln's 27 league goals of the first 9 matchdays went 24 to forwards and 3 to
+// defenders (MONAT1). Credit 27 goals to the START squad many times and compare; goalkeepers never
+// score. A squad with a single eligible player or none gives scorer only or no credit. Also the
+// Borland generator formula.
 static void scorer_choice(const fs::path& ref_dir) {
     {
         std::vector<HokPlayer> players(2);
         players[1].position = 75;
-        std::vector<HokSquadPlayer> depleted(4);  // includes native empty slots (player == -1)
+        std::vector<HokSquadPlayer> depleted(4);  // includes empty squad slots (player == -1)
         depleted[0].player = 0;
         depleted[0].role = 1;
         depleted[3].player = 1;
@@ -4960,7 +5144,7 @@ static void scorer_choice(const fs::path& ref_dir) {
             total++;
         }
     }
-    std::printf("scorers: forwards %.0f%% of goals (original Köln 89%%), goalkeepers %ld\n",
+    std::printf("scorers: forwards %.0f%% of goals (original game: 89%% for Köln), goalkeepers %ld\n",
                 100.0 * double(forwards) / double(total), goalies);
     CHECK(goalies == 0);
     CHECK(double(forwards) / double(total) > 0.75 && double(forwards) / double(total) < 0.97);
@@ -4968,7 +5152,7 @@ static void scorer_choice(const fs::path& ref_dir) {
     CHECK(a.rand() == int(((5u * 22695477u + 1u) >> 16) & 0x7FFF));
 }
 
-// Human team (FUN_162c_16bf, squad branch) with Kölner EC in MONAT1: the strengths from the squad
+// Human team (strength computed from the squad) with Kölner EC in MONAT1: the strengths from the squad
 // are of the same order as the computer-team formula from the team record, the empty net costs
 // the defence everything, and a season of matches against the league gives a plausible record.
 static void human_team(const fs::path& em_dir, const fs::path& ref_dir) {
@@ -5019,7 +5203,7 @@ static void human_team(const fs::path& em_dir, const fs::path& ref_dir) {
         }
     std::printf("Köln (squad) vs league: %d-%d-%d, goals %d:%d per 2200 games\n", w, d, l, gf, ga);
     CHECK(w > l / 2 && w < l * 4);  // a mid-to-upper table team: neither hopeless nor unbeatable
-    // Penalties and lines (ovl06_02d8, FUN_162c_0e32): Köln's "Totale" screen after 11 games shows
+    // Penalties and lines in live matches: Köln's "Totale" screen after 11 games shows
     // 36 power plays and 39 penalty kills (about 3.5 penalties per side and game) and 6 power-play
     // goals (16 %). Köln plays in tactics mode 2 (automatic line changes).
     MatchStats st;
@@ -5090,7 +5274,7 @@ static void season_regression(const fs::path& em_dir, const fs::path& ref_dir) {
     }
 }
 
-// Quick match simulation (FUN_162c_1e9c) with the first-division clubs of MONAT1: the goal average
+// Quick match simulation (matches without display) with the first-division clubs of MONAT1: the goal average
 // must be close to the 6.9 goals per match the original produced in the first 9 matchdays
 // (375 goals in 54 matches), and the strongest club must beat the weakest most of the time.
 static void match_plausibility(const fs::path& ref_dir) {
@@ -5123,7 +5307,7 @@ static void match_plausibility(const fs::path& ref_dir) {
     HokTeam extreme;
     extreme.skill1[0] = extreme.skill2[0] = extreme.form[0] = 255;
     const LineValues capped = line_strength(extreme, 0, 0, false, 0);
-    CHECK(capped.skill1 == 100 && capped.skill2 == 100 && capped.form == 100);  // native 1bce..1c1b
+    CHECK(capped.skill1 == 100 && capped.skill2 == 100 && capped.form == 100);  // the original caps line values at 100
 }
 
 // Schedule tables from EM.EXE reproduce every pairing list stored in the reference saves: the
@@ -5162,7 +5346,9 @@ static void schedule_vs_saves(const fs::path& em_dir, const fs::path& ref_dir) {
     std::printf("schedule: %d saves checked\n", checked);
 }
 
-// Reference saves made in DOSBox-X (work\EM, Kölner EC): team table and player records.
+// Reference saves made with the original game (manager at Kölner EC): team table and player
+// records, and date, tables, finances, squad, strengths, tactics and competitions against what the
+// original shows on its screens for START, TAG1, MONAT1 and AKTIE.
 static void reference_hok(const fs::path& dir) {
     for (const char* name : {"START.HOK", "TAG1.HOK", "MONAT1.HOK"}) {
         if (!fs::exists(dir / name)) continue;
@@ -5179,7 +5365,7 @@ static void reference_hok(const fs::path& dir) {
         CHECK(h.players.size() >= 190 && own == 25 && ages_ok);
         std::printf("%s: %zu players, %d at the human club\n", name, h.players.size(), own);
     }
-    // Date, matchday and league table against the in-game screens (work\ref\*.png).
+    // Date, matchday and league table against the in-game screens of the original.
     auto row_is = [](const HokTableRow& r, int pos, int w, int d, int l, int pp, int pm, int gf, int ga) {
         return r.position + 1 == pos && r.total(r.wins) == w && r.draws(0) + r.draws(1) == d &&
                r.total(r.losses) == l && r.points_plus() == pp && r.points_minus() == pm &&
@@ -5229,7 +5415,7 @@ static void reference_hok(const fs::path& dir) {
             kl = kl || (h.teams[size_t(p.home)].name == "EA KEMPTEN" && p.away == 11);
         }
         CHECK(fk && kl);
-        // "Verträge" screen (work\ref\MONAT1_vertraege.png): SP, ST, TO, STATUS, E, years, salary
+        // "Verträge" screen of MONAT1: SP, ST, TO, STATUS, E, years, salary
         CHECK(h.squad.size() == 25);
         struct Row { const char* name; int sp, st, to; SquadStatus status; int e; long salary; };
         const Row rows[] = {
@@ -5253,7 +5439,7 @@ static void reference_hok(const fs::path& dir) {
             CHECK(found);
         }
         CHECK(h.squad[1].goals_against == 23);  // CISSEWSKI: Köln conceded 23 league goals
-        // "STÄRKEN Bundesliga - Gesamt" (MONAT1_staerken1.png): columns 1-3 of all 12 clubs
+        // "STÄRKEN Bundesliga - Gesamt" screen of MONAT1: columns 1-3 of all 12 clubs
         const int strength[12][3] = {{82, 85, 50}, {81, 75, 48}, {72, 76, 48}, {89, 89, 52}, {79, 90, 54},
                                      {75, 80, 49}, {71, 77, 51}, {80, 80, 52}, {76, 75, 51}, {68, 69, 53},
                                      {96, 91, 47}, {70, 67, 46}};
@@ -5261,12 +5447,12 @@ static void reference_hok(const fs::path& dir) {
             CHECK(h.teams[t].skill1_mean() == strength[t][0] && h.teams[t].skill2_mean() == strength[t][1] &&
                   h.teams[t].form_mean() == strength[t][2]);
         CHECK(h.teams[52].energy[0][1] == 90);  // computer teams keep fresh lines
-        // "Taktik" of Kölner EC (MONAT1_taktik.png): effort 40 / 20 20 15 20 0, offence 0 / 4 5 6 7 4
+        // "Taktik" screen of Kölner EC in MONAT1: effort 40 / 20 20 15 20 0, offence 0 / 4 5 6 7 4
         const HokTeam& koeln = h.teams[7];
         CHECK(koeln.effort_base == 40 && koeln.effort[kHighLead] == 20 && koeln.effort[kDraw] == 15 &&
               koeln.effort[kHighDeficit] == 0);
         CHECK(koeln.offence_base == 0 && koeln.offence[kHighLead] == 4 && koeln.offence[kNarrowDeficit] == 7);
-        // "Europacup Gruppe 1/2" and WM screens (work\ref\MONAT1_eurocup*.png, MONAT1_wm*.png)
+        // "Europacup Gruppe 1/2" and WM screens of MONAT1
         CHECK(h.teams[size_t(h.euro_groups[0][0])].name == "DS OLMUETZ" && h.euro_groups[1][3] == 3);
         CHECK(h.euro_rounds[0][1][0].home == 96 && h.euro_rounds[0][1][0].away == 82);  // Chamonix - Olmütz
         CHECK(h.euro_rounds[1][3][1].home == 3);  // return game round 4: Düsseldorf at home

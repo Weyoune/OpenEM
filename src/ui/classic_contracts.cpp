@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Classic-mode contract negotiation: the contract dialog for renewing a
+// player of the own squad during the season, and the season-change talks
+// in which every player whose contract ran out is offered a one-year
+// proposal. Also the shared plain frame and text-button helpers.
+//
+// Squad records are 52 bytes each (see squad_block()); fields used here:
+// +0x0B contract years, +0x0C loan flag (non-zero = only borrowed), +0x18
+// negotiation-wish counter (bit 7 = retires when the contract ends), +0x28
+// monthly salary (i32), +0x30 insurance premium (i32, 0 = not insured).
+// The insurance cannot be toggled when bit 7 of +0x2F is set or bits 0..1
+// of +0x09 equal 2.
 #include "ui/classic_app.hpp"
 #include "ui/classic_roster.hpp"
 #include <algorithm>
@@ -6,11 +17,16 @@
 namespace em::ui {
 namespace { constexpr auto mini=ClassicFontId::Mini,flow=ClassicFontId::Flow; }
 
+// Bevelled panel whose edge colour is taken from the pixel already on
+// screen at (left+5, top+5), filled with fill.
 void ClassicApplication::plain_frame(int left,int top,int right,int bottom,uint8_t fill){
     const auto edge=canvas_.pixels().at(left+5,top+5);
     bevel(left+2,top+3,right,bottom,edge,fill);
 }
 
+// 57x12 text button from the KB/4 atlas at (x,y), keeping the four corner
+// pixels of the background. On the stadium screen the game additionally
+// draws the highlight edge in colour 2.
 void ClassicApplication::button(int x,int y,std::string_view label){
     const auto tl=canvas_.pixels().at(x,y),tr=canvas_.pixels().at(x+56,y);
     const auto bl=canvas_.pixels().at(x,y+11),br=canvas_.pixels().at(x+56,y+11);
@@ -23,6 +39,12 @@ void ClassicApplication::button(int x,int y,std::string_view label){
     canvas_.text(mini,x,y+7,label,29,1,x+59);
 }
 
+// Opens the contract dialog for squad slot (0..28) of the active manager.
+// Borrowed players and players who announced their retirement only get a
+// notice. The dialog starts with the current years and salary; the
+// insurance premium shown is the stored one, or half the player's salary
+// worth if he is not insured. The dialog sits lower (offset 80) for the
+// first twelve slots so it does not hide the selected row.
 void ClassicApplication::open_contract(int slot){
     roster_rules_=false;
     const auto& h=snapshot();
@@ -42,31 +64,40 @@ void ClassicApplication::open_contract(int slot){
     contract_editor_=std::move(editor);
 }
 
+// Ends numeric entry into the years (field 0) or salary (field 1) of the
+// contract dialog. The salary is typed in DM and stored as value*3 (the
+// game's internal money unit). Entering a number of years recomputes the
+// player's salary demand for that duration.
 void ClassicApplication::finish_numeric(bool cancel){
     auto& editor=*contract_editor_;
     const int field=editor.field;editor.field=-1;
     if(cancel||editor.digits.empty())return;
     const long value=std::stol(editor.digits);
-    if(!value)return; // native empty/zero restores the previous field
+    if(!value)return; // as in the game, an empty or zero entry keeps the previous value
     if(field==1){editor.salary=value*3;editor.salary_edited=true;return;}
     editor.years=int(value);
     editor.salary_edited=false;
-    if(editor.season){  // ovr035:481B..49F2: the demand is written into the record and never goes below its salary
+    if(editor.season){  // season change: the demand is written into the record and never goes below its salary
         BorlandRandom unused;
         const auto& h=snapshot();
         const long demand=season_change_demand(session_.contract_tables(),h,season_manager(),contract_player(h,season_manager(),editor.slot),editor.years,season_luck_,unused);
         editor.salary=editor.record_salary=std::max(demand,editor.record_salary);
         return;
     }
-    // The saved formats do not include the transient native daily dialog mood.
-    // Use the same neutral mood as the existing season-review quote, without
-    // consuming the simulation RNG. See the frontend limitations document.
+    // The game's transient daily negotiation mood is not part of any saved
+    // format. Use the same neutral mood (100) as the season-review quote,
+    // with a throw-away random generator so the simulation's random
+    // sequence is not consumed.
     BorlandRandom unused;
     const int league=session_.game().budget().league;
     editor.salary=renewal_demand(session_.contract_tables(),contract_player(snapshot(),active_manager(),editor.slot),
         editor.years,100,session_.game().next_matchday(league),44,session_.game().season_day()+1,unused);
 }
 
+// "Mach' ich!" in the in-season contract dialog (or the purchase dialog
+// that shares it): more than four years is refused outright; otherwise the
+// game negotiates and, on success, applies a changed insurance choice.
+// The outcome is shown as a notice.
 void ClassicApplication::submit_contract(){
     if(purchase_draft_){submit_purchase();return;}
     const auto editor=*contract_editor_;
@@ -92,6 +123,9 @@ void ClassicApplication::submit_contract(){
     }catch(const std::exception& error){notice(error.what());}
 }
 
+// Draws the contract dialog (duration, monthly salary, insurance and the
+// two buttons). While a number is being typed, the field shows the digits
+// with a block cursor.
 void ClassicApplication::draw_contract_editor(){
     const auto& e=*contract_editor_;const auto& p=snapshot().players.at(size_t(e.player));const int s=e.offset;
     plain_frame(2,s+28,168,s+97,4);
@@ -116,6 +150,9 @@ void ClassicApplication::draw_contract_editor(){
 namespace em::ui {
 namespace { bool hit(int x,int y,int l,int t,int r,int b){return x>=l&&x<=r&&y>=t&&y<=b;} }
 
+// Left click in the contract dialog: the two buttons, or one of the three
+// rows (years / salary start numeric entry, insurance toggles unless the
+// record forbids it). In season the buttons answer the season talk.
 void ClassicApplication::click_contract_editor(int x,int y,bool right){
     auto& e=*contract_editor_;
     if(right)return;
@@ -135,20 +172,24 @@ void ClassicApplication::click_contract_editor(int x,int y,bool right){
             if((h.state.at(record+0x2F)&0x80)||(h.state.at(record+9)&3)==2)return;
             e.insured=!e.insured;return;
         }
-        // the season change clears the wish counter for its dialog (ovr026: +0x18 = 0x65, ovl11_41db)
+        // a non-zero wish counter blocks talks during the season; the
+        // season change clears it for its own dialog
         if(!e.season&&h.state.at(record+0x18)!=0){notice(h.players.at(size_t(e.player)).name+" ist im Moment\nnicht verhandlungs-\nbereit.");return;}
         e.field=field;e.digits.clear();
     }
 }
 
-// ovr026 (DOS ovl02_0000 near 116086): the squad list with the club name, the symbol box and, for each player whose
-// contract ran out, ovl11_41db with the one-year proposal; "Abbruch" or a refusal lets him go with two notices.
+// Season change: the squad list with the club name, the symbol box and, for
+// each player whose contract ran out, the contract dialog with the
+// one-year proposal; "Abbruch" or a refusal lets him go with two notices.
+// Opens the dialog for the game's pending contract question, working on a
+// copy of the save state as it was when the question was asked.
 void ClassicApplication::open_season_talk(){
     const auto& q=*session_.contract_question();
     season_view_=std::make_unique<HokFile>(decode_hok(q.save));
     season_luck_=q.luck;
     season_outcomes_seen_=q.outcomes.size();
-    // the pages of all managers come first (ovl02_0000), then the talks of manager 0..N-1 with that manager at the seat
+    // the season-review pages of all managers come first, then the talks of manager 0..N-1 with that manager at the seat
     bool any_review=false;for(const auto& r:q.reviews)any_review|=r.has_value();
     if(q.index==0&&any_review&&!season_review_shown_){show_reviews(q.reviews,q.review_messages);season_review_shown_=true;}
     else if(session_.game().managers()>1&&!(career_modal()=="review"||career_modal()=="review-overview"))session_.select_manager(q.manager);
@@ -166,7 +207,8 @@ void ClassicApplication::open_season_talk(){
 }
 
 // The notices of the talks answered since the last dialog. A refusal is shown over the dialog; the player's farewell
-// and the transfer fee over the list as it was (ovl12_0bdc runs before ovl09_25d6 removes him).
+// and the transfer fee over the list as it was (the game shows them before it removes the player from the squad).
+// The fee is shown in DM (internal money / 3).
 void ClassicApplication::queue_season_outcomes(const std::vector<Game::ContractOutcome>& outcomes){
     for(size_t k=season_outcomes_seen_;k<outcomes.size();k++){
         const auto& o=outcomes[k];
@@ -180,6 +222,10 @@ void ClassicApplication::queue_season_outcomes(const std::vector<Game::ContractO
     if(!pending_notices_.empty()&&notice_.empty()){notice_=pending_notices_.front();pending_notices_.erase(pending_notices_.begin());}
 }
 
+// Answers the pending season talk: sign=true offers the dialog's years
+// (and the edited salary, if any), false lets the player go. Then either
+// opens the next talk (after any notices) or, when all talks are done,
+// returns to manager 0 and continues with the news and the match view.
 void ClassicApplication::answer_season_talk(bool sign){
     const auto e=*contract_editor_;
     // more than four years: the original says "SOOOO lange..." and lets the player go (Game::expire_contracts)
@@ -204,15 +250,18 @@ void ClassicApplication::answer_season_talk(bool sign){
     }catch(const std::exception& error){season_view_.reset();contract_editor_.reset();notice(error.what());}
 }
 
+// Draws the season-change talk screen: ice background, club name, the
+// squad list, the symbol box at the bottom right and the dialog on top.
 void ClassicApplication::draw_season_talk(){
     const auto& h=snapshot();
-    canvas_.background(22);  // ovl10_2bf6
+    canvas_.background(22);
     const int m=session_.contract_question()?session_.contract_question()->manager:active_manager();
     const int team=h.state.at(manager_block(m)+0x14);
     if(team>=0&&size_t(team)<h.teams.size())canvas_.text(flow,0,10,h.teams.at(size_t(team)).name,0x1E,0,0x13F);
     canvas_.frame(0x109,0xC3,2,2);
     draw_classic_roster(canvas_,h,true,m);
-    // 146e:07ff with symbol 10 of KB13: the frame at (0x90,0), the symbol 3 pixels inside it
+    // symbol 10 of the KB/13 atlas (6 symbols of 24x21 per row) inside its
+    // frame taken from (0x90,0) of the same atlas, 3 pixels in
     canvas_.blit(13,0x112,200,0x90,0,0x1E,0x1B,true,0xC0);
     canvas_.blit(13,0x115,203,(10%6)*0x18,(10/6)*0x15,0x18,0x15,true,0xC0);
     if(contract_editor_&&contract_editor_->season&&(notice_.empty()||season_editor_with_notice_))draw_contract_editor();
@@ -221,7 +270,11 @@ void ClassicApplication::draw_season_talk(){
 }  // namespace em::ui
 
 namespace em::ui {
-// Raster tests (tests/classic_contract_season_tests.cpp): the loaded game as the staged day of a season change.
+// Test hook for the raster tests: stages the loaded game as a day of the
+// season change. "contract-season:<slot>:<luck>" opens manager 0's talk
+// for that slot with the proposal computed like Game::expire_contracts;
+// "season-notice:<0|1>:<text>" shows a notice (1 = over the open dialog;
+// "\n" in the text is a literal backslash-n). Returns false for other names.
 bool ClassicApplication::render_season_talk(std::string_view name){
     const auto field=[&](size_t n){
         size_t at=0;for(size_t k=0;k<n;k++)at=name.find(':',at)+1;
@@ -235,7 +288,7 @@ bool ClassicApplication::render_season_talk(std::string_view name){
         const auto& squad=h.squad_of(0);
         if(slot<0||size_t(slot)>=squad.size())throw FormatError("contract-season: no such slot");
         const ContractPlayer cp=contract_player(h,0,slot);
-        BorlandRandom unused;  // as Game::expire_contracts: ovl11_3d36(record, 1) * (147 - age) / 100
+        BorlandRandom unused;  // as Game::expire_contracts: salary worth * (147 - age) / 100
         const long proposal=long(int32_t(player_worth(session_.contract_tables(),cp,Worth::Salary,unused)*(147-int(h.players.at(size_t(squad[size_t(slot)].player)).age))/100));
         ContractEditor editor;
         editor.slot=slot;editor.player=squad[size_t(slot)].player;editor.offset=slot<12?80:0;

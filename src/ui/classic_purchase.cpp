@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Buying or loaning a player from the transfer list in the classic frontend: the offer field ("Ihr Angebot"),
+// the contract negotiation that follows an accepted offer, and its cancellation. The rules themselves live in
+// Game (src/game/purchase.cpp); these methods only drive the dialogs.
 #include "ui/classic_app.hpp"
 
 namespace em::ui {
+// Opens the offer field for transfer-pool slot slot (pool squad at 0x81CD, 52 bytes per slot). Byte +0x1A of the
+// slot holds one "already refused" bit per manager plus 0x80; if both are set the offer is refused at once.
 void ClassicApplication::open_purchase(int slot){
     const auto& h=snapshot();const size_t record=0x81CD+size_t(slot)*52;
     const auto flags=h.state.at(record+0x1A);
     const int bit=1<<active_manager(),owner=h.state.at(0x4FC6+size_t(h.state.at(record+15)-1)*33+0x1A);
     if((flags&0x80)&&(flags&bit)){notice("Angebot wurde\nbereits abgelehnt.");return;}
-    // ovr035:1161..1314..14E8: the manager bit without 0x80 on a computer player ends the click without
-    // editor or message (every write sets the bit together with 0x80, ovr035:1303/1ADD, so this needs a
-    // hand-made save).
+    // The manager bit without 0x80 on a computer player ends the click without editor or message, as in the
+    // original (the game always sets the bit together with 0x80, so this needs a hand-made save).
     if((flags&bit)&&owner==4)return;
     roster_rules_=false;
     fee_editor_=FeeEditor{slot,{}};
 }
+// Paints the offer box: "<name> kaufen/leihen", "Ihr Angebot:" and the typed DM digits with a text cursor.
 void ClassicApplication::draw_fee_editor(){
     const auto& editor=*fee_editor_;const auto& h=snapshot();
     const auto roster=hok_squad(h,4);const auto& player=h.players.at(size_t(roster.at(size_t(editor.pool_slot)).player));
@@ -25,6 +30,9 @@ void ClassicApplication::draw_fee_editor(){
     const int x=13+canvas_.font().measure(ClassicFontId::Flow,editor.digits);
     canvas_.rect(x,62,x+2,66,1);
 }
+// Closes the offer box. Unless cancelled or zero, the typed DM amount (internal units: DM * 3) goes as a bid
+// to another manager's list player, as a loan offer, or as a purchase offer; an accepted purchase opens the
+// contract editor for the new squad slot, a refused one shows the reason.
 void ClassicApplication::finish_fee(bool cancel){
     const auto editor=*fee_editor_;fee_editor_.reset();
     if(cancel||editor.digits.empty())return;
@@ -40,7 +48,7 @@ void ClassicApplication::finish_fee(bool cancel){
         if(result==PurchaseResult::Negotiating){
             purchase_draft_=draft;purchase_backdrop_=std::move(backing);
             open_contract(draft.club_slot);
-            if(contract_editor_)contract_editor_->offset=0;  // ovr035:185D: ovl11_41db(record, slot, 0), the panel at the top
+            if(contract_editor_)contract_editor_->offset=0;  // the original opens this contract panel at the top
             if(!contract_editor_)cancel_purchase();
             return;
         }
@@ -53,6 +61,8 @@ void ClassicApplication::finish_fee(bool cancel){
         }
     }catch(const std::exception& e){notice(e.what());}
 }
+// Abandons a running negotiation: Game undoes the provisional transfer, the editor and backdrop are dropped,
+// and with feedback the player is told "Der Transfer findet nicht statt.".
 void ClassicApplication::cancel_purchase(bool feedback){
     if(!purchase_draft_){contract_editor_.reset();return;}
     const auto draft=*purchase_draft_;
@@ -60,6 +70,9 @@ void ClassicApplication::cancel_purchase(bool feedback){
     contract_editor_.reset();purchase_draft_.reset();purchase_backdrop_.reset();invalidate();
     if(feedback)notice("Der Transfer\nfindet nicht statt.");
 }
+// Submits the contract editor of a purchase (years, salary, insurance). A completed purchase may be followed
+// by the sponsor's subsidy question; a refused contract shows "Der Transfer findet nicht statt." (after
+// "SOOOO lange ..." for more than four years).
 void ClassicApplication::submit_purchase(){
     const auto editor=*contract_editor_;const auto draft=*purchase_draft_;
     try{
@@ -73,7 +86,8 @@ void ClassicApplication::submit_purchase(){
         });
         if(result==PurchaseResult::Invalid){notice("Diese Vertragswerte sind ungültig.");return;}
         contract_editor_.reset();purchase_draft_.reset();invalidate();
-        // As after a loan, the sponsor question keeps the page from before the purchase (not checked in DOSBox).
+        // As after a loan, the sponsor question keeps the page from before the purchase (assumed, not verified
+        // against the original).
         if(result==PurchaseResult::Purchased&&subsidy>0){backdrop_budget_=budget;open_subsidy_question(subsidy);}
         else purchase_backdrop_.reset();
         if(result!=PurchaseResult::Purchased){

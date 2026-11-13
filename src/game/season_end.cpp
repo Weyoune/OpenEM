@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Season-end rules: prizes, scoring titles, career history, licence withdrawal, player turnover
+// and new team ratings; see season_end.hpp.
 #include "game/season_end.hpp"
 
 #include <algorithm>
@@ -19,7 +21,7 @@ std::array<int, 2> season_scoring_winners(const std::vector<SeasonScorer>& playe
     auto order = players;
     auto score = [](const SeasonScorer& p) {
         // The goalkeeper's ratio is negative, putting eligible skaters first.
-        // Native signed 16-bit assists/minutes and a 400-minute minimum apply.
+        // Assists/minutes are signed 16-bit values as in the original, and a 400-minute minimum applies.
         const int value = int16_t(uint16_t(p.assists_or_minutes));
         return p.position == 0 ? (value < 400 ? -99999L : -long(p.goals) * 6000 / value)
                                : long(p.goals) + value;
@@ -107,6 +109,7 @@ NewPlayer new_player(BorlandRandom& rng) {
 }
 
 RatingBounds load_rating_bounds(const Bytes& exe) {
+    // file offset of the data segment, offset of the bounds table within it
     constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0, kBounds = 0x0125;
     RatingBounds b;
     for (size_t c = 0; c < 3; c++) b.bounds[c] = {exe.at(kDgroupFile + kBounds + 2 * c), exe.at(kDgroupFile + kBounds + 2 * c + 1)};
@@ -125,7 +128,7 @@ void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRando
         team.skill1[k] = std::clamp(int(team.skill1[k] + rng.range(trend - 1, trend + 1)), lo, hi);
     for (int k = 0; k < 2; k++) {
         int v = team.skill2[k];
-        const bool change = rng.range(0, 2) == 0 || mode == 3;  // drawn but ignored in mode 3 (REAL-CODE test)
+        const bool change = rng.range(0, 2) == 0 || mode == 3;  // drawn but ignored in mode 3, as in the original
         if (change) v += int(rng.range(trend - 1, trend + 1));
         team.skill2[k] = std::clamp(v, lo, hi);
     }

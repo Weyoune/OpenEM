@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Gemischtes (Laden, Sichern, Einst.), Manager -> Neuer and Manager -> Highscore: pixel comparison with native
-// DOSBox captures (work/exp/ui_20261108) and behaviour, including the highscore file logic of ovr040.
+// Gemischtes (Laden, Sichern, Einst.), Manager -> Neuer and Manager -> Highscore: pixel comparison with reference
+// images of the original (GOLDENS) and behaviour, including the merge of a result into the highscore file
+// HIGH\H.141 (game/highscore.cpp).
+//
+// Usage: classic_misc_tests DATA REFERENCE GOLDENS FIXTURES OUTPUT
+//   REFERENCE holds START.HOK (and a HIGH folder), FIXTURES an eight-row highscore file H.141.
+//   Failed checks are counted; EM_DUMP_MISMATCH=<folder> writes differing pictures as .bmp.
 #include "game/highscore.hpp"
 #include "ui/classic_app.hpp"
 #include "ui/classic_misc_newmanager.hpp"
@@ -14,9 +19,12 @@
 namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `condition` is false.
 static void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// Number of pixels in which the canvas differs from a raw 320 x 240 RGB reference image; prints the bounding box
+// and optionally dumps the canvas (EM_DUMP_MISMATCH).
 static size_t differences(const ClassicCanvas& canvas, const fs::path& golden) {
     const auto expected = read_file(golden);
     require(expected.size() == 320 * 240 * 3, "native RGB golden size");
@@ -42,6 +50,7 @@ static size_t differences(const ClassicCanvas& canvas, const fs::path& golden) {
     }
     return count;
 }
+// Copies a fixture file to `to`, creating its folder and replacing an existing file.
 static void copy_fixture(const fs::path& from, const fs::path& to) {
     fs::create_directories(to.parent_path());
     fs::copy_file(from, to, fs::copy_options::overwrite_existing);
@@ -59,7 +68,8 @@ int main(int argc, char** argv) {
             if (!ok) { std::cerr << "FAIL: " << what << "\n"; failures++; }
         };
 
-        // Highscore merge (ovr040:2F1D), independent of the screen.
+        // Highscore merge, independent of the screen: the manager's own row (same game identity) is overwritten in
+        // place even by a lower score, a new record is inserted, then the list is sorted by score.
         {
             HighscoreTable t = read_highscore_table(read_file(fixtures / "H.141"));
             HighscoreRecord r;
@@ -148,7 +158,7 @@ int main(int argc, char** argv) {
             const auto written = read_highscore_table(read_file(saves / "HIGH" / "H.141"));
             check(written.row(2).score == 1797 && written.row(3).name == "OPA", "merged file");
         }
-        // Manager -> Neuer, with the clicks of the native capture session (pointer hotspot one row above the click).
+        // Manager -> Neuer, with the same clicks as in the original's reference session (pointer hotspot one row above the click).
         {
             ClassicApplication app(data, output / "new", references / "START.HOK");
             const auto before = app.session().game().checkpoint_bytes();
@@ -160,11 +170,11 @@ int main(int argc, char** argv) {
             check(differences(app.canvas(), goldens / "newmanager-start.rgb") == 0, "start menu with the running manager");
             app.click(90, 110, false);  // name column of an empty row: nothing
             app.click(25, 110, false);  // face column, row 1
-            app.motion(319, 239);       // in this capture the native pointer stood in the bottom right corner
+            app.motion(319, 239);       // in this reference image the pointer stood in the bottom right corner
             app.draw();
             check(differences(app.canvas(), goldens / "newmanager-faces-start.rgb") == 0, "face board");
             app.click(210, 140, false);  // face 6
-            app.text_input("START");     // the native session had these keys still buffered
+            app.text_input("START");     // the reference session had these keys still buffered
             app.key(SDLK_RETURN);
             app.motion(210, 139);
             app.draw();

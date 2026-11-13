@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// em_addmanager: Manager -> Neuer on a recorded state (game/world_generator.hpp add_manager_to_game), for comparing
-// with the original (em_realcode_boot STATEOUT after the addition).
+// em_addmanager: runs the "Manager -> Neuer" action (add_manager_to_game in
+// game/world_generator.hpp) on a given save state and writes the result as a .HOK, so the
+// addition of a manager to a running game can be inspected outside the UI.
 //   em_addmanager <EM folder> <header.HOK> <state.bin> <borland state> <name> <face> <team> <out.HOK>
-// The HOK file only lends its header; the state comes from the raw state file. EM_WORLD_DRAWS=<file> logs the draws.
+// The HOK file only lends its header; the state comes from the raw state file (as written by
+// "em_dump hok <file> <out.bin>"). <borland state> is the initial 32-bit state of the Borland
+// random generator (decimal or 0x hex). EM_WORLD_DRAWS=<file> logs the (lo, hi) argument of
+// every Borland draw, one "B lo hi" line each. Prints the final generator state and draw count.
 #include <cstdio>
 #include <cstdlib>
 #include <exception>

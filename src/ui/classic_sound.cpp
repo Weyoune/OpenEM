@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Sound mixer and SDL audio output of the classic frontend (see classic_sound.hpp).
 #include "ui/classic_sound.hpp"
 
 #include "ui/classic_match_view.hpp"
@@ -30,15 +31,18 @@ void ClassicSoundMixer::start_scene(std::vector<uint8_t> frame_sounds) {
     scene_ = !voices_.empty();
     scene_time_ = 0.0;
     scene_frame_ = -1;
-    play_voice(scene_ ? 0 : -1);  // ovr038:4C25: the loop starts with the scene
+    play_voice(scene_ ? 0 : -1);  // the crowd loop starts with the scene
 }
 
 void ClassicSoundMixer::stop_scene() {
     scene_ = false;
     scene_sounds_.clear();
-    play_voice(-1);  // ovr038:4FB2
+    play_voice(-1);  // the end of the scene stops the voice
 }
 
+// Mixes frames mono samples at rate Hz into out: the scene timer advances one BIOS tick per scene frame and
+// switches voices as the frame bytes demand; the voice is resampled linearly (8-bit unsigned PCM, gain 0.8),
+// the music added with gain 0.7, and the sum clamped to -1..1.
 void ClassicSoundMixer::render(float* out, size_t frames, int rate) {
     for (size_t n = 0; n < frames; n++) {
         if (scene_) {
@@ -48,7 +52,7 @@ void ClassicSoundMixer::render(float* out, size_t frames, int rate) {
                 if (size_t(frame) >= scene_sounds_.size()) {
                     stop_scene();
                 } else if (const int s = scene_sounds_[size_t(frame)]; s >= 1 && s <= 4) {
-                    play_voice(s);  // ovr038:4EC2..4EF1: stop, then KB237+s
+                    play_voice(s);  // stop the current voice, then KB237+s
                 }
             }
             scene_time_ += 1.0 / rate;
@@ -85,6 +89,7 @@ void ClassicSoundMixer::render(float* out, size_t frames, int rate) {
     for (size_t n = 0; n < frames; n++) out[n] = std::clamp(out[n], -1.0f, 1.0f);
 }
 
+// Compares the score boards pairwise; boards whose team names changed are skipped.
 std::vector<bool> classic_board_goals(const ClassicMatchFrame& before, const ClassicMatchFrame& after) {
     std::vector<bool> goals;
     if (before.boards.size() != after.boards.size()) return goals;
@@ -103,6 +108,7 @@ std::vector<bool> classic_board_goals(const ClassicMatchFrame& before, const Cla
 ClassicSound* ClassicSound::instance_ = nullptr;
 
 namespace {
+// Runs a loader and turns any exception into an empty result (missing or broken sound files mean silence).
 template <class F>
 auto load(F&& f) -> decltype(f()) {
     try {
@@ -113,6 +119,8 @@ auto load(F&& f) -> decltype(f()) {
 }
 }  // namespace
 
+// Loads KB\237..241 (all five or none) and the title music from the game folder, then opens a mono 16-bit
+// SDL audio device (44100 Hz requested, the device may choose another rate).
 ClassicSound::ClassicSound(const fs::path& em_dir) : em_dir_(em_dir) {
     std::vector<VocSound> voices;
     for (int n = kSoundFirstVoc; n < kSoundFirstVoc + 5; n++) {
@@ -146,6 +154,7 @@ ClassicSound::~ClassicSound() {
     if (device_ && SDL_WasInit(SDL_INIT_AUDIO)) SDL_CloseAudioDevice(device_);
 }
 
+// SDL audio callback: renders the mixer into 16-bit samples.
 void ClassicSound::callback(void* user, uint8_t* stream, int len) {
     auto& self = *static_cast<ClassicSound*>(user);
     const size_t frames = size_t(len) / sizeof(int16_t);
@@ -162,6 +171,7 @@ void ClassicSound::play_title_music() {
     SDL_UnlockAudioDevice(device_);
 }
 
+// Stops the title music once; later calls do nothing.
 void ClassicSound::stop_title_music() {
     if (!device_ || title_done_) return;
     title_done_ = true;
@@ -191,7 +201,7 @@ void ClassicSound::stop_scene() {
 void classic_sound_match_frame(const ClassicMatchFrame& before, const ClassicMatchFrame& after) {
     ClassicSound* sound = ClassicSound::instance();
     if (!sound) return;
-    // ovr038:4C25 starts the crowd with the first frame of a scene; ovr038:4FB2 stops the voice at its end mark
+    // the crowd starts with the first frame of a scene; the voice stops at the scene's end mark
     if (after.scene && after.scene->frame == 1 && !after.scene->final) sound->play_scene(after.scene->script);
     else if (before.scene && !before.scene->final && (!after.scene || after.scene->final)) sound->stop_scene();
 }

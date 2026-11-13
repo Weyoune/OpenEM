@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Annual review of the players at the season change (game/annual_players.cpp): career end and disability of
+// a manager's own players (with the insurance payout), the lookup of a player in the managers' squad rows,
+// the global skill pass with its clamps, and an end-to-end season change of a manager's squad (youth
+// players, contract year wrap, departures before contract talks) that must continue identically after a
+// checkpoint reload.
+//
+// Usage: annual_players_tests REFERENCES DATA
+//   REFERENCES folder with START.HOK, SAISEND.HOK (end of a season) and NEUSAIS.HOK (the following season)
+//   DATA       folder with the user's EM.EXE
+//
+// Layout used below: squad rows of the managers start at state 0x696D (52 bytes per row, 0x618 bytes per
+// manager block); row +11 contract years, +13 disability flag, +15 global player id, +0x18 career flags,
+// +0x30 insurance premium (u32). Global player records start at 0x4FA5 (33 bytes per id): +0x14 age,
+// +0x15/+0x16 skills, +0x19 years at the club, +0x1A status.
 #include "game/annual_players.hpp"
 #include "game/game.hpp"
 #include <algorithm>
@@ -8,11 +22,15 @@
 #include <stdexcept>
 using namespace em;
 namespace {
+// Throws with message `text` when `value` is false.
 void require(bool value,const char* text){if(!value)throw std::runtime_error(text);}
+// Writes `value` little-endian as 4 bytes at `at`.
 void put32(Bytes& bytes,size_t at,uint32_t value){for(size_t n=0;n<4;++n)bytes.at(at+n)=uint8_t(value>>(8*n));}
+// One case of the career-end decision: player age, value returned by the threshold draw rand(37,42), contract
+// years and career flags of the row, and whether the original ends the career in that case.
 struct Gate{int age,threshold,years,flags;bool retires;};
-// The seven gates are executed from original branch opcodes in
-// annual_retirement/verify.cjs, independently of this implementation.
+// The seven cases cover every branch of the original's career-end decision; the expected outcomes were
+// derived from the original game's behaviour, independently of this implementation.
 constexpr Gate gates[]={{19,42,0,128,true},{60,37,0,128,true},{19,37,1,128,false},
     {60,37,1,128,false},{60,37,0,0,false},{19,42,0,0,false},{255,37,255,128,false}};
 }
@@ -46,7 +64,8 @@ int main(int argc,char** argv){try{
         require(result.slot==0&&result.insurance_payment==(disability?std::bit_cast<int32_t>(uint32_t(premium*60u)):0),"insurance low32 or no career payment");
         require(cursor==transcript.size()&&h.state==expected,"full raw state: shift through scratch, club/name/form retained, only documented globals regenerated");
     }
-    { // Native15C6 uses occupied-count prefixes and skips inactive humans.
+    { // The original's squad lookup only scans the occupied-count prefix of each manager block and skips
+      // inactive managers.
         auto h=decode_hok(start);const uint8_t id=h.state.at(0x696d+15);
         h.state.at(0x696d+15)=0;h.state.at(0x696d+5*0x618+15)=id;
         const auto before=h.state;int calls=0;
@@ -57,8 +76,8 @@ int main(int argc,char** argv){try{
         require(!native_find_roster_player(h,id),"raw hole retains native occupied-prefix lookup quirk");
     }
     { // Replay saved original skill deltas using compatible controlled returns.
-        // No pre-pass native seed was captured: this proves byte effects and
-        // bounds/order, rather than claiming a full native season RNG replay.
+        // The original's random seed before the pass is unknown: this proves byte effects and bounds/order,
+        // rather than claiming a replay of the original's random sequence for the whole season.
         const auto before=decode_hok(read_file(refs/"SAISEND.HOK"));
         const auto after=decode_hok(read_file(refs/"NEUSAIS.HOK"));
         auto state=before.state,expected=before.state;std::vector<int> draws;
@@ -103,7 +122,7 @@ int main(int argc,char** argv){try{
             require(game.seasons_completed()==1,"annual manager review reaches September");
             const auto saved=decode_hok(game.save_bytes());
             // 6 = free player; 4 = the same player listed again by the daily transfer-list refresh on the same day
-            // (ovl11_34ef; seed 3 after the RNG fixes of 05.11.2026, see docs/DEVIATIONS.md).
+            // (this happens with seed 3).
             require(saved.state.at(0x4fa5+size_t(leaves)*33+0x1a)==6||saved.state.at(0x4fa5+size_t(leaves)*33+0x1a)==4,"years1 plus career flag leaves before contract talk");
             require(saved.players.at(size_t(leaves-1)).team==game.human_team(),"career departure preserves old global club");
             const auto wrap_row=native_find_roster_player(saved,wraps);

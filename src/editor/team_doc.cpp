@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Team editor document (see team_doc.hpp): reads KB\23.vga, validates edits and writes the changed fields back.
 #include "editor/team_doc.hpp"
 
 #include <algorithm>
@@ -10,6 +11,8 @@ namespace fs = std::filesystem;
 namespace em::editor {
 
 namespace {
+// KB\23.vga: the club records start at 0x4AD, 0x20B bytes each; the player records start at +0x17 inside a club
+// record, 20 bytes each.
 constexpr size_t kClubsBase = 0x4AD, kClubRecord = 0x20B, kFirstPlayer = 0x17, kPlayerRecord = 20;
 // The foreigner byte of a player is the byte right behind its name (the flag of the next record).
 size_t foreign_offset(int t, int p) {
@@ -54,6 +57,8 @@ bool TeamDoc::load() {
 
 void TeamDoc::revert() { load(); }
 
+// Re-encodes names and team tables into a copy of the loaded file, patches the foreigner bytes, keeps a .bak of
+// the first original and reloads the names from what was written.
 bool TeamDoc::save() {
     try {
         Database db = db_;
@@ -180,6 +185,7 @@ void TeamDoc::swap_teams(int a, int b) {
     touch();
 }
 
+// Counts club and player names of the editable teams 0..63 together; empty names are ignored. Sorted.
 std::vector<std::string> TeamDoc::duplicate_names() const {
     std::map<std::string, int> count;
     for (int t = 0; t < kTeams; t++) {

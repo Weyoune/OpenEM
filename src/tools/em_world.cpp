@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// em_world: writes the new-game world of game/world_generator.hpp as a HOK file, for comparing it with the
-// original's first save (AUTOSAVE.HOK after "Los jetzt!").
+// em_world: generates a new-game world with game/world_generator.hpp for one manager and
+// writes it as a HOK file; it corresponds to the first save the game writes (AUTOSAVE.HOK
+// after "Los jetzt!").
 //   em_world <EM folder> <out.HOK> <seed start> <seed menu> <seed after> <name> <face> <team> [level end squad mode]
+// The three seeds are the 16-bit random seeds of WorldSeeds (decimal or 0x hex); the optional
+// trailing numbers set WorldSettings::level, end_choice, squad_size and start_mode.
+// Environment: EM_WORLD_INTRO="7,27,27,..." supplies the intro's draw bounds (WorldSeeds),
+// EM_WORLD_DRAWS=<file> logs the (lo, hi) arguments of both random streams ("B" = Borland
+// generator, "G" = game generator), one line per draw. The generator log is printed at the end.
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -41,7 +47,7 @@ int main(int argc, char** argv) {
                 if (*p == ',') p++;
             }
         std::vector<std::pair<long, long>> blog, glog;
-        const char* draws = std::getenv("EM_WORLD_DRAWS");  // the argument sequences of both streams (compare with DRAWLOG)
+        const char* draws = std::getenv("EM_WORLD_DRAWS");  // the argument sequences of both streams
         if (draws) { g_borland_log = &blog; g_game_log = &glog; }
         const WorldResult world = generate_world(exe, db, settings, seeds);
         if (draws) {

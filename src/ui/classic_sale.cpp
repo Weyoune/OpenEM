@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Purchase offer of another club for one of the manager's players ("ANGEBOT von ..."): opening the offer box,
+// drawing it and the two answers "Behalten" / "Verkaufen". The quote and the sale itself are computed by Game
+// (src/game/sale_quote.cpp).
 #include "ui/classic_app.hpp"
 
 namespace em::ui {
+// Asks Game for an offer on squad slot slot of squad block; native_si is passed through unchanged to
+// Game::begin_sale_offer. Opens the box only if Game produced a quote.
 void ClassicApplication::open_sale_offer(int block,int slot,int16_t native_si){
     try{
         SaleQuote quote;bool opened=false;
@@ -9,6 +14,7 @@ void ClassicApplication::open_sale_offer(int block,int slot,int16_t native_si){
         if(opened){sale_quote_=quote;invalidate();}
     }catch(const std::exception& e){notice(e.what());}
 }
+// Answers the open offer (sell = "Verkaufen") and closes the box.
 void ClassicApplication::finish_sale_offer(bool sell){
     const auto quote=*sale_quote_;
     try{
@@ -19,6 +25,8 @@ void ClassicApplication::finish_sale_offer(bool sell){
         sale_quote_.reset();invalidate();
     }catch(const std::exception& e){notice(e.what());}
 }
+// Paints the offer box: player name, bidding club, the offered sum and the transfer fee ("ABLÖSESUMME",
+// shown only for block 4, otherwise "keine"), and the two buttons.
 void ClassicApplication::draw_sale_offer(){
     const auto& q=*sale_quote_;const auto& h=snapshot();
     const auto native_name=[&](size_t at,size_t length){

@@ -3,7 +3,7 @@
 # Coordinates: main-menu tiles at (43 + 77*col, 108 + 60*row), sub-menu items at (26 + 53*item, 220),
 # Gemischtes = tile 6 (197,168), Laden = item 0, Speichern = item 1; the file name field at (150,199).
 
-# --- New game: the header of the start menu opens Laden (ovr027:0E87), a right click goes back; then face and
+# --- New game: the header of the start menu opens Laden, a right click goes back; then face and
 # name in row 0, a club, "Los jetzt!" -----------------------------------------------------------------------------
 expect screen=NewManager
 click 160 10
@@ -17,7 +17,7 @@ key return
 click 150 60
 click 210 60
 click 280 213
-# the DEB cup question "An Alle:" (ovl05_4653) before the draw of the new game: "Kein Gedanke"
+# the DEB cup question "An Alle:" before the draw of the new game: "Kein Gedanke"
 click 190 172
 expect screen=Main
 expect date=09.09.1993
@@ -48,7 +48,7 @@ expect date>=15.12.1993
 echo OEM geladen
 
 # --- on to the play-offs, then save and load as native .HOK -------------------------------------------------
-# since the transfer-list counter of the original (ovr035:3683, Koeln period 94) the passive club reaches no menu between
+# since the transfer-list counter of the original the passive club reaches no menu between
 # March and the next season: the step ends on 09.09.1994 and the reviews below are those of 1995 and 1996
 play until date>=01.03.1994
 main
@@ -94,7 +94,7 @@ tour
 
 # --- second season: the contracts of the first season run out at its end -------------------------------------
 # The original shows the review first, then the squad list with "Vertragsverhandlung" for each of these players
-# (ovr026 -> ovl11_41db). The first gets two years with insurance (the demand is taken without a roll), the next
+# The first gets two years with insurance (the demand is taken without a roll), the next
 # is let go ("Abbruch": two notices), the others take the one-year proposal ("Mach' ich!").
 play until modal=review-overview
 render review2-overview.bmp

@@ -1,11 +1,11 @@
 # OpenEM Editor (`em_editor`)
 
-Bearbeitet die Bilddateien des Originalspiels. Stand 10.11.2026, nur Windows (Win32 mit Standard-Steuerelementen). Die Dokumentlogik (`src/editor/pixel_editor.*`, `palette_doc.*`) hat keine Oberflächenabhängigkeit und läuft im Test (`ctest -R editor_original`).
+Bearbeitet die Daten des Originalspiels. Nur Windows (Win32 mit Standard-Steuerelementen). Die Dokumentlogik (`src/editor/pixel_editor.*`, `palette_doc.*`, `team_doc.*`, `map_doc.*`) hat keine Oberflächenabhängigkeit und läuft im Test (`ctest -R editor_original`).
 
 ```
 em_editor [--data <EM-Ordner>] [--file <KB-Nr.>] [--tab 0|1|2] [--shot out.bmp]
 ```
-Ohne `--data` sucht der Editor wie `openem` (`OPENEM_DATA`, `work/EM`, Programmordner, aktueller Ordner) und fragt sonst nach dem Ordner. Vor dem ersten Überschreiben legt er neben jede Datei eine `.bak` (nie überschrieben).
+Ohne `--data` sucht der Editor wie `openem` (`OPENEM_DATA`, Programmordner, aktueller Ordner) und fragt sonst nach dem Ordner. Vor dem ersten Überschreiben legt er neben jede Datei eine `.bak` (nie überschrieben).
 
 | Registerkarte | Inhalt |
 |---|---|
@@ -21,4 +21,4 @@ Bilder lassen sich als PNG (8 Bit mit der aktuellen Palette) oder BMP exportiere
 
 Ein Release-Ordner mit Spiel und Editor entsteht mit `cmake --install build --config Release --prefix <Ordner>`.
 
-Noch offen: Importe über mehrere Bilder gleichzeitig, eine Anzeige der Palettennähe (Abweichung je Pixel). Bedeutung der drei Stärkewerte und des Platzes ist nicht abschließend geklärt (siehe `docs/formats/HOK_TORE.md`); die Ausländer-Markierung ist das Byte hinter dem Spielernamen.
+Noch offen: Importe über mehrere Bilder gleichzeitig, eine Anzeige der Palettennähe (Abweichung je Pixel). Bedeutung der drei Stärkewerte und des Platzes ist nicht abschließend geklärt; die Ausländer-Markierung ist das Byte hinter dem Spielernamen.

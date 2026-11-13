@@ -10,9 +10,18 @@
 #include "ui/classic_youth.hpp"
 #include "ui/classic_match_view.hpp"
 
+// ClassicApplication: the classic (original-look, 320x240) user interface. It owns the Session
+// (the running game), the canvas the screens are drawn into, and all UI state: which screen is
+// open, modal notices and questions, the live match display, file dialogs and the per-screen
+// selections. The frontend (classic_main.cpp, or a scripted headless run) feeds it input events
+// and ticks and presents the canvas. The implementation is split over many classic_*.cpp files,
+// one per screen or feature; classic_app.cpp holds the core (construction, event dispatch, main
+// menu, day advance, notices, autosave).
+
 namespace em::ui {
+// The full-screen pages of the classic UI.
 enum class ClassicScreen { Main, Files, Table, Totals, Bank, Contracts, Training, Transfer, Lineup, Tactics, Strengths, Cup, EuroCup, WorldChampionship, LeagueFixtures, LeagueCompetition, Advertising, Stadium, Youth, Settings, Statistics, Highscore, NewManager,
-                           WmSquad, Friendlies };  // national coach: WM squad ovl07_29ac, friendlies ovl07_1f27
+                           WmSquad, Friendlies };  // national coach only: WM squad nomination and friendlies
 
 // Milliseconds of the UI clock: SDL_GetTicks64, or the clock of a scripted headless run (classic_script.hpp).
 uint64_t classic_ticks();
@@ -32,21 +41,24 @@ struct ClassicCareerState;  // classic_career.cpp
 struct ClassicWmModeState;  // classic_wm_mode.cpp
 class ClassicApplication {
 public:
-    // the seeds of a new game (all three srand values) and the intro's draws before them (comparisons with a recorded start)
+    // The seed of a new game (used for all three random seeds) and the intro's draws before
+    // them, so a new game can be started reproducibly (tests and scripted runs).
     void set_new_game_seed(uint32_t seed, std::vector<int> intro_draws = {}) { new_game_seed_ = seed; new_game_intro_ = std::move(intro_draws); }
+    // `data`: the folder with EM.EXE and KB; `saves`: the save folder; `initial`: a save to
+    // load at start, or empty for the start menu of a new game.
     ClassicApplication(std::filesystem::path data, std::filesystem::path saves, const std::filesystem::path& initial);
-    void draw();
-    void tick();
-    void click(int x, int y, bool right);
-    void click_both(int x, int y);  // both mouse buttons (button state 3 of the original), or the middle button
-    void release();
-    void motion(int x,int y);
-    void key(int key);
-    void text_input(std::string_view text);
-    void request_exit();
+    void draw();                         // renders the current screen into the canvas
+    void tick();                         // timers: timed notices, day advance, match replay
+    void click(int x, int y, bool right);  // mouse press at canvas coordinates (320x240)
+    void click_both(int x, int y);  // both mouse buttons pressed together, or the middle button
+    void release();                      // mouse button released (held arrows, drag ends)
+    void motion(int x,int y);            // mouse moved (hover effects)
+    void key(int key);                   // SDL key code
+    void text_input(std::string_view text);  // typed text (UTF-8) for name/number fields
+    void request_exit();                 // window closed: asks the quit question
     bool finished() const { return finished_; }
-    // Title screen (ovr034:0799..07E5): KB197 with its palette until the first key or click (sub_1E26E, sub_19B08),
-    // then the program goes on to the start menu or the loaded game. Only the interactive start shows it.
+    // Title screen: KB image 197 with its palette until the first key or click, then the
+    // program goes on to the start menu or the loaded game. Only the interactive start shows it.
     void show_title() { title_ = true; }
     bool title() const { return title_; }
     const ClassicCanvas& canvas() const { return canvas_; }
@@ -54,12 +66,12 @@ public:
     ClassicScreen screen() const { return screen_; }
     bool advancing() const { return advancing_; }            // the crest's day run is in progress
     bool replaying() const { return !match_frames_.empty(); } // the match display is being shown
-    void render_screen(std::string_view name);
-    Bytes native_ui_bytes(); // read-only diagnostic of the native modal working image
+    void render_screen(std::string_view name);  // draws a named screen directly (tests, scripts)
+    Bytes native_ui_bytes(); // read-only diagnostic: the save state the modal screens work on
     ClassicUiProbe probe() const;
 
     // The frontend's frame (events, tick, draw, present). With it the match display runs live inside the minute observer
-    // while Session::advance_day plays the day, so clicks on the boards reach the next minute (ovl06_2522 / ovl06_3856).
+    // while Session::advance_day plays the day, so clicks on the boards reach the next minute, as in the original.
     void set_pump(std::function<void()> pump) { pump_ = std::move(pump); }
 
 private:
@@ -82,7 +94,7 @@ private:
     void finish_timed_native_notice();
     std::string virtual_file_path(const std::filesystem::path& path) const;
     void draw_main();
-    void draw_main_header(const SeasonReview* review);  // ovl10_0cd1; review: the 0xFE variant of the season review
+    void draw_main_header(const SeasonReview* review);  // the main menu's header; review: its variant during the season review
     void draw_files();
     void draw_table();
     void draw_totals();
@@ -148,11 +160,11 @@ private:
     void draw_career();
     std::string career_modal() const;  // "messages", "review-overview", "review" or ""
     std::shared_ptr<ClassicCareerState> career_;
-    // National coach / WM-only mode (classic_wm_mode.cpp, docs/logic/WM.md "WM-Modus")
-    bool national_view() const;                         // byte_2F6DE = 5: the active manager is the national coach
-    bool wm_menu_disabled(int menu,int item) const;     // night-sky item (DS:5159 tables, ovr034:1E6D)
+    // National coach / WM-only mode (classic_wm_mode.cpp, game/wm_mode.hpp)
+    bool national_view() const;                         // the active manager is the national coach
+    bool wm_menu_disabled(int menu,int item) const;     // menu item drawn as disabled (night sky) for the national coach
     bool wm_menu_route(int item);                        // a main-menu item click: disabled or national page
-    bool wm_flag_blocked();                              // ovr034:2372: fewer than 10 nominees
+    bool wm_flag_blocked();                              // the day may not advance: fewer than 10 nominees
     void draw_wm_squad();
     void click_wm_squad(int x,int y,bool right);
     void draw_friendlies();
@@ -167,13 +179,20 @@ private:
     int squad_manager() const;
     std::string manager_name(int manager);
     bool hand_over_menu();
-    // A question to one manager at the same seat (FUN_00146858 with his index: his name as the title, -1 = "An Alle:"),
-    // here the owner's answer to a bid of another manager (classic_hotseat.cpp).
-    struct ManagerQuestion { int manager=-1; std::string line1,line2,yes,no; bool unfair=false; PurchaseDraft offer;
-                             std::string line3; bool cup_draw=false; int cup_clubs=32; };  // cup_draw: the DEB cup draw board (ovl05_4653)
+    // A question to one manager at the same seat (his name as the title; -1 = "An Alle:"), e.g.
+    // the owner's answer to a bid of another manager (classic_hotseat.cpp).
+    struct ManagerQuestion {
+        int manager=-1;               // addressed manager, -1 = all
+        std::string line1,line2,yes,no;  // question lines and the two button labels
+        bool unfair=false;            // the bid was rejected as "unfair"; any answer refuses it
+        PurchaseDraft offer;          // the bid being answered
+        std::string line3;
+        bool cup_draw=false;          // the DEB cup draw question ("live draw?")
+        int cup_clubs=32;             // number of clubs in that draw
+    };
     void ask_cup_draw();
     // The live DEB cup draw (classic_cup_draw.cpp): the answer of the cup question, a new game waiting for it, and the
-    // uncovering of the places (ovl05_492e) with "TASTE DR]CKEN" and the cup page (ovl05_4b97).
+    // uncovering of the places with "TASTE DR]CKEN", followed by the cup page.
     struct CupLiveDraw;
     std::shared_ptr<CupLiveDraw> cup_live_;
     std::optional<bool> cup_answer_;
@@ -189,8 +208,8 @@ private:
     void click_cup_live(int x,int y,bool right);
     bool cup_live_waiting() const;
     bool cup_live_page() const;
-    // End of the game at the end year (Game::game_over): 1 = the highscore page (ovl16_30ed), 2 = "Das wars..."
-    // (ovl14_00ad) until a press, then the program ends (classic_misc_input.cpp).
+    // End of the game at the end year (Game::game_over): 1 = the highscore page, 2 = "Das wars..."
+    // until a press, then the program ends (classic_misc_input.cpp). 0 = game still running.
     int game_end_ = 0;
     void begin_game_end();
     void draw_game_end();
@@ -216,7 +235,7 @@ private:
     void cancel_purchase(bool feedback=true);
     void finish_numeric(bool cancel);
     void click_contract_editor(int x,int y,bool right);
-    // Contract talks of the season change (ovr026 -> ovl11_41db, classic_contracts.cpp): the squad list of the staged
+    // Contract talks of the season change (classic_contracts.cpp): the squad list of the staged
     // day with the dialog "Vertragsverhandlung" for each player whose contract ran out.
     void open_season_talk();
     void answer_season_talk(bool sign);
@@ -238,7 +257,7 @@ private:
     void open_statistics(int item);
     void draw_statistics();
     void click_statistics(int x,int y,bool right);
-    void open_stats_player(int x,int y);  // Statistiken -> Spieler: press on a listed player (ovr025:0CDA)
+    void open_stats_player(int x,int y);  // Statistiken -> Spieler: press on a listed player
     bool render_statistics(std::string_view name);
     void open_tactics();
     void open_lineup();
@@ -279,7 +298,7 @@ private:
     int advanced_days_=0;
     int strengths_league_=0,strengths_mode_=0;
     int euro_page_=3;
-    int euro_table_page_=3,euro_fixture_page_=3; // DS:5123 / DS:5126
+    int euro_table_page_=3,euro_fixture_page_=3; // last EuroCup table / fixture page, remembered like the original
     bool euro_from_fixtures_=false;
     struct StatsHold{bool latched;int x,y;uint64_t next;};  // held Frueher/Verein arrow, classic_stats_app.cpp
     static constexpr uint64_t kStatsRepeatMs=40;
@@ -298,12 +317,12 @@ private:
     ClassicStadiumSelection stadium_selection_;
     std::optional<StadiumBuildDraft> stadium_build_;
     int stadium_next_value_width_=2;
-    bool settings_rink_hint_shown_=false; //native byte DS:3014: the Torszenen mode 2 hint appears once per program run
+    bool settings_rink_hint_shown_=false; // the Torszenen mode 2 hint appears once per program run, as in the original
     std::string notice_;
     std::vector<std::string> pending_notices_;
     bool save_mode_=false, filename_focus_=false;
     std::optional<uint64_t> native_notice_until_;
-    std::optional<uint64_t> match_banner_until_; //native ovr030:081D "Ligaspiel" banner before the own league match
+    std::optional<uint64_t> match_banner_until_; // end time of the "Ligaspiel" banner before the own league match
     int match_banner_day_=-1;
     // Match display (classic_match_view): frames observed while Session::advance_day plays the day, replayed minute by minute
     std::vector<ClassicMatchFrame> match_frames_, pending_match_frames_;
@@ -312,15 +331,16 @@ private:
     bool replay_key_=false;  // 'r' / 'w' typed during a goal scene
     bool pending_human_match_=false, pending_league_day_=false;
     uint8_t pending_event_=0;  // calendar byte of the day being played (EuroCup / WM: no cup table)
-    std::unique_ptr<HokFile> match_before_; // state before the day: draw and series for the cup table (ovl07_0eba)
+    std::unique_ptr<HokFile> match_before_; // state before the day: draw and series for the cup table
     void prepare_match_view(bool human_match);
     void begin_match_view();
     bool tick_match_view();
-    // Live match display (docs/logic/SPIELANSICHT_LIVE.md)
+    // Live match display: the minutes of the day are shown while they are played, and clicks
+    // on the board (tactics, lineup, speed) take effect from the next minute.
     std::function<void()> pump_;
     bool live_day_=false;     // the observer shows the minutes while the day is played
     bool live_wait_=false;    // the display reached the end of the observed minutes
-    bool live_fast_=false;    // DS:878A: the quick switch bottom left (speed 70, no goal scenes)
+    bool live_fast_=false;    // the quick switch bottom left (speed 70, no goal scenes)
     bool live_skip_=false;    // right click: the rest of the day is played without display
     bool live_screen_=false;  // a screen opened during the minutes (Einstellungen, Aufstellung) takes the input until it is left
     bool live_idle_=false;    // space key: the next minute passes without play
@@ -333,9 +353,9 @@ private:
     int live_scene(const SceneCall& call,const GoalScene& drawn,int play);
     ClassicScreen live_screen_before_=ClassicScreen::Main;
     void rebase_live();
-    int post_tables_=0;       // leagues whose table follows the match day (switch Tabelle, ovl13_249d)
+    int post_tables_=0;       // leagues whose table follows the match day (setting "Tabelle")
     bool post_table_open_=false, news_after_tables_=false;
-    int live_scenes_=0;       // DS:878C: the goal scene setting of the day
+    int live_scenes_=0;       // the goal scene setting of the day
     size_t live_base_=0, live_out_=0;  // raw frame the processing starts at, output frames of it already shown
     std::vector<ClassicBoardOrder> live_orders_;  // clicks of this minute, applied before the next one
     int live_speed() const;
@@ -360,7 +380,7 @@ private:
         int slot=0,player=-1,years=1,offset=0,field=-1;
         long salary=0,premium=0;
         bool insured=false,original_insured=false,season=false,salary_edited=false;
-        long record_salary=0;  // season change: the salary ovl11_41db wrote into the record (the proposal, then each new demand)
+        long record_salary=0;  // season change: the salary the talks wrote into the record (the proposal, then each new demand)
         std::string digits;
     };
     std::optional<ContractEditor> contract_editor_;

@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Input handling of the Taktik page: the edited plan (TacticsPlan) is kept in the application and written to
+// the game when the page is left.
 #include "ui/classic_app.hpp"
 
 namespace em::ui {
+// True if (x, y) lies in the inclusive rectangle l..r, t..b.
 namespace { bool hit(int x,int y,int l,int t,int r,int b){return x>=l&&x<=r&&y>=t&&y<=b;} }
 
+// Loads the tactics of the squad manager into an editable plan and shows the page.
 void ClassicApplication::open_tactics(){
     tactics_plan_=load_tactics(snapshot(),squad_manager());tactics_view_.reset();screen_=ClassicScreen::Tactics;  // national coach: block 5
 }
+// Leaves the page to target: stores the plan in the game (during a live match the running match takes it
+// before the next minute) and opens the line-up page if that is the target.
 void ClassicApplication::finish_tactics(ClassicScreen target){
     if(tactics_plan_){
         const auto plan=*tactics_plan_;
@@ -17,6 +23,9 @@ void ClassicApplication::finish_tactics(ClassicScreen target){
     selected_line_=0;screen_=target;
     if(target==ClassicScreen::Lineup)open_lineup();
 }
+// Click on the Taktik page: right click or the top strip returns to the main menu, the bottom-right corner to
+// the line-up; otherwise a preset button, the arrows of the four mode controls (upper half -1, lower +1) or
+// the arrows of the minute quotas (4..11) and situation values (12..23) (upper half +1, lower -1).
 void ClassicApplication::click_tactics(int x,int y,bool right){
     if(right||y<14){finish_tactics(ClassicScreen::Main);return;}
     if(x>245&&y>224){finish_tactics(ClassicScreen::Lineup);return;}

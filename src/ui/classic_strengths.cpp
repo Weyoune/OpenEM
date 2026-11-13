@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Stärken page (see classic_strengths.hpp).
 #include "ui/classic_strengths.hpp"
 #include <algorithm>
 #include <string>
@@ -8,23 +9,26 @@
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
-constexpr std::array<std::string_view, 3> modes{"Gesamt", "Abwehr", "Sturm"};
+constexpr std::array<std::string_view, 3> modes{"Gesamt", "Abwehr", "Sturm"};  // mode button labels
 constexpr std::array<std::string_view, 5> leagues{
     "Bundesliga", "Zweite Liga", "Oberliga", "", "L{nderteams"};
 
+// First team index of league (national teams start at 52); validates league and mode.
 int first_team(int league, int mode) {
     if ((league != 0 && league != 1 && league != 2 && league != 4) || mode < 0 || mode > 2)
         throw FormatError("classic strengths: invalid league or mode");
     return league == 4 ? 52 : league * 12;
 }
 
+// Two-digit number.
 std::string number(int value) {
     auto text = std::to_string(value);
-    // Native199F:0164 uses a blank digit-width glyph, not an ordinary space.
+    // The game pads with a blank digit-width glyph, not an ordinary space.
     if (text.size() < 2) text.insert(0, 2 - text.size(), '%');
     return text;
 }
 
+// A mode button at the bottom; its four corner pixels keep the page underneath.
 void button(ClassicCanvas& c, int left, std::string_view label) {
     constexpr int y = 212;
     const std::array<uint8_t, 4> corners{
@@ -38,6 +42,7 @@ void button(ClassicCanvas& c, int left, std::string_view label) {
     c.text_native(mini, left, 219, label, 29, 1, left + 59);
 }
 
+// A small result face from KB33 (1 loss, 2 draw, 3 win; 0 draws nothing).
 void face(ClassicCanvas& c, int index, int x, int y) {
     if (index == 0) return;
     c.blit(33, x, y, index == 1 ? 19 : 25, index == 2 ? 41 : 36, 6, 5, true, 192);
@@ -72,6 +77,7 @@ std::array<ClassicStrengthsRow, 12> classic_strengths_rows(const HokFile& h, int
                 s.at(0x0DCD + manager * 0x1AF + 0x14) == row.team)
                 row.color = 24;
         int summary = 2;
+        // form letters of the last eight games in the league table row (+7): s/S win, n/N loss, u/U draw
         for (size_t game = 0; game < row.faces.size(); ++game) {
             switch (s.at(0x3BAC + size_t(row.team) * 80 + game)) {
             case 's': case 'S': row.faces[game] = 3; ++summary; break;
@@ -82,7 +88,7 @@ std::array<ClassicStrengthsRow, 12> classic_strengths_rows(const HokFile& h, int
         }
         row.summary_face = uint8_t(std::clamp(summary, 1, 3));
     }
-    // Native immediate exchange sort: later higher scores can reverse equal keys.
+    // The original's immediate exchange sort: later higher scores can reverse equal keys.
     for (size_t i = 0; i + 1 < rows.size(); ++i)
         for (size_t j = i + 1; j < rows.size(); ++j)
             if (scores[i] < scores[j]) {
@@ -97,7 +103,7 @@ void draw_classic_strengths(ClassicCanvas& c, const HokFile& h, int league, int 
     c.background(22);
     c.frame(30, 5, 10, 12);
     for (size_t i = 0; i < modes.size(); ++i) button(c, 43 + 80 * int(i), modes[i]);
-    // Native redraw erases the initial column-heading text as well.
+    // The original's redraw erases the initial column-heading text as well.
     c.rect(36, 9, 262, 211, 4);
     const std::string title = "ST[RKEN " + std::string(leagues[size_t(league)]) + " - " +
                               std::string(modes[size_t(mode)]);

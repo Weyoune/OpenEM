@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Season-change review of own players and the yearly skill change (see annual_players.hpp).
 #include "game/annual_players.hpp"
 #include <algorithm>
 #include <bit>
@@ -20,7 +21,7 @@ AnnualPlayerReview annual_owned_player(HokFile& h,uint8_t id,int manager,const C
         if(h.state.at(row+0x0b)!=0||!(h.state.at(row+0x18)&0x80))
             return {AnnualPlayerStatus::Stayed,location->slot,0};
     }
-    const int notice_back=draw(0,3); // immediate notification date (ovr026:09EB), including a full queue
+    const int notice_back=draw(0,3); // date of the immediate notification; drawn even when the message queue is full
     native_remove_player(h,manager,location->slot);
     const size_t global=0x4fa5+size_t(id)*0x21;
     h.state.at(global+0x1a)=6;
@@ -32,7 +33,7 @@ AnnualPlayerReview annual_owned_player(HokFile& h,uint8_t id,int manager,const C
     return {disabled?AnnualPlayerStatus::Disabled:AnnualPlayerStatus::Retired,location->slot,payment,notice_back};
 }
 void annual_global_skills(Bytes& state,const ContractRandomDraw& draw){
-    // 1238:142F..14A9: IDs 1..199 (block + id*0x21), two calls of 1238:1359 each.
+    // ids 1..199 (record at 0x4FA5 + id * 0x21), skill +0x15 then +0x16 of each player.
     if(state.size()<0x4fc6+199*0x21)throw FormatError("annual players: truncated globals");
     for(size_t id=1;id<200;++id)for(size_t skill:{size_t(0x15),size_t(0x16)}){
         auto& value=state.at(0x4fa5+id*0x21+skill);

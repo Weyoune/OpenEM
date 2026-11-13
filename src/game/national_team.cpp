@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// National squad management on the raw save state (squad block 5); see national_team.hpp.
 #include "game/national_team.hpp"
 #include "game/lineup.hpp"
 
@@ -7,15 +8,18 @@
 
 namespace em {
 namespace {
-constexpr size_t kPlayers = 0x4FC6, kPlayerSize = 33;
-constexpr size_t kSquad = 0x696D + 5 * 0x618, kRecord = 52;
-constexpr size_t kNation = 0x068C;
-constexpr int kPlaces = 29;
+constexpr size_t kPlayers = 0x4FC6, kPlayerSize = 33;            // player records (ID 1 first)
+constexpr size_t kSquad = 0x696D + 5 * 0x618, kRecord = 52;      // squad block 5 and record size
+constexpr size_t kNation = 0x068C;                               // coached nation (team index 52..63)
+constexpr int kPlaces = 29;                                      // usable squad slots
 
+// 1-based player ID of HokFile::players[player], derived from its record position in the state.
 int player_id(const HokFile& h, size_t player) {
     return int((h.players.at(player).raw - h.state.data() - kPlayers) / kPlayerSize) + 1;
 }
+// Position kind from the position value: 0 goalkeeper, below 60 defence, otherwise forward.
 int player_kind(const HokPlayer& p) { return p.position == 0 ? 0 : p.position < 60 ? 1 : 2; }
+// Stores a little-endian 32-bit value.
 void put32(Bytes& state, size_t at, long value) {
     for (int byte = 0; byte < 4; byte++) state.at(at + size_t(byte)) = uint8_t(uint32_t(value) >> (byte * 8));
 }
@@ -23,6 +27,7 @@ void put32(Bytes& state, size_t at, long value) {
 
 NationalTeamTables load_national_team_tables(const Bytes& exe) {
     NationalTeamTables t;
+    // Three bytes in the EM.EXE data segment (file offset 0x16DD0 + 0x4EDE).
     for (size_t kind = 0; kind < 3; kind++) t.places[kind] = exe.at(0x16DD0 + 0x4EDE + kind);
     if (t.places != std::array<int, 3>{3, 10, 16}) throw FormatError("EM.EXE: national squad table not found");
     return t;
@@ -69,7 +74,7 @@ bool call_up_national_player(HokFile& h, size_t player, const ContractTables& co
     traits |= rng.range(0, 1) << 7;
     r[0x14] = uint8_t(traits);
     r[0x0B] = 1;
-    r[0x0C] = 99;  // ovl09_2cd1's temporary transfer mode
+    r[0x0C] = 99;  // temporary marker set by the shared insertion code, overwritten below
     r[0x03] = uint8_t(p.league_goals);
     r[0x06] = uint8_t(p.league_games);
     r[0x10] = uint8_t(p.skill_a);
@@ -81,7 +86,8 @@ bool call_up_national_player(HokFile& h, size_t player, const ContractTables& co
     salary_player.team = p.team;
     const long salary = player_worth(contracts, salary_player, Worth::Salary, rng);
     put32(h.state, at + 0x28, salary * rng.range(90, 115) / 100);
-    // ovl07_30ef preserves the club for return; owning manager (+0x1A) is unchanged.
+    // Remember the club for the return (+0x0C = club + 128); the owning manager (+0x1A) is
+    // unchanged. Goals of the national record start at zero.
     r[0x0C] = uint8_t(p.team + 128);
     r[0x19] = 0x77;
     r[0x03] = r[0x04] = r[0x05] = 0;
@@ -123,7 +129,7 @@ void auto_national_squad(HokFile& h, const NationalTeamTables& tables,
         for (int place = 0; place < tables.places[size_t(kind)]; place++) {
             size_t best = h.players.size();
             int best_strength = 0;
-            // Strict improvement retains the earlier native record on a tie.
+            // Strict improvement keeps the earlier player record on a tie.
             for (size_t i = 0; i < h.players.size(); i++) {
                 const HokPlayer& p = h.players[i];
                 if (player_id(h, i) >= 180 || p.foreigner || player_kind(p) != kind || p.team == h.state.at(kNation)) continue;

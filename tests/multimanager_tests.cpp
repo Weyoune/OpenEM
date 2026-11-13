@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Careers with two and four human managers (hot seat, docs/MEHRSPIELER_PLAN.md): two complete seasons with their season
-// changes. The session reloads every day from an OpenEM checkpoint (v10); a second game runs the same career without
+// Careers with one, two and four human managers (hot seat): two complete seasons with their season
+// changes. The UI session reloads every day from an OpenEM checkpoint (v10); a second game runs the same career without
 // reloading, so every day of both must give the same checkpoint. Checked per manager: season review page, history row,
 // eternal balance, cup participation, contract talks in manager order, training plan and share holdings.
+// Argument: the game data folder; the test is skipped when it has no fresh start state (BACKUP.HOK).
 #include <cstdio>
 #include <iostream>
 #include <set>
@@ -18,29 +19,39 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
-int failures = 0;
+int failures = 0;  // number of failed check() calls; nonzero makes main() fail
+// Soft assertion: reports `what` and counts the failure, but keeps the career running.
 void check(bool ok, const std::string& what) {
     if (!ok) {
         std::cerr << "FAIL: " << what << "\n";
         failures++;
     }
 }
+// Hard assertion: aborts the whole test with `what`.
 void require(bool ok, const std::string& what) {
     if (!ok) throw std::runtime_error(what);
 }
 
-// The answer of every contract talk: deterministic from the player (some leave, some sign for one or two years).
+// The answer of every contract talk: deterministic from the player ID (0 years = the player leaves,
+// otherwise he signs for one or two years), so both careers receive identical answers.
 Game::ContractTerms policy(int player) {
     Game::ContractTerms t;
     t.years = player % 7 == 3 ? 0 : player % 4 == 1 ? 2 : 1;
     return t;
 }
 
-uint32_t games_played(const Bytes& state, int m) {  // eternal balance +0x13B: u16 home/away games at pair 4
+// Number of league games manager `m` has played in total. The manager block's eternal balance
+// starts at +0x13B with 4-byte entries of two u16 values (home, away); entry 4 holds the games.
+uint32_t games_played(const Bytes& state, int m) {
     const size_t at = manager_block(m) + 0x13B + 4 * 4;
     return le16(state, at) + le16(state, at + 2);
 }
 
+// Plays one career with a human manager for each club in `clubs` (team indices) from a new game
+// with random seed `seed`. Every manager first changes his training plan and buys shares to show
+// that per-manager fields land in their own blocks. Then the reloading session and a continuous
+// Game are advanced day by day through two season changes plus 40 days; contract talks are
+// answered with policy(). After each season change the per-manager season results are checked.
 void career(const fs::path& data, const std::vector<int>& clubs, uint32_t seed) {
     const std::string tag = std::to_string(clubs.size()) + " managers: ";
     Session s(data);
@@ -54,7 +65,9 @@ void career(const fs::path& data, const std::vector<int>& clubs, uint32_t seed) 
     for (const auto& line : s.game().log())
         check(line.find("simulates manager 0 only") == std::string::npos, tag + "no single-manager warning");
 
-    // per-manager fields of the menu (step 5): training plan 0x070C + 0x1C * m, holdings 0x30 + 0x20 * m
+    // per-manager fields of the menu: training plan at state 0x070C + 0x1C * m, share holdings at
+    // 0x30 + 0x20 * m (4 companies x 8 bytes: i32 cost basis, i32 quantity; company 1's quantity
+    // is at +8 + 4)
     if (n > 1) {
         const TrainingPlan plan0 = s.game().training_plan();
         require(s.select_manager(n - 1), tag + "select the last manager");
@@ -122,7 +135,11 @@ void career(const fs::path& data, const std::vector<int>& clubs, uint32_t seed) 
         std::cerr << tag << "season change " << seasons << ": " << talk_managers.size() << " talks, managers";
         for (int m : asked) std::cerr << " " << m;
         std::cerr << "\n";
-        const int year = std::min<int>(le16(st, 0xB951) - 1, 49);  // the row of the season just ended
+        // State 0xB951 (u16) counts the seasons; the history row of the season just ended is one
+        // less, capped at the last of the 50 rows. Manager block +0x18: 4-byte history rows (byte 0
+        // is the final place), +0x14 the club, +0xE6 the cup round (1 = first round after the
+        // season change; blocks without a manager hold 30).
+        const int year = std::min<int>(le16(st, 0xB951) - 1, 49);
         std::set<int> cup;
         for (const auto& p : g.save().cup_draw) { cup.insert(p.home); cup.insert(p.away); }
         for (int m = 0; m < n; m++) {

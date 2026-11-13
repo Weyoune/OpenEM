@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Native read-only DOSBox RAM + seed observations, not a mirrored algorithm.
+// Tests for the two-step transfer purchase (fee offer, then contract panel or cancel) and for
+// listing an own player on the transfer market. The expectations are complete save states and
+// random-generator values recorded with the original game (nativepurchase-*.hok), not a second
+// implementation of the algorithm: after each step every byte of the 47761-byte state must match.
+// Arguments: the game data folder (EM.EXE), the reference folder (unused here) and the folder
+// holding the reference saves.
 #include "game/game.hpp"
 #include "game/checkpoint.hpp"
 #include <cstdio>
@@ -7,14 +12,20 @@
 #include <stdexcept>
 using namespace em;
 namespace fs=std::filesystem;
+// Throws `message` as a test failure unless `ok`.
 static void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+// Decodes two encoded saves and requires identical states; on a mismatch the first 12 differing
+// offsets and the total count are printed before failing with `message`.
 static void same_state(const Bytes& actual,const Bytes& expected,const char* message){
     const auto a=decode_hok(actual),b=decode_hok(expected);
     if(a.state!=b.state){int count=0;for(size_t n=0;n<a.state.size();n++)if(a.state[n]!=b.state[n]){if(count<12)std::fprintf(stderr,"state%04zx:actual%u expected%u\n",n,a.state[n],b.state[n]);count++;}std::fprintf(stderr,"%s:%d differing bytes\n",message,count);throw std::runtime_error(message);}
 }
 int main(int argc,char** argv){
     try{
-        if(argc!=4)throw std::runtime_error("purchase_tests DATA REFERENCES NATIVE_CAPTURE_FOLDER");
+        if(argc!=4)throw std::runtime_error("purchase_tests DATA REFERENCES REFERENCE_SAVE_FOLDER");
+        // Scenario: from the reference position (seed 1617108858) offer a raw fee of 1,200,000 for the
+        // player Frosch at pool slot 3, cancel the contract panel ("Abbruch"), try again (now
+        // blocked) and finally list squad player 19 (Dobryzinski) on the transfer market.
         const fs::path data=argv[1],refs=argv[2],native=argv[3];
         const auto exe=read_file(data/"EM.EXE"),before=read_file(native/"nativepurchase-before.hok");
         Game game(exe,before,1617108858u);

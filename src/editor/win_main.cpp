@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // OpenEM Editor - Windows front end (Win32 with Common Controls 6: menu, toolbar, list view, status bar,
-// task and file dialogs). Document logic: pixel_editor.cpp.
+// task and file dialogs). Document logic: pixel_editor.cpp (pictures), palette_doc.cpp (palettes), team_doc.cpp
+// (teams of KB\23.vga) and map_doc.cpp (goal scene rink maps); this file only holds the windows, painting and
+// input handling of the five tabs (pictures, goal scene graphics, palettes, teams, hall maps).
 //
-//   em_editor [--data <EM folder>] [--file <KB number>] [--shot out.bmp]
-// --shot opens the window, saves a picture of it and exits (for checks).
+//   em_editor [--data <EM folder>] [--file <KB number>] [--tab <0..4>] [--shot out.bmp]
+//             [--export-png out.png | --import-png in.png]
+// --shot opens the window, saves a picture of it and exits (for checks). --export-png / --import-png together with
+// --file convert one picture without user interaction (an import is saved at once) and exit.
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -49,6 +53,8 @@ using em::editor::TeamDoc;
 
 namespace {
 
+// Menu/toolbar command ids (ID_*) and child control ids (IDC_*). The tool ids follow the order of
+// PixelEditor::Tool, so ID_TOOL_PENCIL + int(tool) is the id of a tool.
 enum Cmd : UINT {
     ID_FILE_SAVE = 101, ID_FILE_EXPORT, ID_FILE_EXIT, ID_FILE_IMPORT,
     ID_EDIT_UNDO = 110, ID_EDIT_REDO,
@@ -65,6 +71,7 @@ enum Cmd : UINT {
 const wchar_t kCrestClass[] = L"OpenEMEditorCrest", kMapClass[] = L"OpenEMEditorMap", kTilesClass[] = L"OpenEMEditorTiles";
 const wchar_t kMainClass[] = L"OpenEMEditorMain", kCanvasClass[] = L"OpenEMEditorCanvas", kPaletteClass[] = L"OpenEMEditorPalette", kPalGridClass[] = L"OpenEMEditorPalGrid";
 
+// UTF-8 -> UTF-16 for the Win32 API.
 std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
@@ -73,12 +80,15 @@ std::wstring widen(const std::string& s) {
     return w;
 }
 
-int floordiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+int floordiv(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }  // rounds towards minus infinity (b > 0)
 
+// Controls of the hall map tab: map view, tile picker, "mirrored" check box and its label.
 struct MapUi {
     HWND view = nullptr, tiles = nullptr, mirror = nullptr, lbl = nullptr;
 };
 
+// Controls of the team tab: club name, 25 player names with foreigner check boxes, crest/place/strength/jersey
+// fields with their up-down buttons, jersey preview, team swap, and the embedded crest editor with its buttons.
 struct TeamUi {
     HWND club = nullptr, name[25] = {}, foreign[25] = {}, crest = nullptr, crest_ud = nullptr, place = nullptr, place_ud = nullptr;
     HWND str[3] = {}, str_ud[3] = {}, jer[3] = {}, jer_lbl[3] = {}, preview = nullptr, swap_combo = nullptr, swap_btn = nullptr;
@@ -87,6 +97,7 @@ struct TeamUi {
     std::vector<HWND> all;  // every control of the page, for show/hide and fonts
 };
 
+// The whole state of the editor window: window handles, the four documents and the view state of every tab.
 struct App {
     HINSTANCE inst = nullptr;
     HWND main = nullptr, toolbar = nullptr, list = nullptr, status = nullptr, canvas = nullptr, palette = nullptr;
@@ -99,12 +110,13 @@ struct App {
     std::unique_ptr<PaletteDoc> pal;
     std::unique_ptr<MapDoc> map;
     MapUi mu;
+    // hall maps: selected tile, zoom, map and tile picker scroll positions, hovered cell
     int map_tile = 0, map_zoom = 1, mscroll_x = 0, mscroll_y = 0, tscroll_y = 0, map_hc = -1, map_hr = -1;
-    bool map_mirror = false;
-    std::wstring map_hover;
-    std::vector<uint32_t> map_bits;
-    unsigned map_bits_rev = ~0u;
-    int tab_index = 0;        // 0 Bilder, 1 Torszenen, 2 Paletten
+    bool map_mirror = false;          // paint mirrored tiles
+    std::wstring map_hover;           // status bar text for the hovered cell
+    std::vector<uint32_t> map_bits;   // the rink as 32-bit pixels
+    unsigned map_bits_rev = ~0u;      // MapDoc revision map_bits was built from
+    int tab_index = 0;        // 0 Bilder, 1 Torszenen, 2 Paletten, 3 Mannschaften, 4 Hallenkarten
     int pal_sel = 0;          // selected colour in the palette editor
     bool setting_sliders = false;
     int hover_cell = -1;
@@ -130,13 +142,14 @@ struct App {
     std::vector<uint32_t> bits;  // canvas picture as 32-bit pixels
     bool shot_mode = false;
 
-    int px(int v) const { return MulDiv(v, int(dpi), 96); }
+    int px(int v) const { return MulDiv(v, int(dpi), 96); }  // 96-dpi pixels -> device pixels
 };
 
-App* g_app = nullptr;
+App* g_app = nullptr;  // the single App, reached from the window procedures
 
 // ------------------------------------------------------------------------------------------- helpers
 
+// (Re)creates the UI font from the system message font at the current dpi.
 void make_font(App& a) {
     NONCLIENTMETRICSW m{sizeof m};
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof m, &m, 0, a.dpi);
@@ -144,6 +157,8 @@ void make_font(App& a) {
     a.font = CreateFontIndirectW(&m.lfMessageFont);
 }
 
+// Common file dialog: picks a folder (`folder`), a file to open, or a .bmp file to save (default name `name`).
+// Returns the chosen path, empty when cancelled.
 std::wstring dialog_path(const wchar_t* title, bool folder, bool save, const std::wstring& name, HWND owner) {
     std::wstring result;
     IFileDialog* d = nullptr;
@@ -212,6 +227,7 @@ std::wstring image_dialog(bool save, const std::wstring& name, HWND owner) {
     return result;
 }
 
+// Minimal owning COM pointer (Release on destruction).
 template <class T>
 struct ComPtr {
     T* p = nullptr;
@@ -220,6 +236,7 @@ struct ComPtr {
     T* operator->() const { return p; }
 };
 
+// Writes the picture as an 8-bit indexed PNG with the given palette (WIC). False on any failure.
 bool export_png(const fs::path& to, const em::Image& img, const em::Palette& pal) {
     ComPtr<IWICImagingFactory> f;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&f)))) return false;
@@ -242,7 +259,7 @@ bool export_png(const fs::path& to, const em::Image& img, const em::Palette& pal
     return true;
 }
 
-// Any picture format WIC knows -> 0xAARRGGBB pixels
+// Any picture format WIC knows -> 0xAARRGGBB pixels (first frame, at most 4096 x 4096)
 bool load_argb(const fs::path& from, std::vector<uint32_t>& out, int& w, int& h) {
     ComPtr<IWICImagingFactory> f;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&f)))) return false;
@@ -272,6 +289,8 @@ bool pal_tab(const App& a) { return a.tab_index == 2; }
 bool team_tab(const App& a) { return a.tab_index == 3; }
 bool map_tab(const App& a) { return a.tab_index == 4; }
 
+// Brings window title, toolbar, menu, status bar and palette selector in line with the document of the current
+// tab, and repaints what changed.
 void refresh(App& a) {
     PixelEditor& e = *a.ed;
     const bool tt = team_tab(a), mt = map_tab(a), pt = pal_tab(a) || tt || mt;  // pt: a page without the pixel tools
@@ -333,6 +352,8 @@ void show_map(App& a, bool on);
 void open_map(App& a, int number);
 void sync_map_controls(App& a);
 
+// Before leaving a document with unsaved changes: asks Save / Discard / Cancel. Returns true when the caller may
+// go on (saved successfully, discarded - the document is then reloaded - or nothing to save).
 bool confirm_discard(App& a) {
     const bool pt = pal_tab(a), tt = team_tab(a), mt = map_tab(a);
     if (tt && !crest_confirm(a)) return false;
@@ -363,6 +384,7 @@ bool confirm_discard(App& a) {
 
 int current_number(const App& a) { return pal_tab(a) ? a.pal->current() : a.ed->current(); }
 
+// Selects the list row of `number` (KB number or team index) without triggering the selection handler.
 void select_in_list(App& a, int number) {
     int idx = -1;
     for (size_t i = 0; i < a.list_numbers.size(); i++)
@@ -376,12 +398,15 @@ void select_in_list(App& a, int number) {
     a.selecting = false;
 }
 
+// List text of a team: 1-based number (European clubs counted from 1 again) and club name.
 std::wstring team_label(const App& a, int t) {
     return std::to_wstring(t < 64 ? t + 1 : t - 63) + L"  " + widen(a.team->club_name(t));
 }
 
+// List group of a team: the three leagues, further clubs, national teams, European clubs.
 int team_group(int t) { return t < 12 ? 0 : t < 24 ? 1 : t < 36 ? 2 : t < 48 ? 3 : t < 64 ? 4 : 5; }
 
+// Fills the list on the left for the current tab (pictures, sheets, palettes, teams or hall maps).
 void fill_list(App& a) {
     a.selecting = true;
     ListView_DeleteAllItems(a.list);
@@ -433,6 +458,7 @@ void fill_list(App& a) {
     a.selecting = false;
 }
 
+// Largest zoom (1..32) at which the whole picture fits the canvas; resets scrolling.
 void fit_zoom(App& a) {
     RECT r;
     GetClientRect(a.canvas, &r);
@@ -444,6 +470,8 @@ void fit_zoom(App& a) {
     update_scroll(a);
 }
 
+// Handles a click in the list: opens picture, palette, map or team `number` in the current tab, after asking about
+// unsaved changes; on cancel the list selection goes back to the open document.
 void open_image(App& a, int number) {
     if (map_tab(a)) {
         if (number == a.map->current()) return;
@@ -497,6 +525,7 @@ void set_zoom(App& a, int z) {
     refresh(a);
 }
 
+// Palette tab: shows the selected colour's channels on the sliders and labels (colour 255 is read-only).
 void sync_sliders(App& a) {
     const auto c = a.pal->get(a.pal_sel);
     const bool on = a.pal->current() >= 0 && a.pal_sel < PaletteDoc::kColors;
@@ -515,6 +544,7 @@ void sync_sliders(App& a) {
     a.setting_sliders = false;
 }
 
+// Shows the controls of the current tab and hides the others.
 void show_tab_controls(App& a) {
     const bool pt = pal_tab(a), tt = team_tab(a), mt = map_tab(a);
     ShowWindow(a.canvas, pt || tt || mt ? SW_HIDE : SW_SHOW);
@@ -530,6 +560,8 @@ void show_tab_controls(App& a) {
     }
 }
 
+// Positions all child windows: toolbar, tab strip, list on the left, work area in the middle, side panel on the
+// right, status bar.
 void layout(App& a) {
     RECT r;
     GetClientRect(a.main, &r);
@@ -566,6 +598,7 @@ void layout(App& a) {
     update_scroll(a);
 }
 
+// Switches to tab `index`, refills the list and opens a default document where the tab has none yet.
 void switch_tab(App& a, int index) {
     a.tab_index = index;
     a.hover_x = -1;
@@ -591,10 +624,13 @@ void switch_tab(App& a, int index) {
 
 // ---------------------------------------------------------------------------------------------- canvas
 
+// Canvas geometry of the picture tab: picture origin (ox, oy) in client pixels, zoomed picture size (iw, ih),
+// scrollable size including a margin (total_w, total_h) and client size (cw, ch).
 struct Geo {
     int ox, oy, iw, ih, total_w, total_h, cw, ch;
 };
 
+// The picture is centred while it fits, otherwise placed by the scroll position.
 Geo geometry(App& a) {
     RECT r;
     GetClientRect(a.canvas, &r);
@@ -612,6 +648,7 @@ Geo geometry(App& a) {
     return g;
 }
 
+// Clamps the scroll position and updates the canvas scroll bars.
 void update_scroll(App& a) {
     if (!a.canvas) return;
     if (a.ed->current() < 0) {
@@ -635,6 +672,8 @@ void update_scroll(App& a) {
     }
 }
 
+// Paints the zoomed picture (double-buffered), the pixel grid from zoom 6 up, the tile/sprite cell borders of
+// sheets and a frame; without a picture a hint text.
 void paint_canvas(App& a, HWND hwnd) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(hwnd, &ps);
@@ -708,6 +747,7 @@ void paint_canvas(App& a, HWND hwnd) {
     EndPaint(hwnd, &ps);
 }
 
+// Canvas client position -> picture pixel; true when it lies inside the open picture.
 bool to_image(App& a, int mx, int my, int& ix, int& iy) {
     Geo g = geometry(a);
     ix = floordiv(mx - g.ox, a.zoom);
@@ -716,6 +756,8 @@ bool to_image(App& a, int mx, int my, int& ix, int& iy) {
     return a.ed->current() >= 0 && ix >= 0 && iy >= 0 && ix < img.width && iy < img.height;
 }
 
+// Canvas window: left button draws with the current tool, right button picks a colour, wheel scrolls
+// (Shift: horizontally, Ctrl: zoom).
 LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     switch (msg) {
@@ -804,11 +846,12 @@ LRESULT CALLBACK canvas_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 // --------------------------------------------------------------------------------------------- palette
 
+// Colour chooser of the picture tab: 16 x 16 swatches of `cell` pixels starting at (x, y).
 struct PaletteGeo {
     int x, y, cell;
 };
 
-PaletteGeo palette_geo(App& a, HWND h) {
+PaletteGeo palette_geo(App& a, HWND h) {  // largest square grid that leaves room for the text below
     RECT r;
     GetClientRect(h, &r);
     const int m = a.px(10), text = a.px(52);
@@ -816,6 +859,7 @@ PaletteGeo palette_geo(App& a, HWND h) {
     return {m, m, size / 16};
 }
 
+// Paints the 256 swatches with the drawing colour framed, plus a sample and the index/RGB of that colour.
 void paint_palette(App& a, HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -864,6 +908,7 @@ void paint_palette(App& a, HWND h) {
     EndPaint(h, &ps);
 }
 
+// Colour chooser window: click selects the drawing colour, hovering shows index and RGB in the status bar.
 LRESULT CALLBACK palette_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     switch (msg) {
@@ -892,6 +937,7 @@ LRESULT CALLBACK palette_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ------------------------------------------------------------------------------------------- team editor
 
+// UTF-16 -> UTF-8 (n = -1: null-terminated input); trailing null characters are dropped.
 std::string narrow(const wchar_t* w, int n = -1) {
     const int len = WideCharToMultiByte(CP_UTF8, 0, w, n, nullptr, 0, nullptr, nullptr);
     std::string s(size_t(std::max(0, len)), '\0');
@@ -900,7 +946,7 @@ std::string narrow(const wchar_t* w, int n = -1) {
     return s;
 }
 
-std::wstring window_text(HWND h) {
+std::wstring window_text(HWND h) {  // text of a control
     const int n = GetWindowTextLengthW(h);
     std::wstring s(size_t(n) + 1, L'\0');
     GetWindowTextW(h, s.data(), n + 1);
@@ -908,11 +954,14 @@ std::wstring window_text(HWND h) {
     return s;
 }
 
-COLORREF jersey_color(int r, int g, int b) {  // same scaling as the DAC: six bits, widened to eight
+// Screen colour of a 4-bit-per-channel jersey colour: each channel times 4 gives a six-bit DAC value, which is
+// widened to eight bits the same way as the palettes.
+COLORREF jersey_color(int r, int g, int b) {
     auto c = [](int n) { const int v = n * 4; return (v << 2) | (v >> 4); };
     return RGB(c(r), c(g), c(b));
 }
 
+// Creates all controls of the team tab (hidden; layout_team positions them).
 void create_team_controls(App& a) {
     TeamUi& u = a.tu;
     auto make = [&](const wchar_t* cls, const wchar_t* text, DWORD style, DWORD ex, int id) {
@@ -970,6 +1019,8 @@ void show_team(App& a, bool on) {
     for (HWND w : a.tu.all) ShowWindow(w, on ? SW_SHOW : SW_HIDE);
 }
 
+// Positions the team tab: club name and two columns of player names in the work area (x, y, w, h) with the crest
+// editor below them, the numeric fields, jersey sliders and swap controls in the right column (rx, rw).
 void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
     TeamUi& u = a.tu;
     if (!u.club) return;
@@ -1027,6 +1078,7 @@ void layout_team(App& a, int x, int y, int w, int h, int rx, int rw) {
     MoveWindow(u.swap_btn, cx + cw - a.px(80), cy - 1, a.px(80), eh + 2, TRUE);
 }
 
+// Offers every other editable team of the same kind (with / without player list) as swap partner.
 void fill_swap_combo(App& a) {
     HWND c = a.tu.swap_combo;
     SendMessage(c, CB_RESETCONTENT, 0, 0);
@@ -1039,6 +1091,7 @@ void fill_swap_combo(App& a) {
     SendMessage(c, CB_SETCURSEL, 0, 0);
 }
 
+// Jersey slider labels with their values; repaints the preview.
 void update_team_labels(App& a) {
     const wchar_t* n[] = {L"Rot", L"Grün", L"Blau"};
     for (int i = 0; i < 3; i++) {
@@ -1048,6 +1101,8 @@ void update_team_labels(App& a) {
     InvalidateRect(a.tu.preview, nullptr, FALSE);
 }
 
+// Fills the team tab controls from the selected team (loading_team suppresses the change handlers meanwhile).
+// Player names and crest are disabled for teams without player list, the place for teams without a place.
 void load_team_controls(App& a) {
     if (!a.team || !a.tu.club) return;
     TeamUi& u = a.tu;
@@ -1077,6 +1132,8 @@ void load_team_controls(App& a) {
     a.loading_team = false;
 }
 
+// Saves the crest (if changed) and KB\23.vga; warns about duplicate names first, because the game treats equal
+// names as the same person. False when cancelled or saving failed.
 bool team_save(App& a) {
     if (a.crest_ed->dirty() && !a.crest_ed->save()) return false;
     if (!a.team->dirty()) return true;
@@ -1091,10 +1148,12 @@ bool team_save(App& a) {
     return a.team->save();
 }
 
-int list_row_of(const App& a, int team) {
+int list_row_of(const App& a, int team) {  // list row of a team index
     return int(std::find(a.list_numbers.begin(), a.list_numbers.end(), team) - a.list_numbers.begin());
 }
 
+// An edit field of the team tab changed (control id `id`): applies the value to the TeamDoc at once and updates
+// the list row. A crest number change first asks about unsaved crest pixels.
 void team_edit_changed(App& a, int id) {
     if (a.loading_team || !a.team) return;
     TeamUi& u = a.tu;
@@ -1131,7 +1190,7 @@ void team_edit_changed(App& a, int id) {
     refresh(a);
 }
 
-void team_jersey_changed(App& a) {
+void team_jersey_changed(App& a) {  // a jersey slider moved
     if (a.loading_team || !a.team) return;
     const int r = int(SendMessage(a.tu.jer[0], TBM_GETPOS, 0, 0)), g = int(SendMessage(a.tu.jer[1], TBM_GETPOS, 0, 0)),
               b = int(SendMessage(a.tu.jer[2], TBM_GETPOS, 0, 0));
@@ -1140,7 +1199,7 @@ void team_jersey_changed(App& a) {
     refresh(a);
 }
 
-void team_swap(App& a) {
+void team_swap(App& a) {  // "Tauschen": swaps the selected team with the one chosen in the combo box
     const LRESULT i = SendMessage(a.tu.swap_combo, CB_GETCURSEL, 0, 0);
     if (i < 0) return;
     const int other = int(SendMessage(a.tu.swap_combo, CB_GETITEMDATA, WPARAM(i), 0));
@@ -1151,7 +1210,7 @@ void team_swap(App& a) {
     refresh(a);
 }
 
-void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {
+void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {  // owner-drawn jersey swatch
     HDC dc = di->hDC;
     RECT r = di->rcItem;
     FillRect(dc, &r, GetSysColorBrush(COLOR_WINDOW));
@@ -1174,11 +1233,13 @@ void paint_team_preview(App& a, DRAWITEMSTRUCT* di) {
 // A small pixel editor for the crest of the selected team (KB80 + crest), embedded in the team page.
 // The picture has its own zoom (2x..16x) and scroll bars; the palette stays at the right edge.
 
+// Crest view geometry: picture origin (x, y) and device-pixel zoom, width/height of the picture area, origin and
+// swatch size of the 16 x 16 palette at the right.
 struct CrestGeo {
     int x, y, zoom, view_w, view_h, pal_x, pal_y, cell;
 };
 
-CrestGeo crest_geo(App& a) {
+CrestGeo crest_geo(App& a) {  // picture centred while it fits, otherwise placed by the scroll position
     RECT r;
     GetClientRect(a.tu.crest_view, &r);
     const auto& img = a.crest_ed->image();
@@ -1198,6 +1259,7 @@ CrestGeo crest_geo(App& a) {
 
 void update_crest_scroll(App& a);
 
+// While the user has not chosen a zoom: the largest zoom (2..16, in 96-dpi units) at which the crest fits.
 void crest_autofit(App& a) {
     if (!a.crest_auto || !a.tu.crest_view || !a.crest_ed || a.crest_ed->current() < 0) return;
     RECT r;
@@ -1235,13 +1297,15 @@ void update_crest_scroll(App& a) {
     }
 }
 
-void set_crest_zoom(App& a, int z) {
+void set_crest_zoom(App& a, int z) {  // user zoom 2..16; switches off the automatic fit
     a.crest_auto = false;
     a.crest_zoom = std::clamp(z, 2, 16);
     update_crest_scroll(a);
     InvalidateRect(a.tu.crest_view, nullptr, FALSE);
 }
 
+// Paints the crest (clipped to its viewport, pixel grid from device zoom 4 up), the palette with the drawing colour
+// framed and the crest number/zoom; for European clubs a hint that they have no crest.
 void paint_crest(App& a, HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -1317,6 +1381,7 @@ void paint_crest(App& a, HWND h) {
     EndPaint(h, &ps);
 }
 
+// Crest view position -> crest pixel; true when it lies on the picture inside its viewport.
 bool crest_hit_image(App& a, int mx, int my, int& ix, int& iy) {
     const CrestGeo g = crest_geo(a);
     const auto& img = a.crest_ed->image();
@@ -1325,6 +1390,8 @@ bool crest_hit_image(App& a, int mx, int my, int& ix, int& iy) {
     return a.crest_ed->current() >= 0 && mx < g.view_w && ix >= 0 && iy >= 0 && ix < img.width && iy < img.height;
 }
 
+// Crest view window: draws on the picture, a click on the palette selects the colour, right click picks a colour,
+// wheel scrolls (Shift: horizontally, Ctrl: zoom).
 LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     PixelEditor& e = *a.crest_ed;
@@ -1409,6 +1476,7 @@ LRESULT CALLBACK crest_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
+// Opens crest picture KB\<80 + crest>.vga of the selected team (closes it for teams without player list).
 void load_crest(App& a) {
     if (!a.team || !a.crest_ed) return;
     const int t = a.team_sel;
@@ -1454,11 +1522,13 @@ bool crest_confirm(App& a) {
 
 constexpr int kTileCell = 36;  // tile picker: 16 px tile at 2x plus a gap, in 96 dpi pixels
 
+// Map view geometry: rink origin (ox, oy), zoomed rink size (iw, ih), scrollable size with margin (tw, th),
+// client size (cw, ch) and zoom (1..4).
 struct MapGeo {
     int ox, oy, iw, ih, tw, th, cw, ch, zoom;
 };
 
-MapGeo map_geo(App& a) {
+MapGeo map_geo(App& a) {  // rink centred while it fits, otherwise placed by the scroll position
     RECT r;
     GetClientRect(a.mu.view, &r);
     MapGeo g{};
@@ -1475,7 +1545,7 @@ MapGeo map_geo(App& a) {
     return g;
 }
 
-void update_map_scroll(App& a) {
+void update_map_scroll(App& a) {  // clamps the scroll position, updates the map view scroll bars
     HWND h = a.mu.view;
     if (!h) return;
     if (a.map->current() < 0) {
@@ -1506,11 +1576,13 @@ void set_map_zoom(App& a, int z) {
     refresh(a);
 }
 
-uint32_t rgb32(const em::Palette& p, uint8_t i) {
+uint32_t rgb32(const em::Palette& p, uint8_t i) {  // palette colour as 0x00RRGGBB
     const auto& c = p.rgb[i];
     return uint32_t(c[0]) << 16 | uint32_t(c[1]) << 8 | c[2];
 }
 
+// Paints the rink (32-bit copy rebuilt only when the map revision changed), the optional cell grid and the
+// hovered cell.
 void paint_map(App& a, HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -1572,6 +1644,7 @@ void paint_map(App& a, HWND h) {
     EndPaint(h, &ps);
 }
 
+// Map view position -> map cell (column c, row r); true when a map is open and the cell exists.
 bool map_cell_at(App& a, int mx, int my, int& c, int& r) {
     const MapGeo g = map_geo(a);
     const int cell = MapDoc::kTile * g.zoom;
@@ -1580,13 +1653,15 @@ bool map_cell_at(App& a, int mx, int my, int& c, int& r) {
     return a.map->current() >= 0 && c >= 0 && r >= 0 && c < MapDoc::kCols && r < MapDoc::kRows;
 }
 
-void sync_map_controls(App& a) {
+void sync_map_controls(App& a) {  // mirror check box, selected tile label and picker after a tile change
     SendMessage(a.mu.mirror, BM_SETCHECK, a.map_mirror ? BST_CHECKED : BST_UNCHECKED, 0);
     const std::wstring t = L"Kachel " + std::to_wstring(a.map_tile) + (a.map_mirror ? L" (gespiegelt)" : L"");
     SetWindowTextW(a.mu.lbl, t.c_str());
     InvalidateRect(a.mu.tiles, nullptr, FALSE);
 }
 
+// Map view window. The toolbar tool decides what a left click does: picker takes tile and mirror flag of the cell,
+// fill flood-fills, every other tool paints the selected tile (dragging paints one stroke). Right click picks.
 LRESULT CALLBACK map_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     MapDoc& m = *a.map;
@@ -1681,6 +1756,7 @@ LRESULT CALLBACK map_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 // Tile picker --------------------------------------------------------------------------------------------
 
+// Tile picker grid: cell size in device pixels, columns that fit the width, rows for all tiles.
 struct TileGeo {
     int cell, cols, rows;
 };
@@ -1695,7 +1771,7 @@ TileGeo tile_geo(App& a, HWND h) {
     return g;
 }
 
-void update_tile_scroll(App& a) {
+void update_tile_scroll(App& a) {  // vertical scroll bar of the tile picker
     HWND h = a.mu.tiles;
     if (!h) return;
     for (int pass = 0; pass < 2; pass++) {
@@ -1713,6 +1789,7 @@ void update_tile_scroll(App& a) {
     }
 }
 
+// Paints the visible rows of the tile picker, the selected tile framed.
 void paint_tiles(App& a, HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -1756,6 +1833,7 @@ void paint_tiles(App& a, HWND h) {
     EndPaint(h, &ps);
 }
 
+// Tile picker window: click selects the painting tile, hovering shows its number in the status bar.
 LRESULT CALLBACK tiles_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     switch (msg) {
@@ -1808,6 +1886,7 @@ void show_map(App& a, bool on) {
     for (HWND w : {a.mu.view, a.mu.tiles, a.mu.mirror, a.mu.lbl}) ShowWindow(w, on ? SW_SHOW : SW_HIDE);
 }
 
+// Map view in the work area (x, y, w, h); tile label, mirror box and tile picker in the right column (rx, rw).
 void layout_map(App& a, int x, int y, int w, int h, int rx, int rw) {
     if (!a.mu.view) return;
     MoveWindow(a.mu.view, x, y, w, h, TRUE);
@@ -1833,6 +1912,7 @@ void open_map(App& a, int number) {
 
 // ------------------------------------------------------------------------------------------ palette editor
 
+// Palette tab grid: 16 x 16 swatches of `cell` pixels at (x, y), centred horizontally.
 struct GridGeo {
     int x, y, cell;
 };
@@ -1846,6 +1926,7 @@ GridGeo grid_geo(App& a, HWND h) {
     return {(int(r.right) - cell * 16) / 2, m, cell};
 }
 
+// Paints the palette being edited, the selected colour framed, and its six-bit DAC and eight-bit display values.
 void paint_pgrid(App& a, HWND h) {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(h, &ps);
@@ -1897,7 +1978,7 @@ void paint_pgrid(App& a, HWND h) {
     EndPaint(h, &ps);
 }
 
-LRESULT CALLBACK pgrid_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
+LRESULT CALLBACK pgrid_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {  // click selects the colour to edit
     App& a = *g_app;
     switch (msg) {
         case WM_ERASEBKGND: return 1;
@@ -1918,7 +1999,7 @@ LRESULT CALLBACK pgrid_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, msg, wp, lp);
 }
 
-void slider_changed(App& a) {
+void slider_changed(App& a) {  // an RGB slider moved: stores the colour in the PaletteDoc
     if (a.setting_sliders || a.pal->current() < 0) return;
     const int r = int(SendMessage(a.track[0], TBM_GETPOS, 0, 0)), g = int(SendMessage(a.track[1], TBM_GETPOS, 0, 0)),
               b = int(SendMessage(a.track[2], TBM_GETPOS, 0, 0));
@@ -1929,7 +2010,7 @@ void slider_changed(App& a) {
 
 // ------------------------------------------------------------------------------------------ main window
 
-void build_menu(HWND hwnd) {
+void build_menu(HWND hwnd) {  // menu bar: Datei, Bearbeiten, Werkzeug, Ansicht, Hilfe
     HMENU bar = CreateMenu();
     HMENU file = CreatePopupMenu(), edit = CreatePopupMenu(), tool = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
     AppendMenuW(file, MF_STRING, ID_FILE_SAVE, L"&Speichern\tStrg+S");
@@ -1958,7 +2039,7 @@ void build_menu(HWND hwnd) {
     SetMenu(hwnd, bar);
 }
 
-void build_toolbar(App& a) {
+void build_toolbar(App& a) {  // text-only toolbar: tools (radio group), undo/redo, save, grid, fit
     a.toolbar = CreateWindowExW(0, TOOLBARCLASSNAMEW, nullptr,
                                 WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_LIST | TBSTYLE_TOOLTIPS | CCS_TOP | CCS_NODIVIDER,
                                 0, 0, 0, 0, a.main, (HMENU)IDC_TOOLBAR, a.inst, nullptr);
@@ -1988,7 +2069,7 @@ void build_toolbar(App& a) {
     SendMessage(a.toolbar, TB_ADDBUTTONS, UINT(sizeof bs / sizeof bs[0]), (LPARAM)bs);
 }
 
-void init_list(App& a) {
+void init_list(App& a) {  // list view style and its two columns
     ListView_SetExtendedListViewStyle(a.list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
     SetWindowTheme(a.list, L"Explorer", nullptr);  // modern list look
     LVCOLUMNW col{LVCF_TEXT | LVCF_WIDTH};
@@ -2001,6 +2082,8 @@ void init_list(App& a) {
     fill_list(a);
 }
 
+// Menu, toolbar and accelerator commands. Save, undo and redo act on the document of the current tab; on the
+// palette and team tabs "undo" discards all unsaved changes. Export and import work on the picture tabs only.
 void command(App& a, UINT id) {
     PixelEditor& e = *a.ed;
     switch (id) {
@@ -2078,6 +2161,8 @@ void command(App& a, UINT id) {
     refresh(a);
 }
 
+// Main window: creates all child windows, lays them out, routes control notifications to the tab handlers and
+// asks about unsaved changes before switching tabs or closing.
 LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     App& a = *g_app;
     switch (msg) {
@@ -2222,19 +2307,17 @@ LRESULT CALLBACK main_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ------------------------------------------------------------------------------------------- start-up
 
-bool is_game_folder(const fs::path& p) {
+bool is_game_folder(const fs::path& p) {  // contains EM.EXE and the KB directory
     std::error_code ec;
     return !p.empty() && fs::exists(p / "EM.EXE", ec) && fs::is_directory(p / "KB", ec);
 }
 
+// Looks for the game in this order: OPENEM_DATA, then the executable's and the current directory and their EM and
+// data subfolders. Empty when none qualifies.
 fs::path find_game_folder(const fs::path& exe_dir) {
     std::vector<fs::path> c;
     wchar_t env[MAX_PATH];
     if (GetEnvironmentVariableW(L"OPENEM_DATA", env, MAX_PATH)) c.push_back(env);
-    for (fs::path up = exe_dir; !up.empty(); up = up.parent_path()) {
-        c.push_back(up / "work" / "EM");
-        if (up == up.parent_path()) break;
-    }
     for (const fs::path& base : {exe_dir, fs::current_path()})
         for (const wchar_t* sub : {L"", L"EM", L"data"}) c.push_back(*sub ? base / sub : base);
     for (const auto& p : c)
@@ -2242,7 +2325,7 @@ fs::path find_game_folder(const fs::path& exe_dir) {
     return {};
 }
 
-void save_shot(HWND h, const wchar_t* path) {
+void save_shot(HWND h, const wchar_t* path) {  // window picture as a 32-bit BMP (--shot)
     RECT r;
     GetWindowRect(h, &r);
     const int w = r.right - r.left, ht = r.bottom - r.top;
@@ -2269,6 +2352,8 @@ void save_shot(HWND h, const wchar_t* path) {
 
 }  // namespace
 
+// Entry point: parses the options, finds (or asks for) the game folder, creates the documents and the window,
+// handles the command-line conversion and --shot modes, then runs the message loop.
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     INITCOMMONCONTROLSEX icc{sizeof icc, ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES | ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_UPDOWN_CLASS};

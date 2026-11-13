@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The settings page values in the save state and their Game wrappers; see settings.hpp.
 #include "game/settings.hpp"
 #include "game/game.hpp"
 #include "game/reporting.hpp"
 
 namespace em {
 namespace {
+// State offsets of the settings (see settings.hpp) and of the coached nation and the manager blocks.
 constexpr size_t kFlags = 0xA51C, kScrolling = 0x2C, kSpeed = 0xB94F, kEndYear = 0xAEB5, kLevel = 0xAEB4;
 constexpr size_t kNationalTeam = 0x68C, kManagers = 0xDCD, kManagerSize = 0x1AF;
 }  // namespace

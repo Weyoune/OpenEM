@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Statistiken -> Frueher, Verein, Spieler, Fairplay, WM (ovr034:2691 dispatch).
+// Statistiken -> Frueher, Verein, Spieler, Fairplay, WM: opening, drawing and input of the five statistics
+// pages of the classic frontend (the pages themselves are drawn by classic_stats_*.cpp).
 #include "ui/classic_app.hpp"
 #include "ui/classic_stats_club.hpp"
 #include "ui/classic_stats_fairplay.hpp"
@@ -12,15 +13,17 @@
 
 namespace em::ui {
 
+// Opens statistics page item (1 Frueher, 2 Verein, 3 Spieler, 4 Fairplay, 5 WM) with the original's start state.
 void ClassicApplication::open_statistics(int item){
     if(item<1||item>5){notice("Dieser Bereich ist noch nicht nachgebaut.");return;}
     stats_page_=item;
-    if(item==1)stats_scroll_=0;                     // 4495:417F local scroll state
-    if(item==2)stats_scroll_=classic_stats_club_years(snapshot())-1; // 4495:2513 starts with the last year
-    if(item==3){stats_mode_=2;stats_managers_=false;} // 4080:0000 starts with SCORER / LIGA
+    if(item==1)stats_scroll_=0;                     // Frueher starts at the top of the list
+    if(item==2)stats_scroll_=classic_stats_club_years(snapshot())-1; // Verein starts with the last year
+    if(item==3){stats_mode_=2;stats_managers_=false;} // Spieler starts with SCORER / LIGA
     screen_=ClassicScreen::Statistics;
 }
 
+// Draws the open statistics page.
 void ClassicApplication::draw_statistics(){
     if(stats_page_==1)draw_classic_stats_history(canvas_,snapshot(),stats_scroll_);
     else if(stats_page_==2)draw_classic_stats_club(canvas_,snapshot(),stats_scroll_);
@@ -29,17 +32,18 @@ void ClassicApplication::draw_statistics(){
     else if(stats_page_==5)draw_classic_stats_wm(canvas_,snapshot());
 }
 
+// Click on a statistics page. A right click leaves every page, Fairplay closes on any press.
 void ClassicApplication::click_statistics(int x,int y,bool right){
-    if(right||stats_page_==4){screen_=ClassicScreen::Main;return;} // Fairplay: sub_19B08 closes on any press
+    if(right||stats_page_==4){screen_=ClassicScreen::Main;return;} // Fairplay closes on any press
     if(stats_page_==1){
         stats_scroll_=std::clamp(stats_scroll_+classic_stats_history_scroll(x,y),0,30);
-        // ovr028:493A..499C: a press latches the arrow (sub_586C8 without wait) and keeps the list scrolling
-        // while the button is held; the list bands scroll at the current pointer position.
+        // As in the original, a press on an arrow latches it and keeps the list scrolling while the button is
+        // held; a press on the list bands scrolls at the current pointer position.
         const bool arrow=x>=0xA5&&x<=0xA5+8&&y>=0x1E&&y<=0x27+8&&classic_stats_history_scroll(x,y)!=0;
         stats_hold_=StatsHold{arrow,x,y,classic_ticks()+kStatsRepeatMs};
     }else if(stats_page_==2){
-        // ovr028:25A6..25D4: the upper arrow (-1 from sub_586C8) moves to the next year, the lower one back;
-        // without a press check, so a held arrow repeats.
+        // The upper arrow moves to the next year, the lower one back; the original has no press check here,
+        // so a held arrow repeats.
         const int years=classic_stats_club_years(snapshot()),arrow=classic_stats_club_arrow(x,y);
         if(years&&arrow==1&&stats_scroll_<years-1)++stats_scroll_;
         else if(years&&arrow==-1&&stats_scroll_>0)--stats_scroll_;
@@ -52,13 +56,13 @@ void ClassicApplication::click_statistics(int x,int y,bool right){
         else if(button<0)open_stats_player(x,y);
     }else if(stats_page_==5){
         const int team=classic_stats_wm_team(x,y);
-        if(team>=0)open_club_info(team,2); // 5396:1ADE stub_ovl13_0095(team,2,0,0)
+        if(team>=0)open_club_info(team,2); // club info of the nation in mode 2
     }
 }
 
-// ovr025:0CDA..0DCB: a press on a listed player searches the squads of the human managers (0..N-1) and of
-// squad 4 (transfer pool) for the player record; the first hit opens the player page (sub_123AC(slot)) with
-// that squad as the current manager (byte_2F6DE), afterwards the list is drawn again. Others do nothing.
+// A press on a listed player searches the squads of the human managers (0..N-1) and of squad 4 (transfer
+// pool) for the player record; the first hit opens the player page for that slot with that squad as the
+// current manager, afterwards the list is drawn again. Players found nowhere do nothing.
 void ClassicApplication::open_stats_player(int x,int y){
     try{
         const auto& h=snapshot();
@@ -75,7 +79,7 @@ void ClassicApplication::open_stats_player(int x,int y){
 }
 
 // Held arrow (see click_statistics): the original repeats once per pass of its page loop; OpenEM repeats every
-// kStatsRepeatMs (DOSBox: Frueher scrolled five rows during a 0.2 s press) until release().
+// kStatsRepeatMs (in the original, Frueher scrolls about five rows during a 0.2 s press) until release().
 void ClassicApplication::tick_stats_hold(uint64_t now){
     if(!stats_hold_)return;
     if(screen_!=ClassicScreen::Statistics||(stats_page_!=1&&stats_page_!=2)){stats_hold_.reset();return;}
@@ -88,6 +92,7 @@ void ClassicApplication::tick_stats_hold(uint64_t now){
     }
 }
 
+// Opens the statistics page named by a render target name (e.g. "stats-club"); false for an unknown name.
 bool ClassicApplication::render_statistics(std::string_view name){
     if(name=="stats-history"||name=="stats-history-scrolled"){
         open_statistics(1);

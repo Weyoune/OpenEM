@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// em_dump - inspect original Eishockey Manager files.
+// em_dump - command-line inspector for the original Eishockey Manager files (KB graphics, the
+// master database, goal scenes, .HOK savegames) and a headless driver for single game actions.
+// The action commands (buy, insure, contract, market, bank, shares, tactics-exit, train) load a
+// save into em::Game, perform exactly one action with a given random seed and write the result
+// as a new .hok (original savegame) or .oem (OpenEM checkpoint); they never overwrite a file.
 //
 //   em_dump kb <KB dir>                          one line per .vga file: kind, size, RLE status
 //   em_dump vga <file.vga> <out.bmp> [pal.vga]   export an image as 8-bit BMP; the palette comes
@@ -24,6 +28,10 @@
 //   em_dump contract <save> <EM.EXE> <slot> <years> <salary DM> <seed> <new.hok|new.oem> [--allow-shortening]
 //   em_dump market <save> <EM.EXE> <list|recall> <slot> <seed> <new.hok|new.oem>
 //   em_dump bank <save> <EM.EXE> <deposit|withdraw> <amount DM> <seed> <new.hok|new.oem>
+//   em_dump shares <save> <EM.EXE> <buy|sell> <company 0..3> <quantity> <seed> <new.hok|new.oem>
+//   em_dump tactics-exit <save> <EM.EXE> <seed> <new.hok|new.oem>
+//                                                 re-apply the stored tactics as when leaving
+//                                                 the tactics screen
 //   em_dump train <save> <EM.EXE> <day 0..6> <unit 0..3> <kind 0..8> <seed> <new.hok|new.oem>
 //   em_dump simulate <file.hok> <EM.EXE> [league] [matchdays] [seed]  play the next league
 //                                                 matchdays with the rebuilt engine
@@ -53,6 +61,7 @@ using namespace em;
 
 namespace {
 
+// Short label of a KB file kind for the `kb` listing.
 const char* kind_name(VgaKind k) {
     switch (k) {
         case VgaKind::Image: return "image";
@@ -64,6 +73,7 @@ const char* kind_name(VgaKind k) {
     }
 }
 
+// Little-endian writers for the BMP header.
 void put16(std::ofstream& o, uint16_t v) { o.put(char(v)); o.put(char(v >> 8)); }
 void put32(std::ofstream& o, uint32_t v) { put16(o, uint16_t(v)); put16(o, uint16_t(v >> 16)); }
 
@@ -84,6 +94,8 @@ void write_bmp(const fs::path& path, const Image& img, const Palette& pal) {
     }
 }
 
+// em_dump kb: lists every .vga file of a KB folder in numeric order with its kind and size;
+// images also get their dimensions and whether the RLE data decoded completely.
 int cmd_kb(const fs::path& dir) {
     std::vector<fs::path> files;
     for (auto& e : fs::directory_iterator(dir))
@@ -108,6 +120,9 @@ int cmd_kb(const fs::path& dir) {
     return 0;
 }
 
+// em_dump vga: exports one KB image as BMP. Palette: the image's own (320x240 screens with an
+// embedded palette, which starts after the header and the u16 image length at offset 4), else
+// `pal_file` (a palette file or another image with palette), else a grey ramp.
 int cmd_vga(const fs::path& in, const fs::path& out, const fs::path* pal_file) {
     Bytes d = read_file(in);
     Image img = decode_vga(d);
@@ -126,6 +141,8 @@ int cmd_vga(const fs::path& in, const fs::path& out, const fs::path* pal_file) {
     return 0;
 }
 
+// em_dump finances: prints manager 0's budget as the month-end code sees it (raw money is
+// DM x 3): balance, bank, accrued interest, monthly income and expenses, and the adverts.
 int cmd_finances(const fs::path& in, const fs::path& exe) {
     const HokFile h = decode_hok(read_file(in));
     const FinanceTables tables = load_finance_tables(read_file(exe), h);
@@ -148,6 +165,12 @@ int cmd_finances(const fs::path& in, const fs::path& exe) {
     return 0;
 }
 
+// em_dump hok <file> <what> [n]: the list views of a savegame. `what` is one of
+//   strength  stored vs. recomputed line strengths of manager n's club (default 0),
+//   table     table and next pairings of league n (default 0),
+//   squad     squad of manager n (default 0; 5 = national team with caps),
+//   cup       DEB cup, European cup and world championship pairings,
+//   teams     team table, or anything else: the player records (of team n, if given).
 int cmd_hok_list(const fs::path& in, const std::string& what, int team) {
     HokFile h = decode_hok(read_file(in));
     if (what == "strength") {
@@ -209,7 +232,7 @@ int cmd_hok_list(const fs::path& in, const std::string& what, int team) {
         std::printf("%-3s %-18s %3s %3s %3s %-8s %3s %5s %8s\n", "ART", "NAME", "SP", "ST", "TO", "STATUS", "E",
                     "JAHRE", "GEHALT");
         for (const HokSquadPlayer& s : squad) {
-            if (s.player < 0) continue;  // empty native slots retain their position in hok_squad
+            if (s.player < 0) continue;  // empty squad slots keep their place in hok_squad
             const HokPlayer& p = h.players[size_t(s.player)];
             const char* art = p.position == 0 ? "TOR" : p.position < 60 ? "ABW" : "STU";
             std::printf("%-3s %-18s %3d %3d %3d %-8s %3d %5d %8ld\n", art, p.name.c_str(),
@@ -263,6 +286,8 @@ int cmd_hok_list(const fs::path& in, const std::string& what, int team) {
     return 0;
 }
 
+// em_dump hok <file> [out.bin]: header fields, date, finances, shares and attendance figures;
+// with `out` the decrypted save state is written there as raw bytes.
 int cmd_hok(const fs::path& in, const fs::path* out) {
     HokFile h = decode_hok(read_file(in));
     size_t zeros = 0;
@@ -292,6 +317,8 @@ int cmd_hok(const fs::path& in, const fs::path* out) {
     return 0;
 }
 
+// em_dump db: the master database KB\23.vga. Without `club`: all clubs with their number of
+// named players and the European club names; with `club`: that club's player names and flags.
 int cmd_db(const fs::path& in, int club) {
     Database db = decode_db(read_file(in));
     if (club < 0) {
@@ -345,11 +372,11 @@ int cmd_rink(const fs::path& kb, const fs::path& out, int map) {
     return 0;
 }
 
-// Plays the next league matchdays of a savegame with the rebuilt match engine (the human club with
-// the line strengths of its squad, first lines only) and prints results and the new table.
-// em_dump run: plays `days` days with the day loop (game/game.hpp) and prints what happened to
-// the human club, the month ends and the first division table at the end.
 bool action_checkpoint_output(const fs::path& output);
+
+// em_dump run / checkpoint: plays `days` days with the day loop (game/game.hpp) and prints what
+// happened to the human club, the month ends and the first division table at the end. With
+// `out`, the result is saved: a .hok for `run`, a .oem checkpoint for `checkpoint`.
 
 int cmd_run(const fs::path& hok, const fs::path& exe, int days, uint32_t seed, const fs::path& out,
             bool checkpoint = false) {
@@ -384,6 +411,7 @@ int cmd_run(const fs::path& hok, const fs::path& exe, int days, uint32_t seed, c
     return 0;
 }
 
+// Parses a whole decimal argument and checks it lies in low..high; throws FormatError otherwise.
 int64_t action_number(const char* text, int64_t low, int64_t high) {
     size_t end = 0;
     const int64_t amount = std::stoll(text, &end);
@@ -392,11 +420,14 @@ int64_t action_number(const char* text, int64_t low, int64_t high) {
     return amount;
 }
 
+// A positive DM amount from the command line, converted to raw money (DM x 3).
 long dm_raw(const char* text) {
     const int64_t amount = action_number(text, 1, std::numeric_limits<int32_t>::max() / 3);
     return long(amount * 3);
 }
 
+// Validates an action's output path: it must not exist yet and must end in .hok or .oem
+// (case-insensitive). Returns true for an .oem checkpoint.
 bool action_checkpoint_output(const fs::path& output) {
     if (fs::exists(output)) throw FormatError("Action output already exists: " + output.string());
     std::string extension = output.extension().string();
@@ -405,6 +436,7 @@ bool action_checkpoint_output(const fs::path& output) {
     return extension == ".oem";
 }
 
+// Prints the game log of the action and writes the resulting save (.oem checkpoint or .hok).
 void write_action_save(Game& game, const fs::path& output, bool checkpoint) {
     for (const auto& line : game.log()) std::printf("%s\n", line.c_str());
     const Bytes data = checkpoint ? game.checkpoint_bytes() : game.native_save_bytes();
@@ -414,6 +446,11 @@ void write_action_save(Game& game, const fs::path& output, bool checkpoint) {
     std::printf("balance %ld DM; saved %s (%zu bytes)\n", game.budget().balance / 3, output.string().c_str(), data.size());
 }
 
+// The action commands below share one pattern: load the save into a Game with `seed`, perform
+// the action, print its outcome and write the save. They return 2 (and write nothing) when the
+// action was not possible; a refusal that is itself a game event is still saved.
+
+// em_dump train: sets training unit `unit` of weekday `day` to exercise `kind`.
 int cmd_train(const fs::path& input, const fs::path& exe, int day, int unit, int kind,
               uint32_t seed, const fs::path& output) {
     const bool checkpoint = action_checkpoint_output(output);
@@ -428,6 +465,8 @@ int cmd_train(const fs::path& input, const fs::path& exe, int day, int unit, int
     return 0;
 }
 
+// em_dump buy: buys transfer-list entry `slot` for `fee` with a `years` contract at `salary`
+// (raw money); `accept_subsidy` answers the subsidy question with yes.
 int cmd_buy(const fs::path& input, const fs::path& exe, int slot, long fee, int years, long salary,
             uint32_t seed, const fs::path& output, bool accept_subsidy) {
     const bool checkpoint = action_checkpoint_output(output);
@@ -443,6 +482,7 @@ int cmd_buy(const fs::path& input, const fs::path& exe, int slot, long fee, int 
     return 0;  // a refusal is a valid game action; its ban and RNG belong in the save too
 }
 
+// em_dump insure: turns the injury insurance of squad slot `slot` on or off.
 int cmd_insure(const fs::path& input, const fs::path& exe, int slot, const std::string& state,
                uint32_t seed, const fs::path& output) {
     if (state != "on" && state != "off") throw FormatError("Insurance state must be on or off");
@@ -457,6 +497,8 @@ int cmd_insure(const fs::path& input, const fs::path& exe, int slot, const std::
     return 0;
 }
 
+// em_dump contract: offers squad slot `slot` a new contract; shortening an existing contract
+// needs `allow_shortening`. A player's refusal is saved as well.
 int cmd_contract(const fs::path& input, const fs::path& exe, int slot, int years, long salary,
                  uint32_t seed, const fs::path& output, bool allow_shortening) {
     const bool checkpoint = action_checkpoint_output(output);
@@ -470,6 +512,8 @@ int cmd_contract(const fs::path& input, const fs::path& exe, int slot, int years
     return 0;
 }
 
+// em_dump market: `list` puts squad slot `slot` (0..28) on the transfer market, `recall` takes
+// market entry `slot` (0..10) back into the squad.
 int cmd_market(const fs::path& input, const fs::path& exe, const std::string& operation, int slot,
                uint32_t seed, const fs::path& output) {
     if (operation != "list" && operation != "recall") throw FormatError("Market action must be list or recall");
@@ -485,6 +529,7 @@ int cmd_market(const fs::path& input, const fs::path& exe, const std::string& op
     return 0;
 }
 
+// em_dump bank: moves `amount` (raw money) from the account to the bank (deposit) or back.
 int cmd_bank(const fs::path& input, const fs::path& exe, const std::string& operation, long amount,
              uint32_t seed, const fs::path& output) {
     if (operation != "deposit" && operation != "withdraw") throw FormatError("Bank action must be deposit or withdraw");
@@ -498,6 +543,7 @@ int cmd_bank(const fs::path& input, const fs::path& exe, const std::string& oper
     return 0;
 }
 
+// em_dump shares: buys or sells `quantity` shares of company `company` (0..3).
 int cmd_shares(const fs::path& input,const fs::path& exe,const std::string& operation,int company,
                uint32_t quantity,uint32_t seed,const fs::path& output){
     if(operation!="buy"&&operation!="sell")throw FormatError("Share action must be buy or sell");
@@ -510,6 +556,8 @@ int cmd_shares(const fs::path& input,const fs::path& exe,const std::string& oper
     write_action_save(game,output,checkpoint);return 0;
 }
 
+// em_dump tactics-exit: applies the save's own tactics through Game::set_tactics, as leaving
+// the tactics screen without changes does.
 int cmd_tactics_exit(const fs::path& input,const fs::path& exe,uint32_t seed,const fs::path& output){
     const bool checkpoint=action_checkpoint_output(output);
     Game game(read_file(exe),read_file(input),seed);
@@ -517,6 +565,9 @@ int cmd_tactics_exit(const fs::path& input,const fs::path& exe,uint32_t seed,con
     write_action_save(game,output,checkpoint);return 0;
 }
 
+// em_dump simulate: plays the next `matchdays` matchdays of league `league` with the rebuilt
+// match engine (the human club with the line strengths of its squad, first lines only) and
+// prints the results, the human club's scorers and the new table. The save is not changed.
 int cmd_simulate(const fs::path& hok, const fs::path& exe, int league, int matchdays, uint32_t seed) {
     HokFile h = decode_hok(read_file(hok));
     ScheduleTables tables = load_schedule_tables(read_file(exe));
@@ -537,7 +588,7 @@ int cmd_simulate(const fs::path& hok, const fs::path& exe, int league, int match
             const int hi = l.first_team + pairs[k].home, ai = l.first_team + pairs[k].away;
             std::printf("  %s - %s %d:%d;", h.teams[size_t(hi)].name.c_str(), h.teams[size_t(ai)].name.c_str(),
                         results[k].home, results[k].away);
-            // goals of the human club get a scorer and an assist (ovl14_2349)
+            // goals of the human club get a scorer and an assist, as in the game's goal crediting
             const int own = hi == human_team ? results[k].home : ai == human_team ? results[k].away : 0;
             for (int g = 0; g < own; g++) {
                 GoalCredit c = credit_goal(h.squad, h.players, scorer_rng);

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Pixel editor document (see pixel_editor.hpp): file scan, conversion between the KB formats and an editable 8-bit
+// picture, drawing tools, BMP export and import of true-colour pixels.
 #include "editor/pixel_editor.hpp"
 
 #include "formats/tore.hpp"
@@ -15,24 +17,27 @@ namespace em::editor {
 namespace {
 // Goal scene graphics: sheets are laid out as grids of cells (tiles 16 x 16, 16 per row; sprites 32 x 32, 8 per row)
 struct SheetSpec {
-    int number;
-    PixelEditor::Kind kind;
-    int cell, cols;
-    const char* label;
+    int number;              // KB file number
+    PixelEditor::Kind kind;  // Tiles or Sprites
+    int cell, cols;          // cell edge in pixels, cells per sheet row
+    const char* label;       // description shown in the file list
 };
 constexpr SheetSpec kSheets[] = {
     {231, PixelEditor::Kind::Tiles, 16, 16, "Hallenkacheln A"}, {232, PixelEditor::Kind::Tiles, 16, 16, "Hallenkacheln B"},
     {233, PixelEditor::Kind::Sprites, 32, 8, "Spieler Team 1"},  {234, PixelEditor::Kind::Sprites, 32, 8, "Spieler Team 2"},
     {235, PixelEditor::Kind::Sprites, 32, 8, "Torhüter, Puck"},
 };
-constexpr int kPanelNumber = 246;
+constexpr int kPanelNumber = 246;  // the goal scene scoreboard panel
 
+// Sheet layout of KB\<n>.vga, or nullptr when n is no goal scene sheet.
 const SheetSpec* sheet_spec(int n) {
     for (const auto& s : kSheets)
         if (s.number == n) return &s;
     return nullptr;
 }
 
+// Lays out the unpacked cells (cell * cell bytes each, stored one after another) as a grid of `cols` columns.
+// `count` receives the number of whole cells; trailing bytes are ignored, unused grid cells stay colour 0.
 Image sheet_from_raw(const Bytes& raw, int cell, int cols, int& count) {
     const size_t bytes = size_t(cell) * cell;
     count = int(raw.size() / bytes);
@@ -45,6 +50,7 @@ Image sheet_from_raw(const Bytes& raw, int cell, int cols, int& count) {
     return img;
 }
 
+// Inverse of sheet_from_raw: the first `count` grid cells back to consecutive raw cells.
 Bytes raw_from_sheet(const Image& img, int cell, int cols, int count) {
     const size_t bytes = size_t(cell) * cell;
     Bytes raw(size_t(count) * bytes);
@@ -86,7 +92,8 @@ PixelEditor::PixelEditor(const fs::path& data) : kb_(data / "KB") {
     status_ = std::to_string(files_.size()) + " Bilder in " + kb_.string();
 }
 
-// Images drawn by the game over the palette of another screen (found in src/ui): KB8 over KB14
+// Default display palette of a picture without its own palette. The game draws some pictures over the palette of
+// another screen (see the screens in src/ui): KB8 over KB14; everything else uses the game palette KB21.
 static int default_source(int number) { return number == 8 ? 14 : 21; }
 
 std::vector<int> PixelEditor::palette_choices() const {
@@ -184,6 +191,8 @@ bool PixelEditor::load(int number) {
     }
 }
 
+// Encodes the picture in the format it was loaded from (RLE image, panel, or packed sheet), copies the original
+// file to .bak before the first overwrite and writes the new file.
 bool PixelEditor::save() {
     if (current_ < 0) return false;
     try {
@@ -209,6 +218,7 @@ bool PixelEditor::save() {
     }
 }
 
+// Writes a bottom-up 8-bit BMP (BITMAPINFOHEADER, 256-entry palette, rows padded to 4 bytes).
 bool PixelEditor::export_bmp(const fs::path& to) {
     if (current_ < 0) return false;
     const int w = img_.width, h = img_.height, stride = (w + 3) & ~3;
@@ -234,6 +244,8 @@ bool PixelEditor::export_bmp(const fs::path& to) {
     return ok;
 }
 
+// Pixels with alpha below 128 become colour 0. Nearest colour = smallest squared RGB distance over colours 0..254,
+// cached per RGB value.
 bool PixelEditor::import_argb(const std::vector<uint32_t>& argb, int w, int h, bool allow_resize, int* approximated) {
     if (current_ < 0 || w <= 0 || h <= 0 || argb.size() != size_t(w) * size_t(h)) {
         status_ = "Import: kein Bild geöffnet oder ungültige Daten";

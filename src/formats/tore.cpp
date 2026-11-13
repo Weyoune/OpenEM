@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Goal scene formats (see tore.hpp): TORE scripts, the packed KB blocks of tiles and sprites, the rink map and the
+// scoreboard panel.
 #include "formats/tore.hpp"
 
 #include <cstring>
@@ -7,10 +9,10 @@ namespace em {
 
 namespace {
 constexpr char kTorTag[] = {'T', 'O', 'R', '!'};
-constexpr size_t kTorHeader = 0x54, kTorFrame = 28;
-constexpr uint16_t kTorEnd = 0xAAAA;
+constexpr size_t kTorHeader = 0x54, kTorFrame = 28;  // header size, frame record size
+constexpr uint16_t kTorEnd = 0xAAAA;                 // end mark after the last frame
 
-uint16_t be16(const Bytes& b, size_t o) { return uint16_t(b.at(o) << 8 | b.at(o + 1)); }
+uint16_t be16(const Bytes& b, size_t o) { return uint16_t(b.at(o) << 8 | b.at(o + 1)); }  // big-endian u16
 }  // namespace
 
 TorMove decode_tor_move(uint8_t m) {

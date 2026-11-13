@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// World Championship pages (see classic_wm.hpp). Save state used here: group teams at 0x03B8 (0x24 bytes
+// per group, 6 per round), group results at 0x04D8, table order 0x05F8, points 0x0628, goals for 0x02BB,
+// goals against 0x02EB (6 bytes per group), final round pairings at 0x8EB1 and their results at 0x8F60.
 #include "ui/classic_wm.hpp"
 #include <algorithm>
 #include <limits>
@@ -8,15 +11,17 @@
 namespace em::ui {
 namespace {
 constexpr auto bold=ClassicFontId::NewBold,flow=ClassicFontId::Flow,mini=ClassicFontId::Mini;
-constexpr std::array<int,7> heading_at{1,5,7,9,10,11,12}; //EXE DS4E06
+constexpr std::array<int,7> heading_at{1,5,7,9,10,11,12}; // 1-based pairing index before each heading (EM.EXE table)
 constexpr std::array<std::string_view,7> heading_text{
     "VIERTELFINALE","HALBFINALE","SPIELE 5.-8.","ENDSPIEL",
     "SPIEL UM 3.PL.","SPIEL UM 5.PL.","SPIEL UM 7.PL."};
+// Number padded to width with the blank digit '%'.
 std::string number(int value,int width=2) {
     auto s=std::to_string(value);
     if(value>=0 && int(s.size())<width) s.insert(0,size_t(width-int(s.size())),'%');
     return s;
 }
+// Offset of team record id (61 bytes each from 0x17E7).
 size_t team_at(int id) {
     if(id<0 || id>=150) throw FormatError("classic WM: invalid team ID");
     return 0x17e7+size_t(id)*61;
@@ -26,10 +31,12 @@ std::string name(const HokFile& h,int id) {
     for(size_t i=0;i<22 && h.state.at(at+i);++i) out+=char(h.state.at(at+i));
     return out;
 }
+// KB number of a national team's flag/crest sprite: 80 + (team byte +0x34 & 63); only teams 52..63.
 int badge(const HokFile& h,int id) {
     if(id<52 || id>63) throw FormatError("classic WM: team outside native flag atlas");
     return 80+(h.state.at(team_at(id)+0x34)&63);
 }
+// Builds a hit target; a team target gets club-info mode 2.
 ClassicWmHit hit(ClassicWmAction action,int l,int t,int r,int b,
                  int team=-1,int page=-1,int round=-1) {
     return {action,team,team<0?-1:2,page,round,l,t,r,b};
@@ -37,15 +44,16 @@ ClassicWmHit hit(ClassicWmAction action,int l,int t,int r,int b,
 bool contains(const ClassicWmHit& h,int x,int y) {
     return x>=h.left && x<=h.right && y>=h.top && y<=h.bottom;
 }
+// Next WM day (event bit 0x10) from the calendar cursor 0xB953 on: its index, date and the " d.m." caption.
 void preview_date(ClassicWmView& out,const HokFile& h,const SeasonCalendar& calendar) {
     const int cursor=le16(h.state,0xb953);
-    if(cursor>209) return; //DS4E01, checked even for a pre-WM placeholder
+    if(cursor>209) return; // the original's limit, checked even for the pre-WM placeholder
     size_t day=size_t(cursor);
     while(day<calendar.events.size() && !((calendar.events[day]>>1)&8)) ++day;
     if(day>=calendar.events.size()) throw FormatError("classic WM: missing future WM calendar event");
     if(day>size_t(std::numeric_limits<int>::max()-252))
         throw FormatError("classic WM: calendar date outside host range");
-    //1271(0) means the current day, and sentinel2000 means day0.
+    // Index 0 means the current season day (u32 at 0x8E2D), and the sentinel 2000 means day 0.
     uint32_t index=day?uint32_t(day):le32(h.state,0x8e2d);
     if(index==2000) index=0;
     if(index>uint32_t(std::numeric_limits<int>::max()-252))
@@ -55,6 +63,7 @@ void preview_date(ClassicWmView& out,const HokFile& h,const SeasonCalendar& cale
     out.native_caption="   "+number(out.preview_date->day,1)+"."+
                        number(out.preview_date->month,1)+".";
 }
+// Group table page: six rows in the stored table order, with a button to the other group.
 void table_view(ClassicWmView& out,const HokFile& h) {
     const size_t group=size_t(out.group),stat=group*6;
     out.native_title="Gruppe "+number(out.group+1,out.incoming_numeric_width);
@@ -77,6 +86,7 @@ void table_view(ClassicWmView& out,const HokFile& h) {
                     319,69+int(rank)*28,row.team);
     }
 }
+// Group fixture page: the three games of the round, round arrows (cycling 0..4), Endrunde and other group.
 void fixture_view(ClassicWmView& out,const HokFile& h) {
     out.frame_rows=9;
     const int width=out.incoming_numeric_width;
@@ -100,6 +110,8 @@ void fixture_view(ClassicWmView& out,const HokFile& h) {
                   hit(ClassicWmAction::ClubInfo,126,first,319,last,row.away)};
     }
 }
+// Final round page: the pairings from cursor 0x03B7 with stage headings and results; the frame height
+// follows the number of pairings as in the original.
 void knockout_view(ClassicWmView& out,const HokFile& h,const SeasonCalendar& calendar) {
     out.native_title="WM-Endrundenspiele"; out.available=out.phase>=5;
     int scan=int(static_cast<int8_t>(h.state.at(0x03b7)));
@@ -107,14 +119,14 @@ void knockout_view(ClassicWmView& out,const HokFile& h,const SeasonCalendar& cal
     while(scan<32 && h.state.at(0x8eb1+size_t(scan))!=255) scan+=2;
     out.pair_count=out.available?std::min(16,scan/2):0;
     out.pair_count=std::max(1,out.pair_count);
-    constexpr std::array<int,3> extra{1,3,7}; //DS4DFD[5..7]
+    constexpr std::array<int,3> extra{1,3,7}; // extra frame lines for phases 5..7 (EM.EXE table)
     const int metric=std::max(0,out.pair_count+1-6+(out.available?extra[size_t(out.phase-5)]:0));
     int units=std::min(11,((metric+4)*7+60)/19);
     out.frame_top=(240-(units*19+23))/2; units=std::max(2,units);
     if(units>8) out.frame_top=2;
     out.frame_rows=units+1;
     out.buttons.push_back({hit(ClassicWmAction::PreviousFixtures,136,201,184,239),"Gruppe"});
-    preview_date(out,h,calendar); //native construction precedes placeholder branch
+    preview_date(out,h,calendar); // the original computes the date before the placeholder branch
     if(!out.available) return;
     int y=out.frame_top+46;
     for(int pair=0;pair<out.pair_count;++pair) {
@@ -123,15 +135,15 @@ void knockout_view(ClassicWmView& out,const HokFile& h,const SeasonCalendar& cal
         }
         const int home=h.state.at(0x8eb1+size_t(pair)*2),away=h.state.at(0x8eb1+size_t(pair)*2+1);
         if(home>=64) continue;
-        //Incomplete pairs leave native stack-derived click bytes. Reject them
-        //rather than invent deterministic behavior for malformed state.
+        // Incomplete pairs leave undefined click targets in the original. Reject them
+        // rather than invent deterministic behaviour for malformed state.
         if(away>=64) throw FormatError("classic WM: incomplete knockout pairing");
         ClassicWmKnockoutRow row; row.pair=pair; row.home=home; row.away=away; row.baseline=y;
         row.native_home=name(h,home); row.native_away=name(h,away);
         int left=h.state.at(0x8f60+size_t(pair)*2),right=h.state.at(0x8f60+size_t(pair)*2+1);
         if(left<100 && right<100) {
             if(left>29) {left-=30; row.markers=1; if(left>29) {left-=30; row.markers=2;}}
-            //43xx: right flags overwrite the left marker count.
+            // As in the original, the right flags overwrite the left marker count.
             if(right>29) {right-=30; row.markers=1; if(right>29) {right-=30; row.markers=2;}}
             row.native_score=number(left)+":"+number(right);
         }
@@ -140,16 +152,18 @@ void knockout_view(ClassicWmView& out,const HokFile& h,const SeasonCalendar& cal
         out.knockout.push_back(std::move(row)); y+=7;
     }
 }
+// A bevelled 42 x 42 box with the national team's 38 x 38 sprite id.
 void national_box(ClassicCanvas& c,int x,int y,int id) {
     c.rect(x,y,x+41,y+41,1);
     c.line(x,y,x+41,y,23); c.line(x,y,x,y+41,23);
     c.line(x+41,y+1,x+41,y+41,29); c.line(x+1,y+41,x+40,y+41,29);
-    c.blit(id,x+2,y+2,0,0,38,38); //2115:0A79 is opaque
+    c.blit(id,x+2,y+2,0,0,38,38); // drawn opaque
 }
+// The game's standard 57 x 12 button; its corners keep the page underneath.
 void standard_button(ClassicCanvas& c,int x,int y,std::string_view text) {
     const std::array<uint8_t,4> corners{c.pixels().at(x,y),c.pixels().at(x+56,y),
                                       c.pixels().at(x,y+11),c.pixels().at(x+56,y+11)};
-    c.blit(4,x,y,17,179,57,12,true,192); //645B:10A6's separate button helper
+    c.blit(4,x,y,17,179,57,12,true,192);
     c.pixels().at(x,y)=corners[0]; c.pixels().at(x+56,y)=corners[1];
     c.pixels().at(x,y+11)=corners[2]; c.pixels().at(x+56,y+11)=corners[3];
     c.text_native(mini,x,y+7,text,29,1,x+59);
@@ -212,11 +226,11 @@ void draw_classic_wm(ClassicCanvas& c,const HokFile& h,const SeasonCalendar& cal
         c.text_native(mini,108,201,"Endrunde",30,-1,151);
         c.text_native(mini,173,201,view.buttons[2].native,30,-1,215);
         c.blit(4,49,195,19,104,29,9); c.blit(4,244,195,19,125,29,9);
-        //The native offscreen image begins as a copy of this exact canvas.
+        // The original's offscreen image begins as a copy of this exact canvas.
         if(manager!=5) {c.blit(36,29,10,0,66,22,22); c.blit(36,269,10,0,66,22,22);}
         c.rect(51,12,268,32,4); c.rect(26,33,292,165,4);
         c.text_native(bold,0,30,view.native_title,7,1,319);
-        //4996:0C81 copies only292 columns (x0..291) from its offscreen image.
+        // The original copies only 292 columns (x 0..291) from its offscreen image.
         c.line(27,33,291,33,7);
         for(const auto& r:view.fixtures) {
             c.text_native(bold,125,r.top+27,"-",7,0,125);

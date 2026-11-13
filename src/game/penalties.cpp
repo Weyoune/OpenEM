@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Penalty box timers, penalised-player choice and power-play statistics; see penalties.hpp.
+// The EM_DEBUG_PK / EM_DEBUG_BOX environment variables print traces to stderr.
 #include "game/penalties.hpp"
 #include "game/match.hpp"
 #include "game/scorers.hpp"
@@ -14,8 +16,8 @@ int penalty_effort_adjustment(const HokFile& h, int team) {
     const int owner = h.state.at(0x17E7 + size_t(team) * 61 + 0x16);
     if (!owner) return 0;
     if (owner > 6) throw FormatError("HOK: invalid penalty owner");
-    // DS:974B + owner*1AF. For owners 1..5 this is inside the contiguous
-    // manager block. For owner 6 it is DS:A165, mapped at HOK 0796+(A165-A0CB).
+    // Manager block `owner` (one past the owner's own block) +0xF0. For owners 1..5 this is inside
+    // the contiguous manager blocks; for owner 6 the same calculation reaches state 0x0830.
     const size_t at = owner == 6 ? 0x0830 : 0x0DCD + size_t(owner) * 0x1AF + 0xF0;
     return int(h.state.at(at)) - 20;
 }
@@ -40,7 +42,7 @@ void PenaltyOpportunities::rollback(int token) {
 void PenaltyOpportunities::after_goal(int attacker, bool previously_equal, int skaters, int other_skaters,
                                       bool human, bool other_human) {
     if (attacker < 0 || attacker > 1) throw FormatError("Invalid goal side");
-    // FUN_162c_23c4: an equal-strength goal can release an opposing penalty and
+    // An equal-strength goal can release an opposing penalty and
     // create a new short-handed phase for the scoring team (e.g. 4:4 -> 4:5).
     if (!previously_equal || skaters >= other_skaters) return;
     if (human) penalty_kills[attacker]++;
@@ -76,7 +78,7 @@ int PenaltyBox::code() const {
 }
 
 bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSquadPlayer>* squad) {
-    note_manager_guard(team.raw);  // ovr030:057C
+    note_manager_guard(team.raw);
     last_player_ = player;
     compact();
     const int next = running();
@@ -87,8 +89,8 @@ bool PenaltyBox::start(HokTeam& team, bool major, int player, std::vector<HokSqu
     if (squad && player >= 0) {
         auto& p = squad->at(size_t(player));
         if (p.player < 0 || p.role == 0) return false;
-        // ovr030 (43450..): only a bound player writes slot and role of the timer; without one both stay as they were
-        // (the role of an earlier penalty, REAL-CODE periods 28 and 31)
+        // only a bound player writes slot and role of the timer; without one both stay as they were
+        // (the role of an earlier penalty)
         timers_->slot[next] = player;
         timers_->role[next] = p.role;
         p.role = 0;
@@ -112,8 +114,8 @@ void PenaltyBox::release(int entry, HokTeam& team, std::vector<HokSquadPlayer>* 
     if (squad) release_slot(entry, *squad);
 }
 
-// sub_42FE1 (ovr030:0151): the role goes back to the player of the slot (slot 0 = none: the write lands in the pair table
-// through DS:5D8F), the slot is cleared, and a released lower timer takes slot and role of the upper one (which keeps both)
+// The role goes back to the player of the slot (no slot: the original writes it into an unrelated table, recorded as a
+// phantom release), the slot is cleared, and a released lower timer takes slot and role of the upper one (which keeps both)
 void PenaltyBox::release_slot(int entry, std::vector<HokSquadPlayer>& squad) {
     PenaltyTimers& t = *timers_;
     if (t.slot[entry] >= 0 && size_t(t.slot[entry]) < squad.size()) squad[size_t(t.slot[entry])].role = t.role[entry];
@@ -122,7 +124,7 @@ void PenaltyBox::release_slot(int entry, std::vector<HokSquadPlayer>& squad) {
     if (entry == 0) { t.slot[0] = t.slot[1]; t.role[0] = t.role[1]; }
 }
 
-// sub_42E90: a free lower timer takes the minutes of the upper one, with its slot and role (the upper timer keeps them)
+// A free lower timer takes the minutes of the upper one, with its slot and role (the upper timer keeps them)
 void PenaltyBox::compact() {
     if (!entries_[0].minutes && entries_[1].minutes) {
         entries_[0] = entries_[1];
@@ -148,7 +150,7 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
         return;
     }
     if (entries_[1].major) return;
-    // ovl06_0151(team, 0, 0), 01C6..02C6: with two timers the original
+    // With two timers the original
     // clears the upper timer but restores the FIRST queued player. The second
     // player inherits the lower timer, including its major flag. Keep this
     // asymmetric association instead of silently substituting hockey rules.
@@ -157,7 +159,7 @@ void PenaltyBox::goal_against(HokTeam& team, std::vector<HokSquadPlayer>* squad)
     if (squad) release_slot(0, *squad);
 }
 
-// ovr0xx:61982 (match end): every timer with a slot gives the role back and clears the slot; a timer without slot
+// Match end: every timer with a slot gives the role back and clears the slot; a timer without slot
 // writes nothing (no pair-table write at the end), the roles stay for the next match
 void PenaltyBox::finish(HokTeam& team, std::vector<HokSquadPlayer>* squad) {
     for (int i = 0; i < 2; i++)

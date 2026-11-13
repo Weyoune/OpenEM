@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Decoder and encoder of the per-team tables at the start of KB\23.vga (layout in teamdata.hpp).
 #include "formats/teamdata.hpp"
 
 namespace em {
 
 namespace {
-constexpr size_t kJersey = 0x000, kCrest = 0x12C, kStrength = 0x16C, kPlace = 0x46E;
+constexpr size_t kJersey = 0x000, kCrest = 0x12C, kStrength = 0x16C, kPlace = 0x46E;  // table offsets in the file
 }
 
 std::vector<TeamData> decode_team_data(const Bytes& d) {

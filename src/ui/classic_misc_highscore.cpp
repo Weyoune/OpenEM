@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The classic Highscore page (see classic_misc_highscore.hpp).
 #include "ui/classic_misc_highscore.hpp"
 
 namespace em::ui {
 namespace {
-constexpr auto kRowFont = ClassicFontId::Mini;  // native font 3
-// sub_19CB2 with DS:5344 = 5: the number in at least five places, padded with '%' (a blank digit-wide glyph of the font).
+constexpr auto kRowFont = ClassicFontId::Mini;  // the game's font 3
+// The number in at least five places, padded with '%' (a blank digit-wide glyph of the font), as the game prints it.
 std::string padded(int value) {
     std::string s = std::to_string(value);
     if (s.size() < 5) s.insert(0, 5 - s.size(), '%');

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// League table booking and sorting, and playing the league matchdays of a day; see season.hpp.
+// The EM_OLD_* environment variables switch individual rules back to earlier OpenEM behaviour;
+// EM_DEBUG_* variables print traces to stderr.
 #include "game/season.hpp"
 #include "game/scorers.hpp"
 #include <cstdlib>
@@ -11,6 +14,7 @@
 namespace em {
 
 namespace {
+// Appends a result letter to the 8-letter form string (padded with '-'), dropping the oldest.
 void push_form(HokTableRow& row, char c) {
     std::string f = row.form;
     if (f.size() < 8) f.insert(0, 8 - f.size(), '-');
@@ -78,8 +82,8 @@ void sort_league(League& league) {
         int gf = r.total(r.goals_for), ga = r.total(r.goals_against);
         return std::array<int, 4>{r.points_plus(), -r.total(r.games), gf - ga, gf};
     };
-    // ovl13_3855, normal DS:06B0=0: points, fewer games, goal difference,
-    // goals scored. Strict non-adjacent exchanges preserve native tie effects.
+    // The normal league order: points, fewer games, goal difference,
+    // goals scored. Strict non-adjacent exchanges reproduce the original's tie effects.
     for (size_t i = 0; i + 1 < order.size(); i++)
         for (size_t j = i + 1; j < order.size(); j++) if (key(order[j]) > key(order[i])) std::swap(order[i], order[j]);
     for (int p = 0; p < kHokLeagueSize; p++) league.rows[size_t(order[size_t(p)])].position = p;
@@ -118,16 +122,17 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                                                      BorlandRandom* brng,
                                                      const MatchMinuteObserver* observer,
                                                      std::vector<std::vector<std::pair<int, int>>>* played) {
-    // ovl06_2522 plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
+    // The original plays all matches of the day at once: minute 1 of every match (league by league, pair by pair), then minute 2 ...
+    // One match of the day.
     struct Entry {
-        size_t day, pair;
-        int home, away;
-        int scheduled[2] = {0, 0};  // the teams of the pair table before the pair-table error; the table booking uses them (REAL-CODE period 28)
-        MatchStats local;
-        MatchStats* stats = nullptr;
-        int before[2] = {0, 0};
+        size_t day, pair;  // index into `days` and pair index within the matchday
+        int home, away;    // the teams currently playing (can change through the pair-table error)
+        int scheduled[2] = {0, 0};  // the teams of the pair table before the pair-table error; the table booking uses them
+        MatchStats local;           // statistics of a match without a manager
+        MatchStats* stats = nullptr;  // the statistics booked into (a manager's or `local`)
+        int before[2] = {0, 0};     // penalty minutes in `stats` before the match
         int frozen[2] = {-1, -1};  // penalty minutes of a side when the pair-table error replaced its team
-        HokTeam frozen_team[2];  // the record of a replaced team at the moment of the swap (REAL-CODE period 28)
+        HokTeam frozen_team[2];  // the record of a replaced team at the moment of the swap
         bool has_frozen_team[2] = {false, false};
         std::unique_ptr<MatchRun> run;
     };
@@ -154,8 +159,8 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             entries.push_back(std::move(e));
         }
     }
-    // ovl06_161d shows the minute display when a manager's club plays or a switch Ergebnisse is on; ovl14_2630 then sets DS:5A56
-    // when a match of the day has a board. Below speed 70 the display draws (g_match_speed, docs/logic/TORSZENEN_HOOK.md).
+    // The original shows the minute display when a manager's club plays or one of the "Ergebnisse" switches is on; match
+    // messages are then enabled when a match of the day has a board. Below speed 70 the display draws (g_match_speed).
     bool display = g_display_flags[1] || g_display_flags[4] || g_display_flags[7], board = false;
     for (auto& e : entries) { display = display || humans.is_human(e->home) || humans.is_human(e->away); board = board || e->run->has_board(); }
     for (auto& e : entries) e->run->set_messages(display && board);
@@ -164,10 +169,11 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         for (auto& e : entries) live.push_back({e->home, e->away, e->run.get()});
         (*observer)(0, live);
     }
-    // The pair-table error of the original (DEVIATIONS.md): when a penalty of the human club without a bound player ends,
-    // ovr030:0151 writes through the slot -1 record DS:5D8F into the Oberliga row of the pair table (DS:5D7B + 24): the
-    // away team of pair 2 loses bit 0, the home team of pair 3 and the away team of pair 4 become team 0. From then on these
-    // pairs play with the records of the new teams, which they share with the matches those teams play themselves.
+    // The pair-table error of the original (a known bug that is reproduced): when a penalty of the human club without a
+    // bound player ends, the original writes the timer's saved role through its "no player" record, which lands in the
+    // Oberliga row of the day's pair table: the away team of pair 2 loses bit 0, the home team of pair 3 becomes the saved
+    // role and the away team of pair 4 becomes team 0. From then on these pairs play with the records of the new teams,
+    // which they share with the matches those teams play themselves.
     struct SharedTeam { HokTeam team; PenaltyBox box; };
     std::map<int, SharedTeam> shared;  // team id -> current record (and running penalties) of a team that plays in more than one slot
     auto side_state = [](Entry& e, int side) -> HokTeam& { return side == 0 ? e.run->home_mut() : e.run->away_mut(); };
@@ -191,7 +197,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             shared[next] = copy;
             if (!f->has_frozen_team[side]) { f->frozen_team[side] = side_state(*f, side); f->frozen_team[side].penalty_code = side_box(*f, side).code(); f->has_frozen_team[side] = true; }
             side_state(*f, side) = copy.team;
-            // the replaced team keeps the penalty minutes it had so far; the shared record counts on for the new team (REAL-CODE period 28)
+            // the replaced team keeps the penalty minutes it had so far; the shared record counts on for the new team
             if (f->frozen[side] < 0) f->frozen[side] = side_box(*f, side).minutes_assessed();
             side_box(*f, side) = copy.box;
             if (humans.is_human(id) && !humans.is_human(next) && !std::getenv("EM_OLD_DROPHUMAN")) f->run->drop_human(side);
@@ -199,9 +205,9 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (f->home == f->away) f->run->mark_same_club();
             if (std::getenv("EM_DEBUG_PHANTOM")) std::fprintf(stderr, "phantom: Oberliga pair %zu side %d -> team %d (now %d-%d, scheduled %d-%d) at B%zu\n", f->pair, side, next, f->home, f->away, f->scheduled[0], f->scheduled[1], g_borland_log ? g_borland_log->size() : size_t(0));
         }
-        // ovr030:2937 (sub_5F431): the full minute (energy, lines, side swap) belongs to the pairs whose current home team is in
-        // the display list DS:0233, which holds the manager pair of the day; after the rewrite a manager match with team 0 at
-        // home loses it (REAL-CODE: watch on DS:0233 in Köln period 195, the minute draws of periods 179/195/262/265)
+        // The full minute (energy, lines, side swap) belongs to the pairs whose current home team is in the original's
+        // display list, which holds the manager pair of the day; after the rewrite a manager match with team 0 at home
+        // loses it
         if (!std::getenv("EM_OLD_PHANTOMDISPLAY")) {
             std::vector<int> display;
             for (auto& g : entries)
@@ -225,7 +231,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         more = false;
         bool minute_left = false;
         for (auto& e : entries) minute_left = minute_left || e->run->minutes_left();
-        if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
+        if (minute_left)  // the reporter draw at the start of the minute
             if (const int r = reporter_minute_draw(rng, display); r >= 0) for (auto& e : entries) e->run->set_reporter(r);
         for (auto& e : entries) {
             pull_shared(*e);
@@ -234,7 +240,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             if (const int role = e->run->take_phantom_release(); role >= 0) corrupt_pairs(e.get(), role);
         }
         if (observer) (*observer)(minute_number + 1, live);
-        // ovr030:2BA..: after the periods the original reseeds its streams (a Borland draw 100..300, then that many coin draws of the game stream)
+        // after the first and second third the original stirs its streams (a Borland draw 100..300, then that many coin draws of the game stream)
         minute_number++;
         if (brng && (minute_number == 20 || minute_number == 40)) {
             const int spin = brng->range(100, 300);
@@ -245,7 +251,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
     for (auto& e : entries) {
         const MatchResult r = e->run->finish();
         // book every side into the league of the team that actually played (the pair-table error can put a team of another
-        // league into an Oberliga pair, DEVIATIONS.md)
+        // league into an Oberliga pair)
         auto row_of = [&](int team) -> HokTableRow* {
             for (const LeagueDay& ld : days)
                 if (team >= ld.league->first_team && team < ld.league->first_team + kHokLeagueSize) return &ld.league->rows[size_t(team - ld.league->first_team)];
@@ -259,7 +265,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 t.effort_base = m.effort_base;
                 for (int k = 0; k < 2; k++) { t.current_line[k] = m.current_line[k]; t.shift[k] = m.shift[k]; for (int line = 0; line < 4; line++) t.energy[k][line] = m.energy[k][line]; }
                 t.skaters = m.skaters; t.penalty_code = m.penalty_code;
-                if (&t == &teams[0] && t.penalty_code) { t.penalty_code = 0; t.skaters = std::max(t.skaters, 5); }  // REAL-CODE: only team record 0 ends its running penalties with the game (cause open, index 0 as an empty marker?)
+                if (&t == &teams[0] && t.penalty_code) { t.penalty_code = 0; t.skaters = std::max(t.skaters, 5); }  // in the original only team record 0 ends its running penalties with the game (cause unknown)
                 for (int i = 0; i < kTacticSituations; i++) { t.effort[i] = m.effort[i]; t.offence[i] = m.offence[i]; }
             };
             for (int side = 0; side < 2; side++) {
@@ -267,7 +273,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
                 if (e->has_frozen_team[side] && !humans.is_human(e->scheduled[side])) write_back(teams[size_t(e->scheduled[side])], e->frozen_team[side]);
                 const int tid = side == 0 ? e->home : e->away;
                 if (humans.is_human(tid)) continue;
-                if (shared.count(tid)) {  // a record shared by two pairs keeps the running penalties of its box (REAL-CODE period 28: +0x33)
+                if (shared.count(tid)) {  // a record shared by two pairs keeps the running penalties of its box (+0x33)
                     HokTeam m = shared.at(tid).team;
                     m.penalty_code = shared.at(tid).box.code();
                     write_back(teams[size_t(tid)], m);
@@ -276,7 +282,7 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
             }
         }
         book_result_rows(row_of(e->scheduled[0]), row_of(e->scheduled[1]), r);
-        if (false && brng) {  // moved to Game::play_league_day (per league, before the scorers)  // ovl13 table booking (sub_5C067, twice): the morale byte +0x17 follows the goal difference, clamped to 47..53
+        if (false && brng) {  // disabled: moved to Game::play_league_day (per league, before the scorers); the table booking moves the morale byte +0x17 with the goal difference, clamped to 47..53
             const int diff = r.home - r.away;
             auto morale = [&](int team, int d) {
                 const int step = int(brng->range(0, 2 * std::abs(d)));
@@ -292,15 +298,15 @@ std::vector<std::vector<MatchResult>> play_matchdays(const std::vector<LeagueDay
         if (HokTableRow* rh = row_of(e->scheduled[0])) rh->penalty_minutes = uint16_t(rh->penalty_minutes + pm0);
         if (HokTableRow* ra = row_of(e->scheduled[1])) ra->penalty_minutes = uint16_t(ra->penalty_minutes + pm1);
         // a side replaced by the pair-table error: the new team of the same league also gets the whole game of that side
-        // (REAL-CODE period 47: (26,33) -> (26,32) books 4 to 33 and 16 to 32; team 0 of the Bundesliga gets nothing)
+        // (e.g. (26,33) -> (26,32) books 4 minutes to 33 and 16 to 32; team 0 of the first division gets nothing)
         if (!std::getenv("EM_OLD_PMSWAP")) {
             const League& own = *days[e->day].league;
             for (int side = 0; side < 2; side++) {
                 const int now = side == 0 ? e->home : e->away;
                 if (e->frozen[side] < 0 || now == e->scheduled[side] || e->home == e->away) continue;  // one club: its shared box already counts both sides
                 if (now < own.first_team || now >= own.first_team + kHokLeagueSize) continue;
-                // a new team that still plays its own game books the shared record there already (REAL-CODE period 65: 32 in
-                // (27,32) and its own (0,32) gets 25 once)
+                // a new team that still plays its own game books the shared record there already (e.g. 32 in
+                // (27,32) and in its own (0,32) gets its 25 minutes once)
                 bool plays_own = false;
                 for (const auto& g : entries)
                     for (int s = 0; s < 2; s++)

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Injury tables from EM.EXE and the random injury rules (see injuries.hpp).
 #include "game/injuries.hpp"
 
 #include <algorithm>
@@ -6,6 +7,9 @@
 namespace em {
 
 namespace {
+// File offset of the data segment in EM.EXE (header size + segment start); the table offsets
+// below are relative to it: weights (u8[28]), weeks (u8 pairs), career types (u8[9]) and the
+// table of far pointers to the type names.
 constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
 constexpr size_t kWeights = 0x01B9, kWeeks = 0x0181, kCareer = 0x483B, kNames = 0x0A00;
 }  // namespace
@@ -15,7 +19,7 @@ InjuryTables load_injury_tables(const Bytes& exe) {
     for (size_t i = 0; i < kInjuryTypes; i++) {
         t.weight[i] = exe.at(kDgroupFile + kWeights + i);
         t.weeks[i] = {exe.at(kDgroupFile + kWeeks + 2 * i), exe.at(kDgroupFile + kWeeks + 2 * i + 1)};
-        const size_t off = le16(exe, kDgroupFile + kNames + 4 * i);  // far pointer into DGROUP
+        const size_t off = le16(exe, kDgroupFile + kNames + 4 * i);  // offset part of a far pointer into the data segment
         std::string raw;
         for (size_t o = kDgroupFile + off; o < exe.size() && exe[o] != 0; o++) raw += char(exe[o]);
         t.names[i] = iso646de_to_utf8(raw.c_str());

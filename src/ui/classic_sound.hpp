@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
-// Sound of the classic frontend (docs/formats/SOUND.md).
+// Sound of the classic frontend: a small software mixer for the game's VOC samples and CMF music
+// (formats/sound.hpp) and its SDL audio output.
 //
 // Where the original plays sound:
-//   - Title screen (ovr034:0758..07F3): KB\197 is shown, ovr034:007B loads KB\248.vga (CMF) and starts it through
-//     SBFMDRV, the program waits for a key or click (sub_1E26E), then stops the music (ovr034:0174). OpenEM shows
-//     the title (ClassicApplication::show_title); the music starts with the window and stops at the first key or click.
-//   - Goal scenes (ovl14_4938 = ovr038:4938): with the CT-VOICE driver present (DS:4A44) the scene starts KB\237 (an
-//     endless loop, crowd) and restarts it whenever the voice is idle (status word DS:59E4 == 0, ovr038:4E80/4EDB/4F07);
-//     a frame whose byte +3 is s = 1..4 stops the voice and plays KB\(237 + s) (ovr038:4EB5); the end of the scene
-//     stops the voice (ovr038:4FB2). One frame lasts one BIOS tick (sub_1E7F8(1) / sub_1E83E). The Sound Blaster
-//     plays one voice at a time, so a frame sample interrupts the loop. OpenEM starts the track with the first frame of
-//     a drawn goal scene (ClassicMatchFrame::scene, classic_goal_scene.cpp) and stops it after the last one.
-// There is no other sound in EM.EXE: the only callers of the voice and FM wrappers are ovr038 and ovr034.
+//   - Title screen: KB\197 is shown, KB\248.vga (CMF) is loaded and started through SBFMDRV, the program waits
+//     for a key or click, then stops the music. OpenEM shows the title (ClassicApplication::show_title); the
+//     music starts with the window and stops at the first key or click.
+//   - Goal scenes: with the CT-VOICE driver present the scene starts KB\237 (an endless loop, crowd) and restarts
+//     it whenever the voice is idle; a frame whose byte +3 is s = 1..4 stops the voice and plays KB\(237 + s); the
+//     end of the scene stops the voice. One frame lasts one BIOS tick. The Sound Blaster plays one voice at a time,
+//     so a frame sample interrupts the loop. OpenEM starts the track with the first frame of a drawn goal scene
+//     (ClassicMatchFrame::scene, classic_goal_scene.cpp) and stops it after the last one.
+// The original game has no other sound.
 #include "formats/sound.hpp"
 #include "formats/tore.hpp"
 
@@ -26,20 +26,22 @@ namespace em::ui {
 
 struct ClassicMatchFrame;
 
-constexpr int kSoundFirstVoc = 237;                    // KB\237..241
-constexpr int kSoundMusic = 248;                       // KB\248
-constexpr double kSceneFrameSeconds = 65536.0 / 1193182.0;  // one BIOS tick
+constexpr int kSoundFirstVoc = 237;                    // KB\237..241: crowd loop and the four scene samples
+constexpr int kSoundMusic = 248;                       // KB\248: title music (CMF)
+constexpr double kSceneFrameSeconds = 65536.0 / 1193182.0;  // one BIOS tick (about 54.9 ms)
 
 // SDL-free mixer: one voice channel like the CT-VOICE driver, plus the music.
 class ClassicSoundMixer {
 public:
     void set_voices(std::vector<VocSound> voices) { voices_ = std::move(voices); }  // 237, 238..241
     void set_music(std::optional<CmfSong> song) { song_ = std::move(song); }
+    // Starts the title music from the beginning (no effect without a song).
     void start_music();
     void stop_music() { music_.reset(); }
     bool music_playing() const { return music_ != nullptr; }
-    // Goal scene: frame_sounds[i] = byte +3 of frame i.
+    // Goal scene: frame_sounds[i] = byte +3 of frame i. Starts the crowd loop with the first frame.
     void start_scene(std::vector<uint8_t> frame_sounds);
+    // Ends the scene and stops the voice.
     void stop_scene();
     bool scene_active() const { return scene_; }
     int current_voice() const { return voice_; }  // -1 idle, else 0 = KB237 .. 4 = KB241
@@ -47,17 +49,18 @@ public:
     void render(float* out, size_t frames, int rate);
 
 private:
+    // Starts voice index (0 = KB237 .. 4 = KB241) from its beginning; -1 stops the voice.
     void play_voice(int index);
     std::vector<VocSound> voices_;
     std::optional<CmfSong> song_;
-    std::unique_ptr<CmfSequencer> music_;
-    std::vector<uint8_t> scene_sounds_;
-    bool scene_ = false;
-    double scene_time_ = 0.0;
-    long scene_frame_ = -1;
-    int voice_ = -1;
-    double voice_pos_ = 0.0;
-    std::vector<float> music_buffer_;
+    std::unique_ptr<CmfSequencer> music_;  // running music, null when stopped
+    std::vector<uint8_t> scene_sounds_;    // byte +3 of every scene frame
+    bool scene_ = false;                   // a goal scene is running
+    double scene_time_ = 0.0;              // seconds since the scene started
+    long scene_frame_ = -1;                // last scene frame whose sound byte was handled
+    int voice_ = -1;                       // playing voice, -1 idle
+    double voice_pos_ = 0.0;               // position in the voice, in source samples
+    std::vector<float> music_buffer_;      // scratch buffer for the music
 };
 
 // Goals of matches with a board between two consecutive match frames: one entry per goal, true = home side scored.

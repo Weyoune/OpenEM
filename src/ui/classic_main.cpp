@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Entry point of the classic OpenEM program: parses the command line, finds
+// the user's copy of the original game and the save folder, and then either
+// renders one screen to a BMP (--render), runs a headless script (--script)
+// or opens the SDL window and runs the interactive frame loop. The 320x240
+// canvas is scaled up by an integer factor in a resizable window.
 #include "ui/classic_app.hpp"
 #include "ui/classic_keyboard.hpp"
 #include "ui/classic_script.hpp"
@@ -16,7 +21,11 @@
 namespace fs=std::filesystem;
 namespace {
 #ifdef _WIN32
+// Context of the Windows message hook: our window and the optional input trace.
 struct WindowsInputBridge { void* window=nullptr;std::ofstream* trace=nullptr; };
+// Windows message hook: logs raw key messages to the input trace and turns
+// scan-code-less Backspace/Enter/Escape into SDL key events (see
+// classic_keyboard.hpp).
 void SDLCALL input_message(void* user,void* window,unsigned message,Uint64 key,Sint64 details){
     const auto& bridge=*static_cast<WindowsInputBridge*>(user);
     if(window!=bridge.window)return;
@@ -27,7 +36,6 @@ void SDLCALL input_message(void* user,void* window,unsigned message,Uint64 key,S
     }
 }
 #endif
-fs::path project_root(fs::path start){for(int n=0;n<7&&!start.empty();n++,start=start.parent_path())if(fs::is_directory(start/"work"/"EM"))return start;return fs::current_path();}
 // A folder with the user's own copy of the original game: EM.EXE plus the picture folder KB.
 bool is_game_folder(const fs::path& p){
     std::error_code ec;
@@ -35,13 +43,13 @@ bool is_game_folder(const fs::path& p){
            (fs::is_directory(p/"KB",ec)||fs::is_directory(p/"kb",ec));
 }
 // Where the original data is looked for when --data is not given: OPENEM_DATA, then next to the program (the folder
-// itself, EM, data), then the development layout work/EM above the program, then the current folder (itself, EM).
-fs::path find_game_folder(const fs::path& exe_dir,const fs::path& dev_root){
+// itself, EM, data), then the current folder (itself, EM, data). The first folder that holds the game wins; empty if
+// none does.
+fs::path find_game_folder(const fs::path& exe_dir){
     std::vector<fs::path> candidates;
     if(const char* env=std::getenv("OPENEM_DATA"))candidates.push_back(em::ui::path_from_text(env));
     for(const fs::path& base:{exe_dir,fs::current_path()})
         for(const char* sub:{"","EM","data"})candidates.push_back(*sub?base/sub:base);
-    candidates.insert(candidates.begin()+(std::getenv("OPENEM_DATA")?1:0),dev_root/"work"/"EM");  // a source checkout first
     for(const auto& c:candidates)if(is_game_folder(c))return c;
     return {};
 }
@@ -51,7 +59,6 @@ int main(int argc,char**argv){
     bool headless=false;
     try{
         char* base=SDL_GetBasePath();const fs::path exe_dir=base?path_from_text(base):fs::current_path();SDL_free(base);
-        const fs::path root=project_root(exe_dir);
         fs::path data,saves,save,render,input_log,script;
         std::string render_screen="main";int cursor_x=-1,cursor_y=-1;bool new_game=false;
         for(int n=1;n<argc;n++){
@@ -66,15 +73,12 @@ int main(int argc,char**argv){
             else if(option=="--cursor"){const auto comma=value.find(',');if(comma==std::string::npos)throw std::runtime_error("--cursor x,y");cursor_x=std::stoi(value.substr(0,comma));cursor_y=std::stoi(value.substr(comma+1));}
             else if(option=="--render"){render=path_from_text(value);headless=true;}else if(option=="--screen")render_screen=value;else throw std::runtime_error("Unknown option");
         }
-        if(data.empty())data=find_game_folder(exe_dir,root);
+        if(data.empty())data=find_game_folder(exe_dir);
         if(data.empty()||!is_game_folder(data))
             throw std::runtime_error("OpenEM needs your copy of the original game (the folder with EM.EXE and KB). "
                                      "Start with --data <folder>, set OPENEM_DATA, or put the folder next to openem as EM.");
-        // saves: the development layout keeps work/saves; otherwise the user's application data folder
-        std::error_code same_ec;
-        if(!saves.empty()){}
-        else if(fs::equivalent(data,root/"work"/"EM",same_ec)||fs::exists(root/"work"/"saves"))saves=root/"work"/"saves";
-        else{char* pref=SDL_GetPrefPath("OpenEM","OpenEM");saves=pref?path_from_text(pref)/"saves":data/"saves";SDL_free(pref);}
+        // saves: --saves, otherwise the user's application data folder
+        if(saves.empty()){char* pref=SDL_GetPrefPath("OpenEM","OpenEM");saves=pref?path_from_text(pref)/"saves":data/"saves";SDL_free(pref);}
         fs::create_directories(saves);
         // --new-game opens the start menu of a new game (game/new_game.hpp) instead of the default START.HOK
         if(save.empty()&&!new_game&&fs::exists(data/"START.HOK"))save=data/"START.HOK";
@@ -117,7 +121,8 @@ int main(int argc,char**argv){
         SDL_SetWindowsMessageHook(input_message,&bridge);
 #endif
         // One frame of the program: events, tick, draw, present. The match display calls it from the minute observer while
-        // the day is played (ClassicApplication::set_pump), so the minute loop sees clicks like ovl06_2522.
+        // the day is played (ClassicApplication::set_pump), so the minute loop sees clicks as the original's does.
+        // Frames are paced to about 60 per second.
         const auto frame=[&]{
             const uint64_t frame_start=SDL_GetTicks64();
             SDL_Event event;

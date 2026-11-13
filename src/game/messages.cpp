@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Manager message table: formatting of the dated template texts and the table operations declared
+// in messages.hpp (add, flash, delete, sort, per-step aging, enumeration), plus
+// Game::clear_message_flag.
 #include "game/messages.hpp"
 
 #include <algorithm>
@@ -11,11 +14,12 @@
 namespace em {
 namespace {
 constexpr size_t kPlayerBase = 0x4FA5, kPlayerRecord = 0x21;  // record of player ID n at base + n * 0x21
-constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // DS:0393
-// DS:0A70, native character set ('{' = ae).
+// Days per month as used by the game's calendar (no leap years).
+constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+// Month names of the date line, native character set ('{' = ae).
 constexpr const char* kMonths[12] = {"Januar", "Februar", "M{rz", "April", "Mai", "Juni",
                                      "Juli", "August", "Sept.", "Okt.", "Nov.", "Dez."};
-// DS:0CA0
+// Message templates, indexed by MessageKind.
 constexpr const char* kTemplates[7] = {
     "$ bietet Ihnen an, $^Jahre zu verl{ngern.^",
     "$ ist an $^interessiert.^",
@@ -26,14 +30,17 @@ constexpr const char* kTemplates[7] = {
     "$ ist Sportinvalide.^Er verl{~t Ihre Mannschaft endg}ltig.^",
 };
 
+// Pointer to the first byte of entry `index` (0..23).
 uint8_t* entry(Bytes& s, int index) { return s.data() + kMessageBase + size_t(index) * kMessageSize; }
 const uint8_t* entry(const Bytes& s, int index) { return s.data() + kMessageBase + size_t(index) * kMessageSize; }
+// Throws when the state is too small to hold the message table and the "new message" flags.
 void check(const Bytes& s) {
     if (s.size() < kMessageBase + kMessageSlots * kMessageSize || s.size() <= kMessageNewFlag + 4)
         throw std::out_of_range("messages: state too small");
 }
-// sub_19B54 with DS:038D != 0 (set by the message routine: no thousands separators)
+// Numbers in messages are printed plainly, without the thousands separators used elsewhere.
 std::string number(long value) { return std::to_string(value); }
+// The message back reference (+0x1E) in the record of player `id`; nullptr for IDs outside 1..199.
 uint8_t* player_handle(Bytes& s, int id) {
     if (id <= 0 || id >= 200) return nullptr;
     return s.data() + kPlayerBase + size_t(id) * kPlayerRecord + 0x1E;
@@ -46,7 +53,7 @@ std::string native_message_text(BorlandRandom& rng, const MessageDate& date, Mes
 }
 
 std::string native_message_text(int days_back, const MessageDate& date, MessageKind kind, const std::vector<MessageArg>& args) {
-    // ovr036:0242..0347: the date line, dated back 0..3 days
+    // The date line, dated back 0..3 days. A day beyond the month's length is first clamped to it.
     int day = date.day - days_back;
     int month = std::clamp(date.month - 1, 0, 11);
     if (kMonthDays[month] < day) day = kMonthDays[month];
@@ -56,7 +63,7 @@ std::string native_message_text(int days_back, const MessageDate& date, MessageK
         day += kMonthDays[month];
     }
     std::string text = number(day) + ". " + kMonths[month] + " " + number(year) + "^";
-    // ovr036:0351..0447: template with substitutions
+    // The template with its substitutions; missing arguments print as an empty string or 0.
     const int k = int(kind);
     if (k < 0 || k > 6) throw std::invalid_argument("messages: unknown template");
     size_t arg = 0;
@@ -76,7 +83,7 @@ int native_add_message(Bytes& state, BorlandRandom& rng, const MessageDate& date
                        const std::vector<MessageArg>& args, int manager, bool general, int player_id, bool show_now) {
     check(state);
     const std::string text = native_message_text(rng, date, kind, args);
-    int slot = -1;  // ovr036:0011 first free entry
+    int slot = -1;  // first free entry
     for (int i = 0; i < kMessageSlots; i++)
         if (entry(state, i)[0] == 0) { slot = i; break; }
     if (slot < 0) return 0;
@@ -93,7 +100,7 @@ int native_add_message(Bytes& state, BorlandRandom& rng, const MessageDate& date
 
 void native_flash_message(Bytes& state, const std::string& text) {
     check(state);
-    // ovr026:07F7..09F3: the message goes into the first free entry, is shown at once and deleted again; the text stays
+    // The message goes into the first free entry, is shown at once and deleted again; the text stays
     for (int i = 0; i < kMessageSlots; i++) {
         uint8_t* e = entry(state, i);
         if (e[0] != 0) continue;
@@ -188,7 +195,7 @@ MessageView native_message(const Bytes& state, int index) {
         if (e[3 + n] == '^') { v.lines.push_back(line); line.clear(); }
         else line += char(e[3 + n]);
     }
-    // ovr036:061C: only text ended by '^' is drawn
+    // Only text ended by '^' is drawn, so a trailing unterminated line is dropped.
     return v;
 }
 
@@ -204,7 +211,7 @@ std::vector<MessageView> native_messages(const Bytes& state, int manager) {
 #include "game/game.hpp"
 
 namespace em {
-// ovr034:2139: the main menu clears the manager's flag before it opens the message field.
+// The main menu clears the manager's "new message" flag before it opens the message field.
 void Game::clear_message_flag(int manager) {
     if (manager >= 0 && manager < 4) save_.state.at(kMessageNewFlag + size_t(manager)) = 0;
 }

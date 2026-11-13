@@ -1,4 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic advertising page (ui/classic_advertising.cpp): the footer with income and
+// expenses, the click areas of the boards, shirt, TV and facility surfaces, the offer browser with its
+// sponsor texts, the free-board capacity and pending renewals. The page must never write to the game
+// state; the stored income is refreshed by the game core when the page is entered.
+//
+// Usage: classic_advertising_tests [DATA [REFERENCE]] — without arguments only the synthetic cases run;
+// with DATA (folder with EM.EXE) and REFERENCE (folder with MONAT1.HOK) the view of a real save is checked.
+//
+// Advertising records are 10 bytes: +0 monthly amount (i32), +4 boards, +5 months, +6 flags (0x80 = may be
+// cancelled), +7 sponsor id, +8 minimum club image. Offers live at state 0xA52C, contracts at 0xACFC.
 #include "ui/classic_advertising.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -7,14 +17,19 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `value` is false.
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
+// Writes `value` little-endian as 4 bytes at state offset `at`.
 void put32(HokFile& h,size_t at,int32_t value) {
     for(size_t i=0;i<4;++i) h.state.at(at+i)=uint8_t(uint32_t(value)>>(8*i));
 }
+// Writes one 10-byte advertising record (offer or contract) at state offset `at`; the minimum image is 68.
 void put_record(HokFile& h,size_t at,int32_t amount,int boards,int months,int flags,int sponsor) {
     put32(h,at,amount); h.state.at(at+4)=uint8_t(boards); h.state.at(at+5)=uint8_t(months);
     h.state.at(at+6)=uint8_t(flags); h.state.at(at+7)=uint8_t(sponsor); h.state.at(at+8)=68;
 }
+// A minimal save for the page: difficulty byte 2 (0xAEB4), cost factor 100 (0x06B0), one manager, a stadium
+// facility level 2 and three board offers in slots 2..4 of the offer table (slot 4 is MONAT1's real offer).
 HokFile fixture() {
     HokFile h; h.state.assign(47761,0); h.teams.resize(150);
     h.state.at(0xaeb4)=2; put32(h,0x06b0,100); h.state.at(0x0dc6)=1;
@@ -24,6 +39,8 @@ HokFile fixture() {
     put_record(h,0xa52c+40,64342,2,24,0,4); //independent MONAT1 raw offer vector
     return h;
 }
+// The page as it is entered: nothing selected, the footer from the saved difficulty and cost factor, and the
+// exact click areas of the seven boards, shirt/TV and facility surfaces.
 void entry_and_surfaces() {
     const auto h=fixture(); const auto before=h.state; FinanceTables t;
     t.level=5; t.cost_factor=999; //the saved values must override this cache
@@ -46,6 +63,8 @@ void entry_and_surfaces() {
             "facility requires exact level2 and has35pixel click row despite36pixel crop spacing");
     require(h.state==before,"entry raw view never writes stored income or changes offers");
 }
+// The offer browser of a board: it starts at the highest filled offer slot, shows the offer's terms and the
+// sponsor's information text from EM.EXE, and the arrow and button click areas.
 void offers_and_info() {
     auto h=fixture(); const FinanceTables t;
     const auto v=classic_advertising_view(h,t,{3,-1,true});
@@ -65,7 +84,7 @@ void offers_and_info() {
             classic_advertising_hit(v,145,191).action==ClassicAdvertisingAction::PreviousOffer &&
             classic_advertising_hit(v,146,191).action==ClassicAdvertisingAction::None &&
             classic_advertising_hit(v,145,200).action==ClassicAdvertisingAction::NextOffer,
-            "645B0968 arrow accepts8x9 area, narrower than10x17 painted widget");
+            "offer arrow accepts8x9 area, narrower than10x17 painted widget");
     require(v.info[0].native=="Firmen-Info: " && v.info[0].baseline==100 && v.info[0].color==7 &&
             v.info[1].baseline==113 && v.info[2].baseline==121 && v.info[4].baseline==137 &&
             v.info[1].native=="Jeden Monat neu! Spieletests, Insiderberichte und alles" &&
@@ -83,6 +102,8 @@ void offers_and_info() {
     require(tv.maxOffer==4 && !tv.canInfo && tv.nativeSponsor=="ARB",
             "TV uses separate five-entry sponsor name range and noInfo");
 }
+// Free boards (cancellable contracts count as free), a pending renewal option shown without resolving it,
+// and the income computed from the raw team bytes and the occupied squad count.
 void capacity_options_and_raw_income() {
     auto h=fixture(); const FinanceTables t;
     for(int i=0;i<6;++i) put_record(h,0xacfc+size_t(i)*10,3000,8,12,0,i);
@@ -106,6 +127,8 @@ void capacity_options_and_raw_income() {
     try {(void)classic_advertising_view(h,t,{3,10,true});} catch(const FormatError&) {rejected=true;}
     require(rejected,"out-of-atlas offer index is rejected explicitly");
 }
+// The view of the reference save MONAT1.HOK with the tables of the user's EM.EXE, and a check that drawing the
+// page, the offer browser and the info box leaves the state untouched.
 void original_files(const std::filesystem::path& data,const std::filesystem::path& refs) {
     const auto exe=read_file(data/"EM.EXE"); const auto t=load_finance_tables(exe);
     const auto h=decode_hok(read_file(refs/"MONAT1.HOK")); const auto before=h.state;

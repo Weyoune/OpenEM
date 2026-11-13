@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Palette editor document: load, edit (six bits per channel) and save KB\21.vga and KB\247.vga (see palette_doc.hpp).
 #include "editor/palette_doc.hpp"
 
 #include <algorithm>

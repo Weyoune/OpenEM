@@ -1,23 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The live DEB cup draw (docs/CLASSIC_UI.md "DEB-Pokal-Auslosung").
+// The live DEB cup draw ("DEB-Pokal Auslosung") in the classic UI.
 //
-// ovl05_4653 (ovr029:4653..492D) draws the board (frame 13 x 12, "DEB-Pokal Auslosung", n / 2 rows of two KB25 bars)
-// and asks "An Alle:" whether to follow the draw live; the answer is DS:E068. Asked only with the DEB-Pokal display
-// switch on (DS:0227), not in the WM-only mode (DS:D0B9 = 1), with four or more clubs and outside the game set-up
-// DS:01DB; for two clubs (final) the flag is set without board or question. With "Aber klar" the draw routine
-// (ovl05_4c7b for the first round of a new game, ovl05_536d for the later rounds) uncovers the places in the Borland
-// order rand(0, n - 1), drawn again while the place is open (game/competitions.hpp cup_reveal_order); the draws are
-// part of the game's random stream, so the answer goes into the game logic (NewGameOptions::cup_live,
-// Game::set_cup_draw_decider).
+// The game draws a board (frame 13 x 12 tiles, title "DEB-Pokal Auslosung", n / 2 rows of two KB/25 bars) and asks
+// "An Alle:" whether to follow the draw live. It asks only with the DEB-Pokal display switch on, not in the
+// World-Championship-only mode, with four or more clubs and not during the game set-up; for two clubs (the final) the
+// answer is "yes" without board or question. With "Aber klar" the places are uncovered in the order produced by
+// rand(0, n - 1), drawn again while the chosen place is already open (game/competitions.hpp cup_reveal_order). These
+// draws are part of the game's random stream, so the answer is part of the game logic (NewGameOptions::cup_live,
+// Game::set_cup_draw_decider) and not merely a display option.
 //
-// ovl05_492e(place, club, fast, competition) uncovers one place (ovr029:495F..4B91): a 120 x 10 bar of colour 4 with
-// "<club> (<league>)" in font 3, centred in 2..0x77 at baseline 7, colour DS:4E17[league] (9/10/11) or 0x18 for a
-// human club. Place p lies at x = DS:4DD0[p % 2] (37 / 164), y = 0x80 - (n / 2 * 11) / 2 + p / 2 * 11. The bar rolls in
-// from the top over ten steps: in step s the rows 0..s of the new bar stand above the rows 0..8-s of the KB25 bar
-// (sub_21BC9 into a work buffer, then onto the screen), two BIOS ticks per step (sub_1ECA5 twice). A mouse press
-// (DS:A9E6 = 1 after FUN_199f_0878) makes the rest fast: only the last step, one tick. ovl05_4b97 then writes
-// "TASTE DR]CKEN" (DS:2ACF, font 3, colour 7, centred in 0x5A..0xED at baseline 0xDD), waits for a press (sub_19B08)
-// and shows the cup page (sub_40A03(competition, 0) = 4996:38F3).
+// Uncovering one place: a 120 x 10 bar of colour 4 with "<club>(<league>)" in the small font, centred in x 2..0x77 at
+// baseline 7, in the league colour 9/10/11 or 0x18 for a club run by a human manager. Place p lies at x = 37 (even p)
+// or 164 (odd p), y = 0x80 - (n / 2 * 11) / 2 + p / 2 * 11. The bar rolls in from the top over ten steps: in step s the
+// rows 0..s of the new bar stand above the rows 0..8-s of the KB/25 bar, two BIOS timer ticks (55 ms each) per step.
+// A mouse press makes the rest fast: only the last step, one tick per place. Afterwards "TASTE DR]CKEN" (colour 7,
+// centred in 0x5A..0xED at baseline 0xDD) waits for a press, and then the cup page is shown.
 #include "ui/classic_app.hpp"
 #include "ui/classic_cup.hpp"
 
@@ -27,28 +24,34 @@
 namespace em::ui {
 namespace {
 constexpr uint64_t kTickMs = 55;                       // one BIOS tick
-constexpr std::array<uint8_t, 3> kLeagueColor{9, 10, 11};  // DS:4E17
-constexpr size_t kTeams = 0x17E7, kTeamSize = 0x3D;
-// sub_42BB5: 1 below DS:07C1 (12), 2 below DS:07C2 (24), 4 up to DS:06AD, else 1; the bar shows (value >> 1) + 1.
+constexpr std::array<uint8_t, 3> kLeagueColor{9, 10, 11};  // label colour per league (Bundesliga, Zweite Liga, Oberliga)
+constexpr size_t kTeams = 0x17E7, kTeamSize = 0x3D;        // save-state team records (name in the first 22 bytes)
+// League of a club for its label, 0-based: the game's league flag is 1 for teams below 12, 2 below 24, 4 up to 52,
+// else 1, and the bar shows (flag >> 1) + 1, i.e. 1/2/3.
 int cup_league(int team) { return team < 12 || team > 52 ? 0 : team < 24 ? 1 : 2; }
+// Top-left corner of place p's bar on the board for a draw of `clubs` clubs.
 int place_x(int place) { return place % 2 ? 164 : 37; }
 int place_y(int clubs, int place) { return 0x80 - ((clubs >> 1) * 11 >> 1) + place / 2 * 11; }
 }  // namespace
 
+// State of a running live cup draw (ClassicApplication::cup_live_).
 struct ClassicApplication::CupLiveDraw {
     std::vector<int> places, order;    // club per place, uncovering order
-    std::vector<std::string> labels;   // native "<club> (<league>)" per place
-    std::vector<uint8_t> colors;
+    std::vector<std::string> labels;   // "<club>(<league>)" per place, game encoding
+    std::vector<uint8_t> colors;       // label colour per place
     size_t shown = 0;                  // places uncovered completely (order[0..shown))
-    int step = 0;                      // step of order[shown]
-    bool fast = false;
-    uint64_t next = 0;
-    bool waiting = false;              // "TASTE DR]CKEN"
-    bool page = false;                 // in-day: the cup page of the staged game
-    bool in_day = false;
+    int step = 0;                      // roll-in step 0..9 of order[shown]
+    bool fast = false;                 // a press made the rest fast
+    uint64_t next = 0;                 // time (ms, classic_ticks) of the next step
+    bool waiting = false;              // "TASTE DR]CKEN" shown, waiting for a press
+    bool page = false;                 // the cup page of the game after the draw is shown
+    bool in_day = false;               // the draw runs inside a day advance (not at a new game)
     std::unique_ptr<HokFile> after;    // the game after the draw (cup page)
 };
 
+// Connects the game session's cup-draw callbacks: the decider asks the
+// question, and the reveal callback runs the animation inside the day by
+// pumping the frontend loop until it is finished.
 void ClassicApplication::install_cup_draw_handlers() {
     session_.set_cup_draw_handlers([this](int clubs) { return cup_draw_question(clubs); },
                                    [this](const Game& game, const std::vector<int>& order, const std::vector<int>& places) {
@@ -62,8 +65,8 @@ void ClassicApplication::install_cup_draw_handlers() {
 }
 
 // Inside advance_day (Game::set_cup_draw_decider): the minutes of the day so far are shown first (the original plays the
-// cup games before ovl05_536d), then the board with the question. Without the frontend's pump (headless runs) the
-// answer is "Kein Gedanke".
+// cup games before it draws the next round), then the board with the question. Without the frontend's pump (headless
+// runs) the answer is "Kein Gedanke". Returns true to follow the draw live.
 bool ClassicApplication::cup_draw_question(int clubs) {
     if (!pump_) return false;
     struct Guard {  // tick() must not start another day while the frontend loop runs inside this one
@@ -84,6 +87,9 @@ bool ClassicApplication::cup_draw_question(int clubs) {
     return cup_answer_.value_or(false);
 }
 
+// Starts the animation. after: the game state after the draw (labels and the
+// cup page come from it); places: club per place; order: the order in which
+// places are uncovered; in_day: inside a day advance rather than at a new game.
 void ClassicApplication::start_cup_live(const HokFile& after, const std::vector<int>& places, const std::vector<int>& order,
                                         bool in_day) {
     if (places.empty() || order.size() != places.size()) return;
@@ -99,7 +105,7 @@ void ClassicApplication::start_cup_live(const HokFile& after, const std::vector<
         for (size_t k = 0; k < 22 && s.at(kTeams + size_t(team) * kTeamSize + k); k++)
             name.push_back(char(s.at(kTeams + size_t(team) * kTeamSize + k)));
         const int league = cup_league(team);
-        c->labels.push_back(name + "(" + std::to_string(league + 1) + ")");  // DS:4E79 "(", sub_19CB2, DS:4E7B ")"
+        c->labels.push_back(name + "(" + std::to_string(league + 1) + ")");  // name, "(", league number, ")"
         uint8_t color = kLeagueColor[size_t(league)];
         for (int m = 0; m < humans; m++)
             if (s.at(0x0DCD + size_t(m) * 0x1AF + 0x14) == team) color = 0x18;
@@ -107,11 +113,13 @@ void ClassicApplication::start_cup_live(const HokFile& after, const std::vector<
     }
     c->next = classic_ticks() + 2 * kTickMs;
     // the final (two clubs): no board and no question; after the draw the original shows the cup page "Endspiel" and waits
-    // for a click (REAL-CODE period 54). The two bars of ovl05_492e over the previous screen are not drawn here.
+    // for a click. The two bars the game briefly draws over the previous screen are not drawn here.
     if (in_day && places.size() == 2 && !std::getenv("EM_OLD_FINALPAGE")) c->page = true;
     cup_live_ = std::move(c);
 }
 
+// Draws the board with every place in its current state (covered KB/25 bar,
+// rolling in, or uncovered), or the cup page once the draw is done.
 void ClassicApplication::draw_cup_live() {
     const auto& c = *cup_live_;
     if (c.page) {
@@ -132,21 +140,21 @@ void ClassicApplication::draw_cup_live() {
             continue;
         }
         if (s < 9) canvas_.blit(25, x, y + s + 1, 0, 0, 0x78, 9 - s, true, 0xC0);
-        canvas_.rect(x, y, x + 0x77, y + s, 4);  // sub_19820 colour 4, rows 0..s
+        canvas_.rect(x, y, x + 0x77, y + s, 4);  // the new bar in colour 4, rows 0..s
         // the text of the bar, clipped to the rows already rolled in (font 3 lies in rows 0..9 of the bar)
         ClassicCanvas& cv = canvas_;
         std::vector<uint8_t> below;
         for (int row = s + 1; row < 10; row++)
             for (int col = 0; col < 0x78; col++) below.push_back(cv.pixels().at(x + col, y + row));
-        canvas_.text_native(ClassicFontId::Mini, x + 2, y + 7, c.labels[size_t(p)], c.colors[size_t(p)], 0, x + 0x77);  // black shadow (REAL-CODE)
+        canvas_.text_native(ClassicFontId::Mini, x + 2, y + 7, c.labels[size_t(p)], c.colors[size_t(p)], 0, x + 0x77);  // with a black shadow, as in the game
         size_t i = 0;
         for (int row = s + 1; row < 10; row++)
             for (int col = 0; col < 0x78; col++) cv.pixels().at(x + col, y + row) = below[i++];
     }
-    // a new game: where the question dialog stood, the original's board under it carries left bars 3 pixels wider
-    // (x 157..159 stay KB25 texture beside the uncovered places; REAL-CODE live draw of 12.11.2026, rows 104..183)
+    // At a new game the original leaves a remnant where its question dialog stood: within rows 107..183 the left bars
+    // appear 3 pixels wider, i.e. x 157..159 keep the bar-slot texture beside the uncovered places. Reproduced here.
     if (!c.in_day && !std::getenv("EM_OLD_LIVESTRIP")) {
-        // the colours of a bar slot: top edge 60 80 90, body 30 50 60, bottom edge 20 30 50 (8-bit RGB of the capture)
+        // the colours of a bar slot (8-bit RGB): top edge 60 80 90, body 30 50 60, bottom edge 20 30 50
         auto index_of = [&](uint8_t r, uint8_t g, uint8_t b) {
             const auto& pal = canvas_.palette().rgb;
             for (size_t i = 0; i < pal.size(); i++)
@@ -165,9 +173,12 @@ void ClassicApplication::draw_cup_live() {
                 }
             }
     }
-    if (c.waiting) canvas_.text_native(ClassicFontId::Mini, 0x5A, 0xDD, "TASTE DR]CKEN", 7, 0, 0xED);  // black shadow (REAL-CODE)
+    if (c.waiting) canvas_.text_native(ClassicFontId::Mini, 0x5A, 0xDD, "TASTE DR]CKEN", 7, 0, 0xED);  // with a black shadow, as in the game
 }
 
+// Advances the roll-in animation according to the elapsed time: one step
+// per two ticks, or one whole place per tick in fast mode. Sets waiting
+// once all places are uncovered.
 void ClassicApplication::tick_cup_live() {
     auto& c = *cup_live_;
     if (c.waiting || c.page || c.shown >= c.order.size()) {
@@ -190,17 +201,20 @@ void ClassicApplication::tick_cup_live() {
 bool ClassicApplication::cup_live_waiting() const { return cup_live_ && cup_live_->waiting && !cup_live_->page; }
 bool ClassicApplication::cup_live_page() const { return cup_live_ && cup_live_->page; }
 
+// A press during the animation makes the rest fast; at "TASTE DR]CKEN" it
+// continues to the cup page (inside a day) or to the cup page opened from
+// the main menu (new game). The cup page closes with the right button.
 void ClassicApplication::click_cup_live(int, int, bool right) {
     auto& c = *cup_live_;
-    if (c.page) {  // the cup page (4996:38F3) ends with the right button, as from the menu
+    if (c.page) {  // the cup page ends with the right button, as from the menu
         if (right) cup_live_.reset();
         return;
     }
-    if (!c.waiting) {  // ovr029:4B00 DS:A9E6 = 1: the rest goes fast
+    if (!c.waiting) {  // a press while places are rolling in: the rest goes fast
         c.fast = true;
         return;
     }
-    if (c.in_day) {  // sub_40A03 inside the day: the cup page of the game after the draw
+    if (c.in_day) {  // inside the day: the cup page of the game after the draw
         c.page = true;
         return;
     }
@@ -208,7 +222,8 @@ void ClassicApplication::click_cup_live(int, int, bool right) {
     open_cup();  // a new game: the cup page, then the main menu
 }
 
-// The answer of the start question: a new game waits for it (the live draw takes Borland draws before the market days).
+// The answer of the start question: a new game waits for it, because the live draw consumes random numbers before the
+// market days. Starts the pending new game with that answer and, if "yes", runs the live draw of the first round.
 void ClassicApplication::finish_new_game(bool cup_live) {
     if (!pending_start_) return;
     auto pending = std::move(*pending_start_);

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Loan (ovr035:1118, loan flag) and talent scout (ovr035:08D5, seg002:0AC5) of the transfer page.
-// The starting position is the native DOSBox capture nativepurchase-before.hok (Frosch at pool slot 3).
-// Expected draw counts and record fields follow the disassembly cited in src/game/loan.cpp and talent.cpp.
+// Tests for the loan purchase and the talent scout of the transfer page (src/game/loan.cpp,
+// src/game/talent.cpp). The starting position is a reference save state recorded with the
+// original game, nativepurchase-before.hok (the player Frosch is offered at transfer-pool
+// slot 3). The test checks the exact number of random draws each action consumes and the
+// squad/pool record fields it writes.
+// Arguments: the game data folder (EM.EXE) and the folder holding the reference save.
 #include "game/game.hpp"
 #include "game/checkpoint.hpp"
 #include "game/native_roster.hpp"
@@ -12,24 +15,33 @@
 using namespace em;
 namespace fs = std::filesystem;
 
+// Throws `message` as a test failure unless `ok`.
 static void require(bool ok, const std::string& message) { if (!ok) throw std::runtime_error(message); }
+// Current state of the game's Borland-compatible random generator.
 static uint32_t seed_of(const Game& g) { return decode_game_checkpoint(g.checkpoint_bytes()).borland_random; }
+// Generator state after `draws` calls starting from `seed`; every range() call advances the
+// generator by exactly one step regardless of its bounds.
 static uint32_t after_draws(uint32_t seed, int draws) {
     BorlandRandom r(seed);
     for (int n = 0; n < draws; n++) (void)r.range(0, 1);
     return r.state();
 }
+// Returns a copy of the encoded save `hok` with `bytes` written into its state at offset `at`.
 static Bytes with_state(const Bytes& hok, size_t at, std::initializer_list<uint8_t> bytes) {
     HokFile h = decode_hok(hok);
     size_t n = at;
     for (uint8_t b : bytes) h.state.at(n++) = b;
     return encode_hok(h);
 }
+// State layout: kPool - transfer pool (52-byte records), kSquad - squad block of manager 0
+// (52-byte records), kPlayers - global player table (33-byte records, +0x14 age, +0x1A owner
+// kind, +0x1D team), kRecord - size of a pool/squad record. Manager 0's manager block starts at
+// 0x0DCD; +0x18F there is the cash balance (i32) and +0xEC the talent-search day counter.
 constexpr size_t kPool = 0x81CD, kSquad = 0x696D, kPlayers = 0x4FC6, kRecord = 52;
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 3) throw std::runtime_error("loan_talent_tests DATA NATIVE_CAPTURE_FOLDER");
+        if (argc != 3) throw std::runtime_error("loan_talent_tests DATA REFERENCE_SAVE_FOLDER");
         const fs::path data = argv[1], native = argv[2];
         const Bytes exe = read_file(data / "EM.EXE"), before = read_file(native / "nativepurchase-before.hok");
         constexpr uint32_t seed = 1617108858u;
@@ -93,7 +105,7 @@ int main(int argc, char** argv) {
                     "money check after both seller draws, pool unchanged");
             (void)poor_before;
 
-            // Sponsor offer (seg001:223E): rand(0,6) == 0, then fee * rand(25,65) / 30000 * 300 raw. The UI asks
+            // Sponsor offer: rand(0,6) == 0, then fee * rand(25,65) / 30000 * 300 raw. The UI asks
             // afterwards; accepting books the offer without further draws.
             int offers = 0;
             for (uint32_t s = 1; s <= 60 && offers < 2; s++) {
@@ -131,7 +143,7 @@ int main(int argc, char** argv) {
             require(game.start_talent_search() == TalentResult::Running && game.checkpoint_bytes() == running,
                     "a running search blocks the button without draws");
 
-            // Cash equal to the price is not enough (strict comparison, ovr035:09A8).
+            // Cash equal to the price is not enough (the original compares strictly).
             const uint32_t p = uint32_t(price);
             Game exact(exe, with_state(before, 0x0DCD + 0x18F, {uint8_t(p), uint8_t(p >> 8), uint8_t(p >> 16), uint8_t(p >> 24)}), seed);
             const Bytes exact_before = exact.checkpoint_bytes();
@@ -139,7 +151,9 @@ int main(int argc, char** argv) {
                     "cash == price refused without draws");
 
             // Evaluation: counter 1 ends at the next twice-weekly step. Try several seeds; both outcomes
-            // must be consistent (success <=> one more squad player with the native profile).
+            // must be consistent (success <=> one more squad player with the talent profile: a
+            // formerly free player (owner 6, now 0), ID <= 179, age 18..22, 2..3 contract years,
+            // both nibbles of +0x19 in 3..12).
             int successes = 0, failures = 0;
             for (uint32_t s = 1; s <= 40 && (successes == 0 || failures == 0); s++) {
                 Game g(exe, with_state(before, 0x0DCD + 0xEC, {1}), s * 7919u);

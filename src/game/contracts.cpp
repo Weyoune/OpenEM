@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Player market value, salary and contract demands (formulas in contracts.hpp).
 #include "game/contracts.hpp"
 
 #include <algorithm>
@@ -6,13 +7,18 @@
 namespace em {
 
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
+// File offset of the initialised data of EM.EXE (header size + start of the data segment), see schedule.cpp.
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
+// Table offsets relative to kDgroupFile (see ContractTables)
 constexpr size_t kWeights = 0x5312, kLeagueBonus = 0x52C2, kLevel = 0x0ED8;
 constexpr size_t kClassLimit1 = 0x07C1, kClassLimit2 = 0x07C2, kClassLimit3 = 0x06AD;
+// Savegame state offsets (formats/hok.hpp)
 constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618;
 constexpr size_t kPlayers = 0x4FC6, kPlayerRecord = 0x21;
 
-int team_class(const ContractTables& t, int team) {  // ovl05_5aa5 / 2
+// League class of a team for the salary bonus: 0 first division, 1 second division, 2 Oberliga (up to the third
+// limit); everything else counts as 0.
+int team_class(const ContractTables& t, int team) {
     if (team < t.class_limit[0]) return 0;
     if (team < t.class_limit[1]) return 1;
     if (team <= t.class_limit[2]) return 2;
@@ -66,8 +72,8 @@ long player_worth(const ContractTables& t,const ContractPlayer& p,Worth kind,con
     const auto& w = t.weights[size_t(kind)];
     long v = (p.skill1 + p.skill2) / 2 * w[0] / 100;
     const int goals = std::min((p.league_goals * 30 + p.cup_goals * 30 + p.other_goals * 40) / 100, 20);
-    // 16-bit arithmetic as in the original (IMUL/ADD on AX, then unsigned DIV): the sum wraps at 65536
-    // (found by the REAL-CODE differential test; irrelevant below about 650 games).
+    // 16-bit arithmetic as in the original (signed multiply and add, then an unsigned division): the sum wraps at
+    // 65536 (irrelevant below about 650 games).
     const int games = std::min(int(uint16_t(p.games[0] * 50 + p.games[1] * 20 + p.games[2] * 30) / 100), 200);
     v += w[1] * (goals * 100 / 20) / 100;
     v += w[2] * (games * 100 / 200) / 100;
@@ -114,6 +120,7 @@ long renewal_demand(const ContractTables& t, const ContractPlayer& p, int years,
 }  // namespace em
 
 namespace em {
+// Reproduces the original's slot-3 age bug (see contracts.hpp); matchday 0 of 44 and season day 233.
 long season_change_demand(const ContractTables& t, const HokFile& h, int m, const ContractPlayer& p, int years, int mood,
                           BorlandRandom& rng) {
     ContractPlayer aged = p;

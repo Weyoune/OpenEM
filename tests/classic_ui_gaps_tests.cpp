@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Remaining UI pieces outside the match view (docs/CLASSIC_UI.md "Titelbild, Startmenü-Einstellungen, Pokal live"):
-//   - title screen KB\197 (ovr034:0799..07E5) until a key or click
-//   - Statistiken -> Spieler: a press on a listed player opens the player page (ovr025:0CDA..0DCB)
-//   - start menu settings (ovr027:06C6..0A39) and their effect on the new game (ovr027:1808..1863)
-//   - the live DEB cup draw: at the start of a new game (ovl05_4c7b) and in a later round (ovl05_536d)
-//   - the end of the game at the end year (ovr034:0A84)
+// Remaining UI pieces outside the match view ("Titelbild, Startmenü-Einstellungen, Pokal live"):
+//   - title screen KB\197 until a key or click
+//   - Statistiken -> Spieler: a press on a listed player of a human squad opens the player page
+//   - start menu settings (level, end year, squad size, league/WM mode) and their effect on the new game
+//   - the live DEB cup draw: at the start of a new game and in a later round
+//   - the end of the game at the end year
+//
+// Usage: classic_ui_gaps_tests DATA REFERENCE WORK — REFERENCE holds START.HOK, SAISEND.HOK and further saves;
+// WORK is emptied and used for files the test writes. The UI runs on a virtual clock.
 #include <SDL.h>
 
 #include <algorithm>
@@ -25,18 +28,24 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
+// Number of failed checks.
 int failures = 0;
+// Reports and counts a failed check without stopping the test.
 void check(bool condition, const char* message) {
     if (!condition) {
         std::fprintf(stderr, "FAILED: %s\n", message);
         failures++;
     }
 }
+// Throws with `message` when `condition` is false.
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// The virtual time in ms that the classic UI reads instead of the real clock; the test advances it by hand.
 uint64_t virtual_now = 1000;
+// Clock function installed with set_classic_clock.
 uint64_t virtual_clock() { return virtual_now; }
+// True when `order` contains each of 0..n-1 exactly once.
 bool is_permutation_of_places(const std::vector<int>& order, size_t n) {
     std::vector<int> sorted = order, expected(n);
     std::iota(expected.begin(), expected.end(), 0);
@@ -114,11 +123,11 @@ int main(int argc, char** argv) {
             step_new_game_option(o, 0, +1);
             step_new_game_option(o, 0, +1);
             step_new_game_option(o, 0, +1);
-            check(o.values[0] == 5, "level choice stops at DS:011C = 5");
+            check(o.values[0] == 5, "level choice stops at 5");
             for (int i = 0; i < 5; i++) step_new_game_option(o, 1, -1);
             check(o.values[1] == 0, "end choice down to 0 (1994)");
             step_new_game_option(o, 2, +1);
-            check(o.values[2] == 0, "squad size stays 0 while the end choice is 0 (ovr027:08DE)");
+            check(o.values[2] == 0, "squad size stays 0 while the end choice is 0");
             step_new_game_option(o, 1, +1);
             step_new_game_option(o, 2, +1);
             step_new_game_option(o, 1, -1);
@@ -152,20 +161,22 @@ int main(int argc, char** argv) {
                 for (int x = 0xC3; x < 0xC3 + 0x71; x++) changed += pa[size_t(y) * 320 + size_t(x)] != pb[size_t(y) * 320 + size_t(x)];
             check(changed > 0, "the option cells show the new values");
 
-            // the settings go into the new game (one manager: the start state; ovr027:1808..1863)
+            // the settings go into the new game (one manager: the start state). State fields: 0x28..0x2B the four
+            // option values, 0xAEB4 level, 0xAEB5 end year (u16), 0x025A game mode, 0x06AE highscore list number,
+            // manager block +0x18F starting balance.
             const Database db = decode_db(read_file(data / "KB" / "23.vga"));
             NewGameOptions chosen;
             chosen.values = {2, 1, 1, 2};
             chosen.mode = 1;
             const HokFile g = start_new_game(base, db, {"TESTER", 3, 5}, chosen);
-            check(g.state.at(0x28) == 2 && g.state.at(0x29) == 1 && g.state.at(0x2A) == 1 && g.state.at(0x2B) == 2, "DS:0118..011B");
-            check(g.state.at(0xAEB4) == 3, "level byte DS:0ED8 = 5 - choice");
-            check((g.state.at(0xAEB5) | g.state.at(0xAEB6) << 8) == 1996, "end year DS:5A14 = 0x7CA + 2 x choice");
-            check(g.state.at(0x025A) == 2, "league only: DS:D0B9 = 2");
+            check(g.state.at(0x28) == 2 && g.state.at(0x29) == 1 && g.state.at(0x2A) == 1 && g.state.at(0x2B) == 2, "option values at state 0x28..0x2B");
+            check(g.state.at(0xAEB4) == 3, "level byte = 5 - choice");
+            check((g.state.at(0xAEB5) | g.state.at(0xAEB6) << 8) == 1996, "end year = 0x7CA + 2 x choice");
+            check(g.state.at(0x025A) == 2, "league only: game mode 2");
             check((g.state.at(0x06AE) | g.state.at(0x06AF) << 8) == 0, "no highscore list for these settings");
             const uint32_t balance = uint32_t(g.state.at(0x0DCD + 0x18F)) | uint32_t(g.state.at(0x0DCD + 0x190)) << 8 |
                                      uint32_t(g.state.at(0x0DCD + 0x191)) << 16 | uint32_t(g.state.at(0x0DCD + 0x192)) << 24;
-            check(balance == 3 * 150000 + 1200000, "balance DS:0ED8 x 150000 + 1200000");
+            check(balance == 3 * 150000 + 1200000, "balance = level x 150000 + 1200000");
         }
 
         // --- the live cup draw of a new game (one manager: the start state's draw) -----------------------------------
@@ -212,7 +223,7 @@ int main(int argc, char** argv) {
             check(quiet.borland != live.borland, "the uncovering draws move the Borland stream before the market days");
         }
 
-        // --- a later round: the decider and the uncovering order (Game, ovl05_536d) ----------------------------------
+        // --- a later round: the decider and the uncovering order (Game) ---------------------------------------------
         {
             const Bytes exe = read_file(data / "EM.EXE"), save = read_file(ref / "START.HOK");
             Game quiet(exe, save), live(exe, save);
@@ -230,7 +241,7 @@ int main(int argc, char** argv) {
             check(quiet.borland_state() != live.borland_state(), "\"Aber klar\" takes Borland draws");
         }
 
-        // --- the final draw: no question, the two coins are the uncovering order, the cup page follows (period 54) ------
+        // --- the final draw: no question, the two coins are the uncovering order, the cup page follows -----------------
         {
             const Bytes exe = read_file(data / "EM.EXE"), save = read_file(ref / "START.HOK");
             Game quiet(exe, save), live(exe, save);

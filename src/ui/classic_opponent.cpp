@@ -1,19 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Opponent lookup of the main-menu header (see classic_opponent.hpp). All offsets are into the save state.
 #include "ui/classic_opponent.hpp"
 #include <array>
 
 namespace em::ui {
 namespace {
+// A found pairing: opponent team index and side (1 home, 0 away); team 0xFF = none.
 struct Match {
     uint8_t team = 0xFF, side = 0xFF;
     explicit operator bool() const { return team != 0xFF; }
 };
 
+// True if team is managed by manager (team table at 0x17E7, 61 bytes per team, byte +0x16 = manager + 1).
 bool controlled(const Bytes& s, uint8_t team, int manager) {
     if (team == 0xFF) return false;
     if (team >= kHokTeams) throw FormatError("classic opponent: invalid native team");
     return s.at(0x17E7 + size_t(team) * 61 + 0x16) == manager + 1;
 }
+// Pairing lists store teams in pairs (home, away): the opponent of entry participant is its neighbour
+// (index ^ 1); an even index plays at home.
 Match adjacent(const Bytes& s, size_t base, size_t participant) {
     const auto team = s.at(base + (participant ^ 1));
     if (team != 0xFF && team >= kHokTeams)
@@ -21,8 +26,11 @@ Match adjacent(const Bytes& s, size_t base, size_t participant) {
     return {team, uint8_t(1 - participant % 2)};
 }
 
-// Lookup-only27A5(kind,group,1,round,round+1,0,0). Entrant lookup
-// checks indices0..2 and otherwise uses index3, exactly2BB6..2CC5.
+// Group-stage pairing of the given round, looked up only (no results are played). kind selects the
+// competition (1 play-off groups, 2 European cup groups, 3 European cup final round), group 0 or 1, round 0..5
+// (rounds 3..5 repeat 0..2 with home and away swapped). The schedule holds entrant slot numbers; a slot is
+// translated through the group's entrant list by searching entries 0..2 and otherwise taking entry 3, as the
+// original does.
 Match group_match(const Bytes& s, int manager, int kind, int group, int round) {
     if (kind == 1 && s.at(0x03B6) == 0xFF) return {};
     if (kind == 3 && s.at(0x8F86) < 6) return {};
@@ -43,6 +51,8 @@ Match group_match(const Bytes& s, int manager, int kind, int group, int round) {
     return {};
 }
 
+// World Championship opponent (national coach): rounds 0..4 (0x8F85) are the two preliminary groups, later
+// rounds the knockout list. The last matching entry wins.
 Match world_match(const Bytes& s, int manager) {
     Match result;
     const int round = s.at(0x8F85);
@@ -53,7 +63,7 @@ Match world_match(const Bytes& s, int manager) {
                 if (controlled(s, s.at(base + i), manager)) result = adjacent(s, base, i);
         }
     } else {
-        // Native5D5B list is the32-byte tail of its serialized5CFB block.
+        // The knockout list is the 32-byte tail at 0x8EB1, starting at the cursor 0x03B7 and ending at 0xFF.
         const size_t cursor = s.at(0x03B7);
         if (cursor == 0xFF) return {};
         for (size_t i = cursor; i < 32 && s.at(0x8EB1 + i) != 0xFF; ++i)
@@ -62,6 +72,9 @@ Match world_match(const Bytes& s, int manager) {
     return result;
 }
 
+// Play-off opponent: game 0x0259 counts the games of the current play-off stage; games 0 and 2 may still be
+// group games. Otherwise the knockout list at 0x8E91 is searched from cursor 0x03B6, skipping pairings whose
+// score columns already hold the "decided" mark 100.
 Match playoff_match(const Bytes& s, int manager) {
     const int game = s.at(0x0259);
     const int round = 2 * s.at(0x8F87) + (game > 0) + (game > 2);
@@ -72,8 +85,8 @@ Match playoff_match(const Bytes& s, int manager) {
     Match result;
     const size_t cursor = s.at(0x03B6);
     if (cursor == 0xFF || (!s.at(0x077D) && game != 0)) return result;
-    // Four quarterfinals,two semifinals,one final:14 participant bytes.
-    // The next byte is FF. Both100 score-column guards address this same index.
+    // Four quarterfinals, two semifinals, one final: 14 participant bytes, followed by 0xFF.
+    // Both score-column guards (value 100) are indexed with the same participant index.
     for (size_t i = cursor; i < 14 && s.at(0x8E91 + i) != 0xFF; ++i)
         if (controlled(s, s.at(0x8E91 + i), manager) &&
             s.at(0x0205 + 42 + i) != 100 && s.at(0x0205 + 56 + i) != 100)
@@ -81,8 +94,10 @@ Match playoff_match(const Bytes& s, int manager) {
     return result;
 }
 
+// DEB-Pokal opponent of the current round (0x8ED1); the draw list at 0x8E51 holds two bytes per pairing, a
+// pairing with score 100 at 0x035C is already decided. Flag 0x077C must be set (cup running).
 Match cup_match(const Bytes& s, int manager) {
-    // Original DS03B1 table, not inferred from the decoded draw vector.
+    // Number of pairings per cup round, as the original's fixed table (not derived from the draw list).
     constexpr std::array<int, 7> pairs{32, 16, 8, 4, 2, 1, 0};
     const size_t round = s.at(0x8ED1);
     if (round >= pairs.size() || !s.at(0x077C)) return {};
@@ -109,15 +124,15 @@ ClassicOpponent classic_opponent(const HokFile& h, const SeasonCalendar& calenda
     const int league = s.at(block + 0xEB);
     const uint8_t own = s.at(block + 0x14);
     Match match;
-    // The three serialized normal league pairing arrays are already rebuilt
-    // by Game's export; this pure helper does not mutate them as1CD2 does.
+    // The three serialized league pairing arrays (0x8DFD, 12 bytes per league) are already rebuilt by the
+    // game's export; unlike the original menu this pure helper does not rewrite them.
     if (!result.seasonEnd && league < 3 && ((result.selectedEvent >> league) & 1)) {
         const size_t base = 0x8DFD + size_t(league) * 12;
         for (size_t i = 0; i < 12; ++i)
             if (s.at(base + i) == own) { match = adjacent(s, base, i); break; }
     }
     if (!match) {
-        // 18F8 compares these whole bytes exactly; combined event flags do not
+        // The original compares the whole event byte exactly; combined event flags do not
         // independently activate the special competitions.
         switch (result.selectedEvent) {
         case kEventWorldChampionship: match = world_match(s, activeManager); break;

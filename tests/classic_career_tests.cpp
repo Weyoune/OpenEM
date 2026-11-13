@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // New game (start menu with argument 1, game/new_game.cpp), manager messages (game/messages.cpp) and the
-// message field of the main menu (ui/classic_messages.cpp).
-// Raster checks: the start menu of a new game is compared with the native DOSBox capture of the same menu
-// (work/exp/ui_20261108/raster_goldens/newmanager-start.rgb) outside the parts that differ by design (row 0
-// holds the running manager in that capture; the option cells show that game's settings).
+// message field of the main menu (ui/classic_messages.cpp), the live DEB cup draw of a new game and the season
+// review at the end of a season (ui/classic_season_review.cpp).
+// Raster checks: the start menu of a new game is compared with a reference image of the same menu in the
+// original (GOLDENS/newmanager-start.rgb) outside the parts that differ by design (row 0 holds a running
+// manager in that image; the option cells show that game's settings). The other screens are compared with
+// reference images of the original in CAREER/raster_goldens.
+//
+// Usage: classic_career_tests DATA REFERENCE GOLDENS OUTPUT CAREER
+//   DATA      folder with the original game files
+//   REFERENCE folder with START.HOK, MONAT1.HOK and SAISEND.HOK
+//   GOLDENS   folder with newmanager-start.rgb
+//   OUTPUT    folder for files the test writes
+//   CAREER    folder with REV1.HOK and the raster_goldens of the new game and season review screens
+//
+// Failed checks are counted and reported; only setup errors stop the test at once.
 #include <SDL.h>
 
 #include <chrono>
@@ -24,9 +35,11 @@ namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
 
+// Throws with `message` when `condition` is false (used for preconditions; results use `check`).
 static void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// Colour of pixel (x, y) of a raw 320 x 240 RGB image as 0xRRGGBB.
 static uint32_t rgb_at(const Bytes& golden, int x, int y) {
     const size_t p = size_t(y) * 320 + size_t(x);
     return uint32_t(golden[p * 3]) << 16 | uint32_t(golden[p * 3 + 1]) << 8 | golden[p * 3 + 2];
@@ -44,6 +57,7 @@ static size_t region_differences(const ClassicCanvas& canvas, const Bytes& golde
         }
     return count;
 }
+// Number of pixels inside `box` in which canvas `a` differs from the earlier canvas contents `b` (ARGB).
 static size_t canvas_differences(const ClassicCanvas& a, const std::vector<uint32_t>& b, Box box) {
     const auto pixels = a.argb();
     size_t count = 0;
@@ -51,6 +65,8 @@ static size_t canvas_differences(const ClassicCanvas& a, const std::vector<uint3
         for (int x = box.x0; x < box.x1; x++) count += pixels[size_t(y) * 320 + size_t(x)] != b[size_t(y) * 320 + size_t(x)];
     return count;
 }
+// Name of global player `id` (zero-terminated, at most 19 characters at the start of its 0x21-byte record at
+// state 0x4FA5).
 static std::string squad_name(const HokFile& h, int id) {
     std::string s;
     for (size_t k = 0; k < 19 && h.state.at(0x4FA5 + size_t(id) * 0x21 + k); k++) s += char(h.state.at(0x4FA5 + size_t(id) * 0x21 + k));
@@ -98,8 +114,8 @@ int main(int argc, char** argv) {
             int same = 0;
             for (size_t k = 0; k < std::min(a.size(), b.size()); k++) same += squad_name(start, a[k]) == squad_name(mine, b[k]);
             if (std::getenv("EM_DEBUG_CAREER")) for (size_t k = 0; k < std::min(a.size(), b.size()); k++) std::cerr << a[k] << " " << squad_name(start, a[k]) << " | " << b[k] << " " << squad_name(mine, b[k]) << '\n';
-            // vacant database slots get a random name in the original (sub_66EB0); Köln has two in its first 25
-            check(same == int(a.size()) - 2, "squad names in the original's order (ovl16_0730)");
+            // vacant database slots get a random name in the original; Köln has two in its first 25
+            check(same == int(a.size()) - 2, "squad names in the original's order");
             for (int id : b) check(mine.state.at(0x4FA5 + size_t(id) * 0x21 + 0x1D) == koeln, "squad players belong to the new club");
             check(mine.manager == "AGENT" && mine.state.at(0x0DCD + 0x14) == koeln && mine.state.at(0x0DCD + 0x13) == 4 &&
                       mine.state.at(0x01EE) == 4, "manager block and face");
@@ -148,7 +164,7 @@ int main(int argc, char** argv) {
         }
 
         // --- season review: an own player without contract who wants to leave retires; the original shows the
-        // message at once (ovr026:09EB) and deletes it again
+        // message at once and deletes it again
         {
             HokFile h = decode_hok(read_file(references / "SAISEND.HOK"));
             int id = 0;
@@ -176,10 +192,10 @@ int main(int argc, char** argv) {
             app.motion(240, 219);
             app.draw();
             const Bytes golden = read_file(goldens / "newmanager-start.rgb");
-            // rows 1..3, the board side and the notepad equal the native capture; skipped: row 0 (running manager
-            // in the capture), the option cells (that game's settings) and the pointer
+            // rows 1..3, the board side and the notepad equal the reference image; skipped: row 0 (a running
+            // manager in the reference), the option cells (that game's settings) and the pointer
             check(region_differences(app.canvas(), golden, {0, 0, 320, 240}, {{0, 38, 180, 82}, {0xC3, 0x51, 0x134, 0x51 + 0x1C * 4}, {232, 210, 260, 240}}) == 0,
-                  "start menu equals the native capture outside the managers and the settings");
+                  "start menu equals the original outside the managers and the settings");
             app.click(282, 212, false);
             check(!app.session().loaded(), "Los jetzt! without a manager does nothing");
             app.click(25, 60, false);   // face column, row 0
@@ -190,7 +206,7 @@ int main(int argc, char** argv) {
             app.click(210, 60, false);  // second crest of the first page
             app.click(282, 212, false); // Los jetzt!
             check(!app.session().loaded() && app.screen() == ClassicScreen::NewManager, "the cup question comes before the game");
-            {  // the screen of the question against the original (REAL-CODE emulator, em_realcode_boot RGBOUT, same clicks)
+            {  // the screen of the question against the original's screen after the same clicks
                 app.motion(282, 212);
                 app.draw();
                 const Bytes question = read_file(career / "raster_goldens" / "cup-question-realcode.rgb");
@@ -198,8 +214,8 @@ int main(int argc, char** argv) {
                 if (diff) std::printf("cup question: %zu pixels differ from the original\n", diff);
                 check(diff == 0, "DEB cup question equals the original's screen");
             }
-            {  // the live draw ("Aber klar") of the REAL-CODE new game (seeds 0x4880, the intro's draws, the clicks of the
-               // recording in docs/logic/WELTGENERATOR.md): the finished board against the original's screen
+            {  // the live draw ("Aber klar") of a new game with a fixed start (random seed 0x4880, the draws the intro
+               // consumes, the same clicks as in the original): the finished board against the original's screen
                 ClassicApplication live(data, output / "career-live", fs::path());
                 live.set_new_game_seed(0x4880, {7, 27, 27, 27, 27, 27, 27, 27, 27, 27});
                 live.click(25, 60, false);
@@ -210,7 +226,7 @@ int main(int argc, char** argv) {
                 live.click(208, 55, false);
                 live.click(282, 212, false);
                 live.click(120, 172, false);  // "Aber klar"
-                live.click(160, 120, false);  // a click lets the rest roll in fast (DS:A9E6); the end board is the same
+                live.click(160, 120, false);  // a click lets the rest roll in fast; the end board is the same
                 const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(20);
                 const Bytes board = read_file(career / "raster_goldens" / "cup-live-realcode.rgb");
                 size_t diff = 1;
@@ -237,12 +253,12 @@ int main(int argc, char** argv) {
                 field.click(208, 55, false);
                 field.click(282, 212, false);
                 field.click(190, 172, false);  // "Kein Gedanke"
-                field.click(250, 50, false);   // the face (ovr034:234D)
+                field.click(250, 50, false);   // the manager's face opens the message field
                 field.motion(250, 50);
                 field.draw();
                 const Bytes reference = read_file(career / "raster_goldens" / "message-field-realcode.rgb");
-                // left out: face and crest of the header (the emulator's PNG does not model the VGA latch copies of these
-                // pictures), the penguin animation of "Gemischtes" and one column at x 160 (an animation frame)
+                // left out: face and crest of the header (the reference image does not contain the VGA latch copies of
+                // these pictures), the penguin animation of "Gemischtes" and one column at x 160 (an animation frame)
                 const size_t diff = region_differences(field.canvas(), reference, {0, 0, 320, 240},
                                                        {{232, 33, 313, 74}, {186, 170, 202, 184}, {160, 148, 161, 160}});
                 if (diff) {
@@ -253,13 +269,13 @@ int main(int argc, char** argv) {
                 }
                 check(diff == 0, "empty message field over the main menu equals the original");
             }
-            app.click(190, 172, false); // "Kein Gedanke" (ovl05_4653 asks before the draw)
+            app.click(190, 172, false); // "Kein Gedanke" (the cup question comes before the club draw)
             require(app.session().loaded(), "Los jetzt! starts the game");
             check(app.screen() == ClassicScreen::Main, "main menu after the start");
             const HokFile& g = app.session().game().save();
             check(g.manager == "HANS" && g.state.at(0x01EE) == 6, "manager name and face");
             const HokFile base = decode_hok(read_file(*find_new_game_base(data)));
-            check(g.teams.at(size_t(app.session().game().human_team())).name == base.teams.at(0).name && g.state.at(0x0DCD + 0x14) == app.session().game().human_team(), "chosen club (first crest = team 0 of the menu, placed by the club draw ovr027:1C0B)");
+            check(g.teams.at(size_t(app.session().game().human_team())).name == base.teams.at(0).name && g.state.at(0x0DCD + 0x14) == app.session().game().human_team(), "chosen club (first crest = team 0 of the menu, placed by the club draw)");
             (void)base;
             app.draw();
             check(app.session().dirty(), "a new game is unsaved");
@@ -325,10 +341,10 @@ int main(int argc, char** argv) {
             check(canvas_differences(app.canvas(), closed, {16, 206, 303, 214}) > 0, "Keine Nachricht für Sie vorhanden.");
         }
 
-        // --- season review (ovl02_0000) -------------------------------------------------------------------
-        // REV1.HOK is the original's state of 15.04.1994 before the WM (REAL-CODE chain, mid29). The original plays
-        // the WM and changes the season in one step; the review of MANNHEIMER ERC (10th, licence withdrawn, -1.97 Mio.)
-        // is work/exp/career_20261109/raster_goldens/season-review.rgb.
+        // --- season review ----------------------------------------------------------------------------------
+        // REV1.HOK is a state of the original of 15.04.1994 before the WM. The original plays the WM and changes the
+        // season in one step; the reference image of the review of MANNHEIMER ERC (10th, licence withdrawn,
+        // -1.97 Mio.) is CAREER/raster_goldens/season-review.rgb.
         {
             const Bytes golden = read_file(career / "raster_goldens" / "season-review.rgb");
             ClassicApplication app(data, output / "review", career / "REV1.HOK");
@@ -341,15 +357,15 @@ int main(int argc, char** argv) {
             check(review.prizes == 0 && classic_season_review_prizes(review) == "Erhaltene Prämien: keine", "no prizes");
             check(review.date.day == 30 && review.date.month == 4 && review.date.year == 1994 && review.date.weekday == 1,
                   "header date Montag, 30. April 1994");
-            // first the overview "Saisonende" (ovl12_1657): Russland, Düsseldorf twice, Pori; Mannheim down
+            // first the overview "Saisonende": Russland, Düsseldorf twice, Pori; Mannheim down
             check(review.relegated_into[1] == std::vector<std::string>{"MANNHEIMER ERC"}, "Mannheim relegated into the second division");
             app.draw();
             if (std::getenv("EM_DUMP_CAREER"))
                 write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "overview.bmp", app.canvas().bmp_bytes());
             {
                 // The WM winner and the club promoted from the regional league (rand(36,41)) come from the random
-                // stream, whose seed in the capture is unknown (EM seeds it from the clock). The page is therefore
-                // compared with those two names as in the capture; the rest of the data is checked as computed.
+                // stream, whose seed in the reference is unknown (EM seeds it from the clock). The page is therefore
+                // compared with those two names as in the reference; the rest of the data is checked as computed.
                 const Bytes overview = read_file(career / "raster_goldens" / "season-overview.rgb");
                 const HokFile& h = app.session().game().save();
                 auto club = [&](const char* part) {
@@ -366,10 +382,10 @@ int main(int argc, char** argv) {
                 SeasonReview as_captured = review;
                 as_captured.winners[0] = club("RUSSLAND");
                 as_captured.promoted_into[2] = {club("GERETSRIED"), club("BREMERHAVEN")};
-                require(!as_captured.winners[0].empty() && !as_captured.promoted_into[2][0].empty(), "capture clubs in the save");
+                require(!as_captured.winners[0].empty() && !as_captured.promoted_into[2][0].empty(), "reference clubs in the save");
                 ClassicCanvas canvas(data);
                 draw_classic_season_overview(canvas, as_captured, h.state.at(0x01EE) % 12, h.manager);
-                // the capture shows the mouse pointer at (160,120)
+                // the reference shows the mouse pointer at (160,120)
                 const size_t diff = region_differences(canvas, overview, {0, 0, 320, 240}, {{158, 118, 172, 136}});
                 if (diff) std::cerr << "season overview: " << diff << " pixels differ\n";
                 check(diff == 0, "season overview as in the original");
@@ -377,21 +393,21 @@ int main(int argc, char** argv) {
                                                        {{158, 118, 172, 136}, {0, 0x40, 0x50, 0x52}, {0xC8, 0xA8, 0x140, 0xB8}});
                 check(page == 0, "the page from the game matches outside the two random names");
             }
-            app.click(160, 120, false);  // sub_19B08: the manager's page follows
+            app.click(160, 120, false);  // the manager's page follows
             app.draw();
             if (std::getenv("EM_DUMP_CAREER"))
                 write_new_save(path_from_text(std::getenv("EM_DUMP_CAREER")) / "review.bmp", app.canvas().bmp_bytes());
             const size_t balance = region_differences(app.canvas(), golden, {138, 60, 231, 70}, {});
             if (balance) std::cerr << "note: header balance differs from the original (" << money(review.balance) << ")\n";
-            // the capture shows the mouse pointer in the top-left corner
+            // the reference shows the mouse pointer in the top-left corner
             const size_t rest = region_differences(app.canvas(), golden, {0, 0, 320, 240}, {{138, 60, 231, 70}, {0, 0, 12, 14}});
             if (rest) std::cerr << "season review: " << rest << " pixels differ\n";
             check(rest == 0, "season review page as in the original (outside the balance)");
             const auto page = app.canvas().argb();
-            app.key(SDLK_SPACE);  // sub_19B08: any key or click ends the page (no own retirements here)
+            app.key(SDLK_SPACE);  // any key or click ends the page (no own retirements here)
             app.draw();
             check(canvas_differences(app.canvas(), page, {0, 0, 320, 240}) > 1000, "the page is gone after the key");
-            // the symbol slots of 146e:07c6: five per row
+            // the symbol slots of the review page: five per row
             check(classic_season_review_slot(0) == std::pair<int, int>{0x4C, 0x65} &&
                       classic_season_review_slot(4) == std::pair<int, int>{0xD8, 0x65} &&
                       classic_season_review_slot(5) == std::pair<int, int>{0x4C, 0x83}, "symbol slots");

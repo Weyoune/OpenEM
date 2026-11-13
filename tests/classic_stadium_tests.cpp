@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic stadium page (ui/classic_stadium.cpp): the list of the nine facilities and two
+// capacities with their current or planned values, the facility pictures drawn over the stadium, the ticket price
+// and cash display, the click areas, the construction quote with its target spinner, and the page of real saves.
+// The view is pure: it never writes to the state or draws random numbers.
+//
+// Usage: classic_stadium_tests [DATA [REFERENCE]] — with DATA (EM.EXE and graphics) and REFERENCE (START.HOK and
+// SAISEND.HOK) the real saves are checked as well.
+//
+// Manager block fields used (offsets from `block`): +0xE4 ticket price in DM (10..30), +0x116 facility levels
+// (2 bytes per facility), +0x128 weeks until a planned construction is finished, +0x133/+0x135/+0x137 capacities
+// (u16), +0x18F cash (i32).
 #include "ui/classic_stadium.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -7,15 +18,21 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `value` is false.
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
+// State offset of manager 0's block.
 constexpr size_t block=0x0dcd;
+// Writes a little-endian u16 at state offset `p`.
 void put16(HokFile& h,size_t p,unsigned n) {h.state.at(p)=uint8_t(n);h.state.at(p+1)=uint8_t(n>>8);}
+// Writes a little-endian u32 at state offset `p`.
 void put32(HokFile& h,size_t p,uint32_t n) {for(size_t i=0;i<4;++i) h.state.at(p+i)=uint8_t(n>>(8*i));}
+// The stadium tables of the original EM.EXE, written out: the cost of one step per facility/capacity (raw money
+// units) and the highest level of each of the nine facilities.
 StadiumTables tables() {
-    //Independent DS00C0/0102 original EXE values, stadium_ui/data.json.
     StadiumTables t;t.cost={3600000,1350000,1920000,1110000,990000,3900000,1740000,1560000,1350000,540000,405000};
     t.max_level={2,2,2,2,4,2,3,3,1};return t;
 }
+// A START-like stadium: ticket 13 DM, the facility levels of START, capacities 3000 and 4500, cash 1.500.000 raw.
 HokFile fixture() {
     HokFile h;h.state.assign(47761,0);h.state.at(block+0xe4)=13;
     constexpr std::array<uint8_t,9> levels{2,1,1,0,2,1,1,0,0};
@@ -23,16 +40,17 @@ HokFile fixture() {
     put16(h,block+0x133,3000);put16(h,block+0x137,4500);put32(h,block+0x18f,1500000);
     return h;
 }
+// Texts, coordinates and colours of the list, the facility pictures, the planned mode and the currency variant.
 void values_and_overlays() {
     auto h=fixture();const auto before=h.state;const FinanceTables f;const auto t=tables();
     const auto v=classic_stadium_view(h,f,t);
     require(v.native_ticket==": 13 DM" && v.native_cash=="%%%500.000 DM" &&
             v.values[9].native_value==": 3.000" && v.values[10].native_value==": 4.500",
-            "native grouping038D0,width10 cash and raw-DM ticket are distinct formatter paths");
+            "native thousands grouping,width10 cash and raw-DM ticket are distinct formatter paths");
     require(v.values[0].native_label=="]berdachung" && v.values[0].native_value==": HALLE" &&
             v.values[2].native_value==": 'FROSTA'" && v.values[3].native_value==": PLASTIKSCHALEN" &&
             v.values[5].native_value==": STRA~E" && v.values[6].native_value==": IMBI~BUDE",
-            "independent original04B4/0484 literals preserve DOS umlauts and exact wording");
+            "original label and level texts preserve DOS umlauts and exact wording");
     require(v.values[8].baseline==233 && v.values[9].label_x==213 &&
             v.values[9].value_x==267 && v.values[9].baseline==177 && v.values[10].baseline==184 &&
             v.values[0].color==31,"native left/right list coordinates and current foreground");
@@ -53,7 +71,7 @@ void values_and_overlays() {
     const auto planned=classic_stadium_view(h,f,t,{true});
     require(planned.values[1].native_value==": HIGH-TECH (Noch %1 Woche)" &&
             planned.values[9].native_value==": 4.000 (%5)",
-            "05CD/074A have different planned week phrases; singular removes only finaln");
+            "facilities and capacities have different planned week phrases; singular removes only finaln");
     h.state.at(block+0x116+7*2)=3;
     require(classic_stadium_view(h,f,t).values[7].native_value==": GRo~",
             "original cinema description deliberately contains lowercaseo");
@@ -62,6 +80,7 @@ void values_and_overlays() {
     require(alternate.native_ticket==": 13 DM" && alternate.values[9].native_value==": 3,000" &&
             alternate.native_cash=="%%%375,000 DM","currency4 uses commas but never converts stored ticket price");
 }
+// Click areas of the pictures, list rows, ticket spinner and mode toggle, and the ticket price limits 10..30.
 void native_hits() {
     const auto h=fixture();const auto v=classic_stadium_view(h,FinanceTables{},tables());
     require(classic_stadium_hit(v,244,50).item==5 && classic_stadium_hit(v,310,168).item==5 &&
@@ -78,7 +97,7 @@ void native_hits() {
             classic_stadium_hit(v,202,189).action==ClassicStadiumAction::TicketDecrease &&
             classic_stadium_hit(v,209,197).action==ClassicStadiumAction::TicketDecrease &&
             classic_stadium_hit(v,200,197).action==ClassicStadiumAction::None,
-            "0968 spinner hit8x9 differs from10x8 painted arrows and SUB reverses response direction");
+            "spinner hit8x9 differs from10x8 painted arrows and the lower arrow reverses response direction");
     require(classic_stadium_hit(v,192,168,true).action==ClassicStadiumAction::TogglePlanned &&
             classic_stadium_hit(v,192,167,true).action==ClassicStadiumAction::Back,
             "right lower-panel click toggles mode; upper-picture click returns");
@@ -89,12 +108,14 @@ void native_hits() {
     require(!classic_stadium_hit(classic_stadium_view(cap,FinanceTables{},tables()),202,189).enabled,
             "ticket lower boundary retains action but disallows byte write");
 }
+// The construction quote: target, cost and colour (red when unaffordable), the capacity quote in blocks of 500
+// places, the target steps within budget and level limits, and the quote's click areas.
 void quotes_and_steps() {
     auto h=fixture();const auto t=tables();const FinanceTables f;const auto before=h.state;
     const auto q=classic_stadium_view(h,f,t,{false,3,3,-1});
     require(q.quote && q.quote->target==1 && q.native_hint=="Sitzkomfort ausbauen" &&
             q.native_quote_target=="SITZE MIT KISSEN" && q.native_quote_cost==" Kosten: 370.000 DM" &&
-            q.quote_color==8,"quote158B nominal currency/description/colors use original raw initial one-step price");
+            q.quote_color==8,"quote nominal currency/description/colors use original raw initial one-step price");
     const auto red=classic_stadium_view(h,f,t,{false,2,2,-1});
     require(red.quote && !red.quote->affordable && red.quote_color==17 &&
             red.native_quote_cost==" Kosten: 640.000 DM" && red.native_quote_target=="'MEGAFROST'",
@@ -106,7 +127,7 @@ void quotes_and_steps() {
             classic_stadium_target_step(h,t,9,2,-1)==2 &&
             classic_stadium_target_step(h,t,9,1,1)==1 &&
             classic_stadium_target_step(h,t,9,2,1)==1,
-            "target SUB accepts affordable increase/decrease and restores last valid at budget/base boundary");
+            "target step accepts affordable increase/decrease and restores last valid at budget/base boundary");
     require(classic_stadium_hit(q,192,210).action==ClassicStadiumAction::TargetIncrease &&
             classic_stadium_hit(q,209,218).action==ClassicStadiumAction::TargetDecrease &&
             classic_stadium_hit(q,213,208).action==ClassicStadiumAction::QuoteConfirm &&
@@ -121,6 +142,8 @@ void quotes_and_steps() {
     try {(void)classic_stadium_view(broken,f,t);} catch(const FormatError&) {rejected=true;}
     require(rejected,"truncated raw state is rejected safely");
 }
+// The page of START.HOK with the user's EM.EXE (values, purity, wallpaper and palette of KB graphic 14) and a quote
+// with the negative cash of SAISEND.HOK.
 void originals(const std::filesystem::path& data,const std::filesystem::path& refs) {
     const auto exe=read_file(data/"EM.EXE");const auto t=load_stadium_tables(exe);
     const auto f=load_finance_tables(exe);
@@ -128,7 +151,7 @@ void originals(const std::filesystem::path& data,const std::filesystem::path& re
     const auto v=classic_stadium_view(start,f,t);
     require(v.ticket==13 && v.native_cash=="%%%500.000 DM" && v.overlays.size()==3 &&
             v.values[4].native_value==": MITTEL" && v.values[9].native_value==": 3.000",
-            "START directly decrypted ticket/cash/levels/capacities differ from independent source vectors");
+            "START directly decrypted ticket/cash/levels/capacities differ from the original's page");
     ClassicCanvas canvas(data);draw_classic_stadium(canvas,start,f,t);
     require(start.state==before,"full original page drawing changes no HOK byte");
     const auto& palette=canvas.palette();const auto& source=canvas.asset(14);

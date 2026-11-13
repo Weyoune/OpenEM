@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// The WM-only mode "Nur WM" (src/game/wm_mode.cpp, src/ui/classic_wm_mode.cpp, docs/logic/WM.md "WM-Modus"):
-//   * rules taken from the listing: mode byte, highscore list, menu tables DS:5159, friendly prices and bonus
+// The WM-only mode "Nur WM" (src/game/wm_mode.cpp, src/ui/classic_wm_mode.cpp; rules in src/game/wm_mode.hpp):
+//   * the original's rules: mode byte, highscore list, the main-menu availability tables in EM.EXE,
+//     friendly prices and bonus
 //   * a programmatic run: new WM-only game -> jump to the WM, appointment and grant -> squad -> friendlies ->
 //     eight WM days -> season change -> the next appointment with the placement grant, contracts unchanged
-//   * the line overview against the native WM-squad capture NATAUTO (ABWEHR 90 88 86, STURM 89 83 86)
+//   * the line overview against a WM squad recorded with the original game, NATAUTO (ABWEHR 90 88 86,
+//     STURM 89 83 86)
 //   * a scripted start through the start menu of the application (icon, "Los jetzt!", national menu, squad, flag)
-// The WM-only start itself was not captured in DOSBox; the flow follows the listing (ovr027, ovr038, ovr034, ovr031).
+//   * the "WM Vorbereitung" page pixel by pixel against a screen of the original game
+// No recorded state exists for the WM-only start itself; that flow follows the original's rules as
+// documented in src/game/wm_mode.hpp.
+// Arguments: the game data folder, the folder with the national-team reference files and an output folder.
 #include <SDL.h>
 
 #include <chrono>
@@ -24,26 +29,32 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
-int failures = 0;
+int failures = 0;  // number of failed check() calls; nonzero makes main() fail
+// Soft assertion: reports `what` and counts the failure, but continues.
 void check(bool ok, const std::string& what) {
     if (!ok) { std::cerr << "FAIL: " << what << "\n"; failures++; }
 }
+// Hard assertion: aborts the test with `what`.
 void require(bool ok, const std::string& what) {
     if (!ok) throw std::runtime_error(what);
 }
+// Balance of the national account (manager block 5 +0x18F, i32, raw = DM x 3).
 long national_account(const HokFile& h) { return long(int32_t(le32(h.state, manager_block(5) + 0x18F))); }
+// Number of WM nominees: occupied rows (player ID +0x0F != 0) among the 29 rows of squad block 5.
 int nominees(const HokFile& h) {
     int n = 0;
     for (int slot = 0; slot < 0x1D; slot++) n += h.state.at(squad_block(5) + size_t(slot) * 0x34 + 0x0F) != 0;
     return n;
 }
+// Contract years (+0x0B) of every occupied row of manager 0's club squad, in row order.
 std::vector<int> contract_years(const HokFile& h) {
     std::vector<int> out;
     for (int slot = 0; slot < 0x1D; slot++)
         if (h.state.at(squad_block(0) + size_t(slot) * 0x34 + 0x0F)) out.push_back(h.state.at(squad_block(0) + size_t(slot) * 0x34 + 0x0B));
     return out;
 }
-// EM_WM_DUMP=dir writes the drawn pages as BMP files (for a look next to work/ref/NAT*.png).
+// EM_WM_DUMP=dir writes the drawn pages as BMP files (for a visual comparison with screens of the
+// original game).
 void dump(const ClassicCanvas& c, const char* name) {
     const char* dir = std::getenv("EM_WM_DUMP");
     if (!dir) return;
@@ -69,17 +80,20 @@ int main(int argc, char** argv) {
         const Database db = decode_db(read_file(data / "KB" / "23.vga"));
         const HokFile base = decode_hok(read_file(*find_new_game_base(data)));
 
-        // --- rules from the listing -------------------------------------------------------------------------
+        // --- rules of the original ---------------------------------------------------------------------------
         check(native_game_mode(kStartModeBoth) == 4 && native_game_mode(kStartModeWm) == 1 &&
-                  native_game_mode(kStartModeLeague) == 2 && native_game_mode(0) == 0, "DS:D0B9 from var_57 (ovr027:1808)");
+                  native_game_mode(kStartModeLeague) == 2 && native_game_mode(0) == 0, "stored game mode from the start-menu bits");
         check(start_menu_highscore(kStartModeWm, {0, 3, 2, 2}), "Nur WM always keeps a list");
         check(!start_menu_highscore(kStartModeBoth, {2, 0, 0, 0}) && start_menu_highscore(kStartModeBoth, {3, 0, 0, 0}),
-              "the notepad needs level > 2 (ovr027:096D)");
+              "the notepad needs level > 2");
+        // Main-menu availability (7 menus x 6 items, nonzero = not selectable): the club manager's
+        // table has everything enabled; the national coach's table below.
         const MenuAvailability menu = load_menu_availability(exe);
-        for (int i = 0; i < 42; i++) check(menu.table[0][size_t(i)] == 0, "club table DS:5159 is all on");
+        for (int i = 0; i < 42; i++) check(menu.table[0][size_t(i)] == 0, "club menu table is all on");
         const std::array<uint8_t, 42> national_table{1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1,
                                                      1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        check(menu.table[1] == national_table, "national table DS:5183");
+        check(menu.table[1] == national_table, "national coach menu table");
+        // Friendly bonus from goal difference and q (see friendly_bonus in wm_mode.hpp).
         BorlandRandom r1(7);
         check(friendly_bonus(3, 0, false, r1) == 0, "q 0 home: 3 - 1 - 2 = 0");
         check(friendly_bonus(0, 4, false, r1) == 3, "q 4: clamped to 1..2, plus one for q > 3");
@@ -91,6 +105,7 @@ int main(int argc, char** argv) {
             if (base.teams.at(size_t(t)).name == "KÖLNER EC") koeln = t;
         require(koeln >= 0, "Köln in the start state");
         const HokFile start = start_wm_only_game(base, db, {"AGENT", 4, koeln});
+        // State 0x025A: game mode (1 = WM only); 0x06AE: highscore file number (H.30000).
         check(start.state.at(0x025A) == 1 && le16(start.state, 0x06AE) == 0x7530, "mode byte 1 and list H.30000");
         Game g(exe, encode_hok(start), 3);
         g.set_database(db);
@@ -102,7 +117,7 @@ int main(int argc, char** argv) {
         auto other = [&](int k) { int t = 52 + k % 12; return t == nat ? 52 + (k + 1) % 12 : t; };
         check(g.season_day() + 1 == first_wm && g.date().month == 4, "the club calendar is skipped to the WM");
         check(national_account(g.save()) == 1500000, "first grant 500.000 DM on the national account");
-        check(!g.wm_started() && nominees(g.save()) == 0, "no squad yet (NATSTART_empty_squad)");
+        check(!g.wm_started() && nominees(g.save()) == 0, "no squad yet");
         check(menu_item_disabled(menu, g.save(), true, 1, 0, 0, false) && !menu_item_disabled(menu, g.save(), true, 1, 0, 5, false),
               "Manager: only the highscore");
         check(menu_item_disabled(menu, g.save(), true, 1, 1, 2, false) && !menu_item_disabled(menu, g.save(), true, 1, 1, 3, false),
@@ -149,13 +164,17 @@ int main(int argc, char** argv) {
         check(g.save().year == start.year + 1, "the season changed after the WM");
         check(g.national_coach() == 0 && !g.wm_started() && g.season_day() + 1 == first_wm, "next year: appointed again, at the WM");
         check(g.friendlies_played() == 0, "friendly counter reset");
+        // Placement grant (raw = DM x 3): 1,000,000 DM for the winner, 100,000 DM less per place,
+        // 100,000 DM for a nation outside the eight finalists.
         const long grant = place <= 8 ? (1000000 - 100000 * (place - 1)) * 3L : 300000;
-        check(national_account(g.save()) == after_friendlies + grant, "next appointment: the rest plus the placement grant (DS:029C)");
+        check(national_account(g.save()) == after_friendlies + grant, "next appointment: the rest plus the placement grant");
         std::cerr << "WM place " << place << ", national account " << national_account(g.save()) / 3 << " DM (grant "
                   << grant / 3 << ")\n";
-        check(contract_years(g.save()) == years_before, "contract years unchanged in WM-only (ovr026:05D9)");
+        check(contract_years(g.save()) == years_before, "contract years unchanged in WM-only");
 
         // --- line overview against NATAUTO ---------------------------------------------------------------------
+        // NATAUTO_native.hok: a national squad picked automatically in the original game; the
+        // original shows ABWEHR 90 88 86 and STURM 89 83 86 for it.
         {
             Game n(exe, read_file(national / "NATAUTO_native.hok"));
             const auto lines = n.line_overview(n.save().state.at(0x068C));
@@ -163,7 +182,7 @@ int main(int argc, char** argv) {
             if (lines != expected)
                 std::cerr << "line overview " << lines[0][0] << " " << lines[0][1] << " " << lines[0][2] << " / " << lines[1][0] << " "
                           << lines[1][1] << " " << lines[1][2] << "\n";
-            check(lines == expected, "ABWEHR/STURM box as in NATAUTO_native.png");
+            check(lines == expected, "ABWEHR/STURM box as in the original's NATAUTO screen");
         }
 
         // --- scripted start through the application -------------------------------------------------------------
@@ -211,8 +230,8 @@ int main(int argc, char** argv) {
             app.click(295, 55, false);  // the flag
             check(app.advancing(), "the WM starts with 29 nominees");
         }
-        // the "WM Vorbereitung" page against the original (em_realcode_boot capture of the WM-only game on 13.04.1994, Russia
-        // selected; WMPREP_original.hok = the original's state at that moment): all pixels but the original's mouse pointer
+        // the "WM Vorbereitung" page against the original (a screen of the original's WM-only game on 13.04.1994 with
+        // Russia selected; WMPREP_original.hok = the original's state at that moment): all pixels but the mouse pointers
         {
             ClassicApplication app(data, output / "wmprep", national / "WMPREP_original.hok");
             app.click(120, 100, false);  // Mannschaft
@@ -226,7 +245,7 @@ int main(int argc, char** argv) {
             for (size_t pixel = 0; pixel < actual.size(); pixel++) {
                 const int x = int(pixel % 320), y = int(pixel / 320);
                 if ((x >= 236 && x <= 243 && y >= 226) || (x >= 126 && x <= 140 && y >= 90 && y <= 106)) continue;  // the two pointers
-                int delta = 0;  // the capture scales the DAC as DOSBox does; allow that rounding
+                int delta = 0;  // the reference scales the 6-bit VGA palette with a different rounding; allow it
                 for (int c = 0; c < 3; c++) delta += std::abs(int((actual[pixel] >> (16 - 8 * c)) & 0xFF) - int(expected[pixel * 3 + size_t(c)]));
                 differences += delta > 12;
             }

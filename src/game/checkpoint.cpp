@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Reading and writing OpenEM checkpoints (layout in checkpoint.hpp).
 #include "game/checkpoint.hpp"
 
 #include <algorithm>
@@ -7,9 +8,10 @@
 namespace em {
 namespace {
 constexpr uint8_t kMagic[8] = {'O', 'P', 'E', 'N', 'E', 'M', 0x1A, 0};
-constexpr uint32_t kVersion = 10;  // v10: managers 1..3 (docs/MEHRSPIELER_PLAN.md step 8)
-constexpr size_t kHeader = 20, kMaxSize = 1024 * 1024;
+constexpr uint32_t kVersion = 10;  // v10: runtime state of the human managers 1..3
+constexpr size_t kHeader = 20, kMaxSize = 1024 * 1024;  // header bytes, largest accepted file
 
+// Standard CRC-32 (polynomial 0xEDB88320) of bytes[first..].
 uint32_t crc32(const Bytes& bytes, size_t first) {
     uint32_t crc = 0xFFFFFFFFu;
     for (size_t i = first; i < bytes.size(); i++) {
@@ -19,15 +21,16 @@ uint32_t crc32(const Bytes& bytes, size_t first) {
     return ~crc;
 }
 
-void put32(Bytes& bytes, uint32_t value) {
+void put32(Bytes& bytes, uint32_t value) {  // appends a little-endian u32
     for (int b = 0; b < 4; b++) bytes.push_back(uint8_t(value >> (8 * b)));
 }
 
-void put_signed(Bytes& bytes, long value) {
+void put_signed(Bytes& bytes, long value) {  // appends an i32; throws when the value does not fit
     if (value < INT32_MIN || value > INT32_MAX) throw FormatError("OpenEM checkpoint: value outside i32");
     put32(bytes, uint32_t(int32_t(value)));
 }
 
+// Sequential reader of the payload (starts after the header); every read is bounds-checked and throws FormatError.
 class Reader {
 public:
     explicit Reader(const Bytes& bytes) : bytes_(bytes) {}
@@ -237,6 +240,7 @@ Bytes game_save_hok(const Bytes& exe, const Bytes& data) {
         throw FormatError("OpenEM checkpoint: missing working state");
     // Export changes stats and cached values, never record identity. Reject a
     // forged working-state ID before its raw view can reach game routines.
+    // (0x696D + manager * 0x618 + slot * 52 + 0x0F: squad player id; 0x17E7 + team * 61 + 0x16: team manager slot)
     for (size_t manager = 0; manager < kHokManagers; manager++)
         for (size_t slot = 0; slot < kHokSquadSlots; slot++) {
             const size_t at = 0x696D + manager * 0x618 + slot * 52 + 0x0F;

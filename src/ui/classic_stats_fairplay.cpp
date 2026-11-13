@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Statistiken -> Fairplay page (see classic_stats_fairplay.hpp).
 #include "ui/classic_stats_fairplay.hpp"
 
 #include <algorithm>
@@ -8,9 +9,11 @@
 namespace em::ui {
 namespace {
 constexpr auto flow = ClassicFontId::Flow, mini = ClassicFontId::Mini;
+// Save state: league table rows (0x50 bytes per team), team records (61 bytes), manager blocks (0x1AF bytes).
 constexpr size_t kTable = 0x3BA5, kTeams = 0x17E7, kManagers = 0x0DCD;
-constexpr std::array<int, 4> kLeagueFirst{0, 12, 24, 0};  // DS:07C0
+constexpr std::array<int, 4> kLeagueFirst{0, 12, 24, 0};  // first team index of each league
 
+// Decimal text, non-negative values padded to width with the blank digit '%'.
 std::string number(long value, int width) {
     const bool negative = value < 0;
     std::string s = std::to_string(negative ? -value : value);
@@ -18,6 +21,7 @@ std::string number(long value, int width) {
     if (int(s.size()) < width) s.insert(0, size_t(width - int(s.size())), '%');
     return s;
 }
+// First team index of the current manager's league (manager 0x0788, league at block +0xEB).
 int league_first(const HokFile& h) {
     const int manager = h.state.at(0x0788);
     if (manager >= 4) throw FormatError("classic fair play: invalid manager");
@@ -32,7 +36,7 @@ std::array<int, 12> classic_stats_fairplay_order(const HokFile& h) {
     const int first = league_first(h);
     std::array<int, 12> order{};
     for (int i = 0; i < 12; ++i) order[size_t(i)] = i;
-    // 4495:0042: exchange sort, strictly fewer minutes move up.
+    // Exchange sort as in the original: strictly fewer minutes move up.
     for (size_t i = 0; i < 12; ++i)
         for (size_t j = i + 1; j < 12; ++j)
             if (minutes(h, first + order[j]) < minutes(h, first + order[i])) std::swap(order[i], order[j]);
@@ -56,6 +60,7 @@ void draw_classic_stats_fairplay(ClassicCanvas& c, const HokFile& h) {
         c.text_native(mini, 0x26, y, number(i + 1, 2) + ". " + name, color);
         const int penalty = minutes(h, team);
         c.text_native(mini, 0x96, y, number(penalty, 3) + " min.", color);
+        // games played (home + away, table row +0x21/+0x22); minutes per game with two decimals
         int games = h.state.at(kTable + size_t(team) * 0x50 + 0x21) + h.state.at(kTable + size_t(team) * 0x50 + 0x22);
         if (!games) games = 1;
         const long rate = long(penalty) * 100 / games;

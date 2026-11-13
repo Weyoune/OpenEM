@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Stadion page (see classic_stadium.hpp). Manager block offsets used here: +0x116 level pairs (current,
+// planned) of items 0..8, +0x128 weeks left per item, +0x133 capacities (u16 current, u16 planned) of seats and
+// standing places, +0xE4 ticket price, +0x18F balance.
 #include "ui/classic_stadium.hpp"
 #include <bit>
 #include <string_view>
@@ -6,6 +9,7 @@
 namespace em::ui {
 namespace {
 constexpr auto mini=ClassicFontId::Mini;
+// Item labels in the game's ISO646 spelling (']' = Ü, '}' = ü, '{' = ä, '~' = ß).
 constexpr std::array<std::string_view,11> labels{
     "]berdachung","Anzeigetafel","K}hlanlage","Sitzkomfort","Zustand","Verkehrsanb.",
     "Gastronomie","Kino","Bowlingbahn","Sitzpl{tze","Stehpl{tze"};
@@ -20,8 +24,10 @@ constexpr std::array<std::array<std::string_view,5>,9> descriptions{{
     {"OHNE","KLEIN","MITTEL","GRo~",""},
     {"OHNE","VORHANDEN","","",""}
 }};
+// Level texts of items 0..8 and how many levels each item has.
 constexpr std::array<int,9> description_count{3,3,3,3,5,3,4,4,2};
-//DS4F97 paint order; every row is sourceX/Y,destX/Y,width/height.
+// Extension sprites in the game's paint order; per level 1..3 one row sourceX/Y, destX/Y, width/height
+// (all zero = no sprite for that level).
 struct Sprites { int item; std::array<std::array<int,6>,3> levels; };
 constexpr std::array<Sprites,5> sprites{{
     {5,{{{0,0,244,50,66,118},{66,0,244,50,76,118},{0,0,0,0,0,0}}}},
@@ -30,16 +36,19 @@ constexpr std::array<Sprites,5> sprites{{
     {0,{{{142,0,79,57,144,60},{0,118,80,57,143,57},{0,0,0,0,0,0}}}},
     {7,{{{144,173,29,44,52,21},{210,86,27,42,53,23},{210,60,24,39,58,26}}}}
 }};
+// Bounds-checked pointer into the save state.
 const uint8_t* bytes(const HokFile& h,size_t at,size_t count) {
     if(at>h.state.size() || count>h.state.size()-at)
         throw FormatError("classic stadium: truncated native state");
     return h.state.data()+at;
 }
+// Level text of item 0..8; throws for a level the item does not have.
 std::string description(int item,int level) {
     if(item<0 || item>=9 || level<0 || level>=description_count[size_t(item)])
         throw FormatError("classic stadium: unavailable original level description");
     return std::string(descriptions[size_t(item)][size_t(level)]);
 }
+// Number with thousands separators; non-negative values padded to width with the blank digit '%'.
 std::string number(int64_t value,int width=2,char separator='.') {
     const bool negative=value<0;
     auto text=std::to_string(negative?-value:value);
@@ -48,15 +57,19 @@ std::string number(int64_t value,int width=2,char separator='.') {
     if(int(text.size())<width) text.insert(0,size_t(width-int(text.size())),'%');
     return text;
 }
+// Internal money amount as "<n> DM" using the currency factor money_den / money_num of the finance tables
+// (',' as separator when money_num is 4).
 std::string money(int32_t raw,const FinanceTables& t,int width=2) {
     if(t.money_num<=0 || t.money_den<=0) throw FormatError("classic stadium: invalid currency");
-    //199F:02D8 multiplies low32 before signed long division047C.
+    // As in the original: the product is truncated to 32 bits before the signed division.
     const auto product=uint32_t(uint64_t(uint32_t(raw))*uint32_t(t.money_den));
     const auto converted=int64_t(std::bit_cast<int32_t>(product))/int64_t(t.money_num);
     return number(converted,width,t.money_num==4?',':'.')+" DM";
 }
+// Item under (x, y): a sprite footprint, a value line 0..8 of the left column, or seats/standing places (9/10)
+// on the right; -1 for none.
 int hover_item(int x,int y) {
-    //0BE7 checks the first footprint even when level0 has no painted overlay.
+    // The original checks the level-1 footprint even when the item is at level 0 and nothing is painted.
     for(const auto& group:sprites) {
         const auto& a=group.levels[0];
         if(x>=a[2] && x<=a[2]+a[4] && y>=a[3] && y<=a[3]+a[5]) return group.item;
@@ -65,6 +78,7 @@ int hover_item(int x,int y) {
     if(x>212 && y>=172 && y<=185) return 9+int(y>178);
     return -1;
 }
+// True if (x, y) is inside the 8 x 9 arrow button at the anchor.
 bool arrow(int x,int y,int anchor_x,int anchor_y) {
     return x>=anchor_x && x<anchor_x+8 && y>=anchor_y && y<anchor_y+9;
 }
@@ -113,7 +127,7 @@ ClassicStadiumView classic_stadium_view(const HokFile& h,const FinanceTables& fi
         const auto& a=group.levels[size_t(level-1)];
         out.overlays.push_back({group.item,a[2],a[3],a[0],a[1],a[4],a[5]});
     }
-    //Ticket is already a DM amount, not raw money converted through02D8.
+    // The ticket price is already a DM amount, not internal money that needs the currency conversion.
     out.native_ticket=": "+number(out.ticket,2,separator)+" DM";
     out.native_cash=money(std::bit_cast<int32_t>(out.cash_bits),finance,10);
     const int hover=selection.quoteItem>=0?selection.quoteItem:selection.hover;
@@ -157,7 +171,7 @@ int classic_stadium_target_step(const HokFile& h,const StadiumTables& tables,int
 void draw_classic_stadium(ClassicCanvas& c,const HokFile& h,const FinanceTables& finance,
     const StadiumTables& tables,ClassicStadiumSelection selection,int manager) {
     const auto view=classic_stadium_view(h,finance,tables,selection,manager);
-    c.background(14); //embedded KB14 palette, original upper168 rows
+    c.background(14); // KB14 with its embedded palette; the picture fills the upper 168 rows
     c.line(0,168,319,168,0);c.rect(0,169,319,239,4);
     for(const auto& a:view.overlays) c.blit(8,a.x,a.y,a.sx,a.sy,a.width,a.height);
     for(const auto& row:view.values) {
@@ -176,8 +190,8 @@ void draw_classic_stadium(ClassicCanvas& c,const HokFile& h,const FinanceTables&
         c.text_native(mini,213,225,view.native_quote_cost,view.quote_color);
         c.text_native(mini,213,215,view.native_quote_target,24,-1,315);
     }
-    //0858 patches KB4 source border18,180..71,188 to2 for subsequent
-    //standard dialogs. This pure page never mutates the shared asset; its
-    //arrow crops use rows0..16 and do not intersect that temporary patch.
+    // The original page recolours the border of the KB4 button sprite (18,180..71,188) to colour 2 for the
+    // standard dialogs opened from it. This pure page never mutates the shared asset (the application sets
+    // the canvas button edge instead); its arrow crops use rows 0..16 and do not intersect that patch.
 }
 } // namespace em::ui

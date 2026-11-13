@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Match-day presentation of the classic UI: banner before the own league match (native capture work/exp/ui_20261107).
+// Match-day presentation of the classic UI: the "Ligaspiel" banner before the own league match, compared with a
+// reference image of the original (GOLDENS/match-banner.rgb), and its timing: the day is played only after it.
+//
+// Usage: classic_match_tests DATA REFERENCE GOLDENS OUTPUT (REFERENCE holds START.HOK)
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include <chrono>
@@ -9,7 +12,9 @@
 namespace fs=std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `condition` is false.
 static void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
+// Number of pixels in which the canvas differs from a raw 320 x 240 RGB reference image.
 static size_t differences(const ClassicCanvas& canvas,const fs::path& golden){
     const auto expected=read_file(golden);
     require(expected.size()==320*240*3,"native RGB golden size");
@@ -29,7 +34,7 @@ int main(int argc,char** argv){
         {
             ClassicApplication app(data,output,references/"START.HOK");
             app.motion(292,49);app.render_screen("match-banner");app.draw();
-            require(differences(app.canvas(),goldens/"match-banner.rgb")==0,"Ligaspiel banner matches the native capture in all 76800 pixels");
+            require(differences(app.canvas(),goldens/"match-banner.rgb")==0,"Ligaspiel banner matches the original in all 76800 pixels");
         }
         {
             // The crest starts the day: the banner comes first, then the day is played.

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Cup rounds and draws, play-offs, the manual's relegation model and the European cup group draw
+// (see competitions.hpp).
 #include "game/competitions.hpp"
 
 #include <algorithm>
@@ -8,7 +10,8 @@ namespace em {
 namespace {
 constexpr int kFirstForeignTeam = 64;  // team records 0-63: German clubs and nations
 
-// ovl05_52bf / ovl05_5aa5: the lower division hosts the first cup game.
+// The lower division hosts the first cup game. Division classes as the game ranks them: first division and
+// national teams 1, second division 2, everything else 4 (higher number = lower class).
 std::vector<HokPairing> cup_pairs(const std::vector<int>& pool) {
     auto division = [](int team) { return team < 12 || team > 52 ? 1 : team < 24 ? 2 : 4; };
     std::vector<HokPairing> draw;
@@ -26,7 +29,7 @@ MatchResult ko_game(const std::vector<HokTeam>& teams, int home, int away, GameR
                     bool playoff, const MatchMinuteObserver* observer = nullptr) {
     const HumanSquad* hh = human.squad_of(home);
     const HumanSquad* ha = human.squad_of(away);
-    if (!hh && !ha && playoff) {  // a play-off game without the human club: set-up (5 skaters, 02a5) and a quick result (REAL-CODE period 28)
+    if (!hh && !ha && playoff) {  // a play-off game without the human club: match set-up (5 skaters, energies) and a quick result, as in the original
         HokTeam h = teams[size_t(home)], a = teams[size_t(away)];
         prepare_match_energy(h, nullptr); prepare_match_energy(a, nullptr);
         setup_computer_team(h, a); setup_computer_team(a, h);
@@ -63,7 +66,7 @@ std::vector<HokPairing> cup_home_rights(const std::vector<int>& pool) { return c
 std::vector<HokPairing> draw_cup_round(const std::vector<int>& winners, BorlandRandom& rng, std::vector<int>* places) {
     std::vector<int> pool = winners;
     if (pool.empty()) return {};
-    // ovl05_536d: twenty swaps, including draws that select the same slot twice.
+    // twenty swaps, including draws that select the same slot twice.
     for (int swap = 0; swap < 20; swap++) {
         const size_t a = size_t(rng.range(1, int(pool.size())) - 1);
         const size_t b = size_t(rng.range(1, int(pool.size())) - 1);
@@ -96,7 +99,7 @@ std::vector<HokPairing> draw_initial_cup(const std::vector<int>& human_teams, Bo
         do { slot = rng.range(0, 31); } while (pool[size_t(slot)] >= 0);
         pool[size_t(slot)] = team;
     }
-    // ovl05_4c7b(0): human clubs have reserved slots; draw the remaining clubs
+    // human clubs have reserved slots; draw the remaining clubs
     // from 0..35 with rejection, including humans whose reserved slot is later.
     for (size_t slot = 0; slot < pool.size(); slot++) {
         if (pool[slot] >= 0) continue;
@@ -118,7 +121,7 @@ int team_strength(const HokTeam& team) {
 
 std::array<std::array<int, 4>, 2> draw_euro_groups(const std::vector<HokTeam>& teams, const std::vector<int>& german,
                                                     BorlandRandom& rng) {
-    constexpr int kLastTeam = 149;  // DS:07CB + (0x39 - DS:07CB + 0x5C)
+    constexpr int kLastTeam = 149;  // last European club (team records 64..149)
     std::array<int, 8> slot{};
     for (size_t i = 0; i < slot.size(); i++) {
         for (;;) {
@@ -161,7 +164,7 @@ PlayoffResult play_playoffs(const std::vector<HokTeam>& teams, const std::vector
                             const HumanSide& human) {
     PlayoffResult p;
     for (int i = 0; i < 4; i++) p.quarter.push_back(best_of_five(teams, order[size_t(i)], order[size_t(7 - i)], rng, human));
-    // DS:0144: (1-8 vs 3-6) and (2-7 vs 4-5); the better placed team is the higher seed
+    // semi-final pairing table: (1-8 vs 3-6) and (2-7 vs 4-5); the better placed team is the higher seed
     auto seed = [&](int team) { return int(std::find(order.begin(), order.end(), team) - order.begin()); };
     auto pair = [&](int a, int b) {
         return seed(a) < seed(b) ? best_of_five(teams, a, b, rng, human) : best_of_five(teams, b, a, rng, human);
@@ -217,9 +220,11 @@ std::vector<RelegationTie> play_relegation(const std::vector<HokTeam>& teams, co
 
 namespace em {
 
-// A cup round with the cup display switched on (Einstellungen / DEB-Pokal): ovl06_2522 plays all pairs at once, minute by minute,
-// exactly like a league day, with the knock-out rules (overtime, shoot-out); the stream reseeding after the periods and the
-// watched list after a home game of the human club are the same (REAL-CODE whole-program test).
+// A cup round with the cup display switched on (Einstellungen / DEB-Pokal): the original plays all pairs at once, minute by
+// minute, exactly like a league day, with the knock-out rules (overtime, shoot-out); the random-stream spin after the first
+// and second period and the watched list after a home game of the human club are the same as on a league day.
+// Afterwards the match state (effort, lines, shifts, energies, skaters, penalties, tactics) of the computer teams is
+// written back into `teams`.
 std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vector<HokPairing>& draw, GameRandom& rng,
                                      const HumanSide& human, BorlandRandom* brng, const MatchMinuteObserver* observer,
                                      int* loop_minutes, bool playoff, size_t knockout_pairs, int* phantom_role, int level, bool ended_breaks) {
@@ -239,7 +244,7 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
         entries.push_back({p.home, p.away, std::make_unique<MatchRun>(teams[size_t(p.home)], teams[size_t(p.away)], rng, level, hh, ha,
                                                                          human.match_stats(p.home, p.away), o)});
     }
-    // the display of the round (switch DEB-Pokal, or a manager's club plays) and DS:5A56 (a board), as in play_matchdays
+    // the display of the round (switch DEB-Pokal, or a manager's club plays) and whether any match has a board, as in play_matchdays
     bool display = g_display_flags[10] != 0, board = false;
     for (auto& e : entries) { display = display || human.is_human(e.home) || human.is_human(e.away); board = board || e.run->has_board(); }
     for (auto& e : entries) e.run->set_messages(display && board);
@@ -264,14 +269,14 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
                                  t.current_line[0], t.current_line[1], t.shift[0], t.shift[1]);
                 }
         }
-        if (minute_left)  // ovr030:272B: the reporter draw at the start of the minute
+        if (minute_left)  // the reporter draw at the start of the minute
             if (const int r = reporter_minute_draw(rng, display); r >= 0) for (auto& e : entries) e.run->set_reporter(r);
-        if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round (REAL-CODE)
+        if (minute_number == 60 || minute_number == 65)  // the overtime breaks reach every pair of the round, as in the original
             for (auto& e : entries) e.run->overtime_break(ended_breaks);
         for (auto& e : entries) {
             more = e.run->step() || more;
             // a manager penalty without a bound player ending here writes through the slot -1 record into the pair table
-            // as in a league match (DEVIATIONS.md, REAL-CODE Köln period 143); only the stored table is affected
+            // as in a league match (a quirk of the original that OpenEM reproduces); only the stored table is affected
             if (const int role = e.run->take_phantom_release(); role >= 0 && phantom_role) *phantom_role = role;
         }
         if (observer) (*observer)(minute_number + 1, live);
@@ -281,8 +286,8 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             for (int i = 0; i < spin; i++) rng.range(0, 1);
         }
     }
-    // WM: a round decided in the overtime before minute 66 still gets the break of minute 66 (REAL-CODE WM-only final 1994:
-    // the two finalists stand one +19 higher at the next WM start)
+    // WM: a round decided in the overtime before minute 66 still gets the break of minute 66, as in the original (its
+    // effect on the energies is still visible at the start of the next WM)
     if (ended_breaks && minute_number > 60 && minute_number <= 65 && !std::getenv("EM_OLD_WMOTBREAK"))
         for (auto& e : entries) e.run->overtime_break(true);    if (loop_minutes) *loop_minutes = minute_number;
     std::vector<Tie> out;
@@ -302,8 +307,8 @@ std::vector<Tie> play_cup_round_live(std::vector<HokTeam>& teams, const std::vec
             }
             team.skaters = m.skaters;
             team.penalty_code = m.penalty_code;
-            // as in the league (season.cpp): only team record 0 ends its running penalties with the game (REAL-CODE Köln
-            // period 3: DEB cup Memmingen... tie 5-0, team 0 with a 10 at the end keeps 5 skaters and +0x33 = 0)
+            // as in the league (season.cpp): only team record 0 ends its running penalties with the game (a quirk of the
+            // original: team 0 with a penalty running at the end of a cup game is left with 5 skaters and +0x33 = 0)
             if (&team == &teams[0] && team.penalty_code && !std::getenv("EM_OLD_CUPTEAM0")) { team.penalty_code = 0; team.skaters = std::max(team.skaters, 5); }
             for (int i = 0; i < kTacticSituations; i++) {
                 team.effort[i] = m.effort[i];

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// File reading and the conversion between the game's 8-bit character set and UTF-8 (see binary.hpp).
 #include "formats/binary.hpp"
 
 #include <fstream>
@@ -24,7 +25,7 @@ std::string iso646de_to_utf8(const char* s, size_t max_len) {
             case '}': out += "ü"; break;
             case '~': out += "ß"; break;
             // CP437 umlauts, used next to the ISO 646 forms (e.g. "K\x99LNER EC" in KB\23.vga and
-            // in savegames); EM.EXE keeps the same set as a table at DGROUP 0x4A46.
+            // in savegames); EM.EXE itself contains a table of these same seven characters.
             case '\x8e': out += "Ä"; break;
             case '\x99': out += "Ö"; break;
             case '\x9a': out += "Ü"; break;

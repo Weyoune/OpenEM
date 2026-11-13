@@ -2,9 +2,13 @@
 #include "game/youth.hpp"
 #include <bit>
 
+// Youth grant amounts and the youth-screen slider arithmetic (see youth.hpp).
+
 namespace em {
 namespace {
+// Signed 32-bit product that wraps on overflow, as the original's 32-bit multiply did.
 int32_t multiply(int32_t a,int32_t b){return std::bit_cast<int32_t>(uint32_t(uint64_t(uint32_t(a))*uint32_t(b)));}
+// Signed 32-bit division truncating toward zero; the divisor must be positive.
 int32_t divide(int32_t a,int32_t b){
     if(b<=0)throw FormatError("youth funding: invalid currency divisor");
     return int32_t(int64_t(a)/b);
@@ -18,12 +22,14 @@ YouthFundingScale youth_funding_scale(const FinanceTables& t,int kind){
 }
 int32_t youth_funding_amount(const HokFile& h,int kind,int manager){
     if(kind<0||kind>=3||manager<0||manager>=4)throw FormatError("youth funding: invalid kind or manager");
+    // Youth block of the manager (0x15 bytes from 0x06B8), grants i32[3] at +9.
     const size_t at=0x06c1+size_t(manager)*0x15+size_t(kind)*4;
     if(at+4>h.state.size())throw FormatError("youth funding: truncated native state");
     return std::bit_cast<int32_t>(le32(h.state,at));
 }
 int32_t youth_funding_target(int32_t raw,const FinanceTables& t,int kind,int x){
     const auto scale=youth_funding_scale(t,kind);
+    // internal units -> display currency, step/proportional change, then back.
     int32_t value=divide(multiply(raw,int32_t(t.money_den)),int32_t(t.money_num));
     if(x<121){if(!value)return raw;value=std::bit_cast<int32_t>(uint32_t(value)-uint32_t(scale.step));}
     else if(x>190){if(value>=scale.maximum)return raw;value=std::bit_cast<int32_t>(uint32_t(value)+uint32_t(scale.step));}

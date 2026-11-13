@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Automatic and manual lineup (see lineup.hpp).
 #include "game/lineup.hpp"
 
 #include <algorithm>
@@ -6,8 +7,9 @@
 
 namespace em {
 namespace {
+// HOK state: global player records (33 bytes) and the size of a squad record.
 constexpr size_t kPlayers = 0x4FC6, kPlayerSize = 33, kRecord = 52;
-constexpr int kPlaces = 29;
+constexpr int kPlaces = 29;  // squad slots per manager
 }  // namespace
 
 bool auto_lineup(HokFile& h, int manager) {
@@ -19,6 +21,10 @@ bool auto_lineup(HokFile& h, int manager) {
     std::vector<HokSquadPlayer> no_squad;
     std::vector<HokSquadPlayer>& decoded = manager < 4 ? h.squad_of(manager) : no_squad;
     for (int slot = 0; slot < kPlaces; slot++) h.state.at(base + size_t(slot) * kRecord + 0x0A) = 0;
+    // Best free player for position kind `requested` (0 goalkeeper, 1 defender, 2 forward; the
+    // natural kind comes from the player's position byte +24). Without a natural candidate the
+    // kind cycles (3 is an empty step). A goalkeeper may fill an outfield place only if he is
+    // not the first goalkeeper seen. Returns the slot or -1.
     auto pick = [&](int requested) {
         const int direction = requested == 2 && h.state.at(mode) < 4 ? -1 : 1;
         bool saw_goalkeeper = false;
@@ -41,17 +47,18 @@ bool auto_lineup(HokFile& h, int manager) {
                     candidate = saw_goalkeeper ? 1 : -1;
                     saw_goalkeeper = true;
                 }
-                if (candidate >= strength) { strength = candidate; best = slot; }  // native ties: last record
+                if (candidate >= strength) { strength = candidate; best = slot; }  // ties: the last record wins, as in the original
             }
             if (best >= 0 || !any_available) return best;
             kind = (kind + direction + 4) % 4;
-            // ovl09_2858 stops after one full class cycle once it has
+            // The original stops after one full class cycle once it has
             // rejected a lone goalkeeper for an outfield position. A second
             // cycle would mistake that same keeper for another candidate.
             if (kind == requested && saw_goalkeeper) break;
         }
         return -1;
     };
+    // Puts the best player of `kind` into the squad with line byte `line`.
     auto assign = [&](int kind, int line) {
         const int slot = pick(kind);
         if (slot < 0) return false;
@@ -60,6 +67,8 @@ bool auto_lineup(HokFile& h, int manager) {
         h.state.at(at + 21) = uint8_t(line);
         return true;
     };
+    // Goalkeeper in line 1, two defenders in each of the lines 1..3, three forwards (bit 0x80)
+    // in each of the lines 1..3; then reserves (line 0), forwards first, up to 22 players.
     int selected = 0;
     for (int kind = 0; kind < 3; kind++)
         for (int line = 0; line < (kind == 0 ? 1 : 3); line++)
@@ -80,30 +89,37 @@ bool auto_lineup(HokFile& h, int manager) {
 }
 
 namespace {
+// The line diagram: 5 blocks (4 lines + goalkeeper block) of 6 cells; a cell holds slot + 1 or 0.
+// Cells 0..2 are the forward half, 3..5 the defender half.
 using ManualCells = std::array<std::array<int, 6>, 5>;
 
+// Bounds-checked pointer to `length` state bytes at `offset`.
 const uint8_t* manual_record(const HokFile& h, size_t offset, size_t length) {
     if (offset > h.state.size() || length > h.state.size() - offset)
         throw FormatError("HOK: truncated manual lineup record");
     return h.state.data() + offset;
 }
 
+// Position class of player `id` on the manual screen: position byte / 25, capped at 2
+// (0 goalkeeper, 1 defender, 2 forward). This differs from the automatic picker's classes.
 int manual_role(const HokFile& h, int id) {
     if (id < 1 || id > kHokPlayers) throw FormatError("HOK: invalid manual lineup player id");
     const uint8_t* p = manual_record(h, kPlayers + size_t(id - 1) * kPlayerSize, kPlayerSize);
-    return std::min(int(p[0x18]) / 25, 2); //1238:0000, not the automatic picker's categories
+    return std::min(int(p[0x18]) / 25, 2);
 }
 
+// Diagram state as the screen derives it from the squad records.
 struct ManualDiagram {
     ManualCells cells{};
-    bool six = false;
+    bool six = false;  // six players in the first block and no goalkeeper (extra field player)
 };
 
+// Builds the line diagram from the first `count` squad records at `base`.
 ManualDiagram manual_diagram(const HokFile& h, size_t base, int count) {
     ManualDiagram diagram;
     int first = 0;
-    //59B5:03FB..0503: reproduce the local diagram, including assigned
-    // suspended players with0A=0; injury status2 is excluded independently.
+    // Reproduces the screen's diagram, including assigned suspended players with
+    // role 0; injured players (status 2) are left out independently.
     for (int slot = 0; slot < count; ++slot) {
         const uint8_t* r = h.state.data() + base + size_t(slot) * kRecord;
         const int status = r[9] & 3, line = r[0x15] & 0x7f;
@@ -125,6 +141,7 @@ ManualDiagram manual_diagram(const HokFile& h, size_t base, int count) {
     return diagram;
 }
 
+// Copies role and line of the squad record at `at` into the decoded squad of `manager`.
 void sync_manual_player(HokFile& h, int manager, size_t slot, size_t at) {
     if (manager < 0 || manager >= 4) return;  // the decoded squads of the human managers 0..3
     auto& squad = h.squad_of(manager);
@@ -132,8 +149,8 @@ void sync_manual_player(HokFile& h, int manager, size_t slot, size_t at) {
     auto& player = squad[slot];
     player.role = h.state[at + 0x0a];
     player.line = h.state[at + 0x15];
-    // Keep the same status meaning as hok_squad():1A is appearance/team
-    // state, not the chosen line. Ordinary menu actions do not change1A.
+    // Keep the same status meaning as hok_squad(): +0x1A is the appearance/team
+    // state, not the chosen line. Ordinary menu actions do not change +0x1A.
     player.status = !player.role ? SquadStatus::None
         : (h.state[at + 0x1a] & 0x80) ? SquadStatus::Team : SquadStatus::Reserve;
 }
@@ -180,7 +197,7 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
 
     ManualLineupResult result;
     result.selected_line = selectedLine;
-    //0ACC..0AE4: an empty/non-visible number plate never reaches the
+    // An empty/non-visible number plate never reaches the
     // automatic-disable branch. It is not equivalent to a roster left click.
     if (action == ManualLineupAction::RemoveNumber) {
         const bool visible = old_block >= 0 && (old_block == 4 ? old_cell == 4
@@ -202,21 +219,21 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
 
     const int status = r[9] & 3;
     if (action == ManualLineupAction::RemoveNumber) {
-        //0B57..0B7D always uses "noch gesperrt", even for status3. A
+        // The original always uses "noch gesperrt" here, even for status 3. A
         // zero remaining-duration byte permits this diagram-only removal.
         if (r[0x0d] && status) return fail(ManualLineupMessage::Suspended);
-        r[0x0a] = inMatch ? 1 : 0;  // 0D1D: in a running match the player stays in the squad
+        r[0x0a] = inMatch ? 1 : 0;  // in a running match the player stays in the squad
         r[0x15] = 0;
         return finish();
     }
 
-    //0E21..0F22 refusal order is observable. In particular automatic mode
+    // The order of the refusals is visible to the player. In particular automatic mode
     // has already been disabled before any of these messages are returned.
     if (status == 1) return fail(ManualLineupMessage::Suspended);
     if (status == 2) return fail(ManualLineupMessage::Injured);
     const bool reserve = action == ManualLineupAction::ReserveToggle;
-    if (inMatch && reserve) return finish();                 // 0F55: only the left button changes a line in a match
-    if (inMatch && !r[0x15] && !r[0x0a]) return finish();  // 0E4A / 12B8: no new player during the match
+    if (inMatch && reserve) return finish();                 // only the left button changes a line in a match
+    if (inMatch && !r[0x15] && !r[0x0a]) return finish();  // no new player during the match
     if (!r[0x0a] && members == 22) return fail(ManualLineupMessage::TeamFull);
     if (!reserve && !r[0x15]) {
         if (!selectedLine) return fail(ManualLineupMessage::NoLineSelected);
@@ -225,7 +242,7 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
     if (!reserve && !role && selectedLine == 5 && diagram.six)
         return fail(ManualLineupMessage::SixFieldPlayers);
 
-    //0F2D..1293: left removes an assigned player; right toggles between
+    // Left click removes an assigned player; right click toggles between
     // reserve and no function. Selecting a different block does not move an
     // already assigned player in one click: the first click removes him.
     if (reserve || (r[0x0a] && r[0x15])) {
@@ -233,23 +250,24 @@ ManualLineupResult manual_lineup(HokFile& h, int manager, size_t slot,
             r[0x0a] = 0;
         } else {
             if (r[0x0a] && r[0x15] && old_block >= 0) result.selected_line = old_block + 1;
-            r[0x0a] = reserve || inMatch ? 1 : 0;  // 117F: in a match the player stays in the squad
+            r[0x0a] = reserve || inMatch ? 1 : 0;  // in a match the player stays in the squad
             r[0x15] = 0;
         }
         return finish();
     }
 
-    if (!selectedLine) return finish(); // only reachable for stale nonzero15
+    if (!selectedLine) return finish(); // only reachable for a stale nonzero line byte
     const int block = selectedLine - 1;
     int half = role < 2 ? 3 : 0;
-    if (!half && block == 4) return finish(); //native12D6..12E2
+    if (!half && block == 4) return finish(); // a forward cannot be placed in the goalkeeper block
+    // Puts the player into diagram cell `cell` of the selected block.
     const auto assign = [&](int cell) {
         r[0x0a] = 1;
         r[0x15] = uint8_t(block == 4 ? 1 : block + 1 + (cell < 3 ? 0x80 : 0));
         result.assigned_cell = cell;
         return finish();
     };
-    //12E9..14FC: preferred natural half first, then the other half. A
+    // Preferred natural half first, then the other half. A
     // third lower slot exists only after pulling TW from the first block.
     for (int pass = 0; pass < 2; ++pass, half = 3 - half) {
         const bool three = half == 0 || (block == 0 && diagram.six) || block == 4;

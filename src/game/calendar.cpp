@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Season dates and the event table of EM.EXE (see calendar.hpp).
 #include "game/calendar.hpp"
 
 namespace em {
 
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
-constexpr size_t kEventTable = 0x0828;
-constexpr size_t kEventTableMax = 300;
-constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // DS:0393
-constexpr int kDayOfYearOffset = 252;  // ovl06_1271: counter + 0xFC
+// File offset of the initialised data of EM.EXE (header size + start of the data segment), see schedule.cpp.
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
+constexpr size_t kEventTable = 0x0828;  // event table, relative to kDgroupFile
+constexpr size_t kEventTableMax = 300;  // search limit for the two section ends
+constexpr int kMonthDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};  // the game's month lengths, no leap years
+constexpr int kDayOfYearOffset = 252;  // day of year = counter + 0xFC
 }  // namespace
 
+// Weekday from the counter alone: day 1 is a Sunday.
 GameDate date_of_season_day(int season_day, int start_year) {
     GameDate d;
     int doy = season_day + kDayOfYearOffset;

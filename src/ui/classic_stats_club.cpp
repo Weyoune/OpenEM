@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Statistiken -> Verein page and the manager history text (see classic_stats_club.hpp).
 #include "ui/classic_stats_club.hpp"
 
 #include <algorithm>
@@ -10,20 +11,25 @@
 namespace em::ui {
 namespace {
 constexpr auto flow = ClassicFontId::Flow, mini = ClassicFontId::Mini;
+// Save state: manager blocks (0x1AF bytes each) and the career year (u16).
 constexpr size_t kManagers = 0x0DCD, kCareerYear = 0xB951;
-// DS:4B9A.. graph tables, index 0 EuroCup, 1 DEB-Pokal, 2 Liga.
+// Graph layout tables of the game, index 0 EuroCup, 1 DEB-Pokal, 2 Liga: label position, axis left/top/bottom
+// and the spacing of the axis ticks.
 constexpr std::array<int, 3> kLabelX{0x4B, 0x11, 0x36}, kLabelY{0x17, 0x45, 0xA8};
 constexpr std::array<int, 3> kLeft{0x87, 0x4B, 0x73}, kTop{0x0C, 0x3A, 0x65}, kStep{3, 3, 4}, kBottom{0x1F, 0x4D, 0xAE};
-constexpr std::array<uint8_t, 3> kLeagueColor{0x17, 0x16, 0x1D};  // DS:4BBE
-constexpr std::array<int, 3> kSplit{6, 4, 0};                     // DS:4BC4
-constexpr std::array<std::string_view, 3> kNames{"Europacup", "DEB-Pokal", "Liga"};  // DS:0C14/0C10/0C0C
-constexpr std::array<int, 4> kLeagueFirst{0, 12, 24, 0};              // DS:07C0 (byte 07C3 is padding)
-constexpr std::array<std::string_view, 4> kLeagues{"Bundesliga", "Zweite Liga", "Oberliga", ""};  // DS:09EC
-constexpr std::array<std::string_view, 4> kPlayoff{"VIERTELFINALE", "HALBFINALE", "SPIELE 5.-8.", "ENDSPIEL"};  // DS:0725
+constexpr std::array<uint8_t, 3> kLeagueColor{0x17, 0x16, 0x1D};  // bar colour per league
+constexpr std::array<int, 3> kSplit{6, 4, 0};                     // where each graph label is split into two lines
+constexpr std::array<std::string_view, 3> kNames{"Europacup", "DEB-Pokal", "Liga"};  // graph labels
+constexpr std::array<int, 4> kLeagueFirst{0, 12, 24, 0};              // first team index of each league
+constexpr std::array<std::string_view, 4> kLeagues{"Bundesliga", "Zweite Liga", "Oberliga", ""};
+constexpr std::array<std::string_view, 4> kPlayoff{"VIERTELFINALE", "HALBFINALE", "SPIELE 5.-8.", "ENDSPIEL"};
+// DEB-Pokal round reached (index = cup byte & 7).
 constexpr std::array<std::string_view, 8> kCupRounds{"", "Erste Runde ", "Achtelfinale ", "Viertelfinale ",
-                                                     "Halbfinale ", "Endspiel ", "DEB-Pokal", "Europapokal"};  // DS:0B5C
-constexpr std::array<std::string_view, 4> kEuroPhases{"Liga", "Gruppe", "Endrunde", "Play-Off"};  // DS:0658
+                                                     "Halbfinale ", "Endspiel ", "DEB-Pokal", "Europapokal"};
+// European cup phase reached (index = (euro byte & 7) >> 1).
+constexpr std::array<std::string_view, 4> kEuroPhases{"Liga", "Gruppe", "Endrunde", "Play-Off"};
 
+// Decimal text, non-negative values padded to width with the blank digit '%'.
 std::string number(long value, int width) {
     const bool negative = value < 0;
     std::string s = std::to_string(negative ? -value : value);
@@ -31,6 +37,7 @@ std::string number(long value, int width) {
     if (int(s.size()) < width) s.insert(0, size_t(width - int(s.size())), '%');
     return s;
 }
+// Block of the current manager (save state 0x0788).
 size_t manager_block(const HokFile& h) {
     const int manager = h.state.at(0x0788);
     if (manager >= 4) throw FormatError("classic club statistics: invalid manager");
@@ -74,7 +81,7 @@ void draw_classic_stats_club(ClassicCanvas& c, const HokFile& h, int selected) {
             if (countdown == 0) { countdown = kStep[i]; c.pixels().at(kLeft[i] - 1, y) = 6; }
             --countdown;
         }
-        --y;  // 4495:21E5
+        --y;  // the axis ends one pixel above the bottom limit, as in the original
         c.line(kLeft[i], y, kLeft[i], kTop[i], 6);
         c.line(kLeft[i], y, kLeft[i] + 0x98, y, 6);
     }
@@ -110,7 +117,7 @@ void draw_classic_stats_club(ClassicCanvas& c, const HokFile& h, int selected) {
         c.text_native(mini, 0x16, 0xDB, "Im ersten Jahr gibt's hier noch keine Eintr{ge...", 30, 0, 0x104);
         return;
     }
-    // 4495:25E4: selection marker under every graph and the detail lines.
+    // Selection marker under every graph and the detail lines.
     for (size_t i = 0; i < 3; ++i) {
         const int x = kLeft[i] + selected * 3, b = kBottom[i];
         rect(kLeft[i], b, kLeft[i] + 0x98, b + 5, 4);

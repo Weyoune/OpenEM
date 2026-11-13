@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Einstellungen page: pixel comparison with native DOSBox captures (work/exp/ui_20261107) and behaviour.
+// Einstellungen page (ui/classic_settings.cpp): pixel comparison with reference images of the original (GOLDENS)
+// and behaviour: click areas of the switches and the speed row, the default settings, toggles reaching the game
+// state, the one-time rink hint of Torszenen level 2, and settings surviving a save and reload.
+//
+// Usage: classic_settings_tests DATA REFERENCE GOLDENS OUTPUT (REFERENCE holds START.HOK)
+//   EM_DUMP_MISMATCH=<folder> writes differing pictures as .bmp.
 #include "ui/classic_app.hpp"
 #include "ui/classic_settings.hpp"
 #include <SDL.h>
@@ -10,7 +15,9 @@
 namespace fs=std::filesystem;
 using namespace em;
 using namespace em::ui;
+// Throws with `message` when `condition` is false.
 static void require(bool condition,const char* message){if(!condition)throw std::runtime_error(message);}
+// Number of pixels in which the canvas differs from a raw 320 x 240 RGB reference image.
 static size_t differences(const ClassicCanvas& canvas,const fs::path& golden){
     const auto expected=read_file(golden);
     require(expected.size()==320*240*3,"native RGB golden size");
@@ -31,7 +38,7 @@ int main(int argc,char** argv){
         const fs::path data=path_from_text(argv[1]),references=path_from_text(argv[2]),goldens=path_from_text(argv[3]);
         const auto serial=std::chrono::steady_clock::now().time_since_epoch().count();
         const fs::path output=path_from_text(argv[4])/std::to_string(serial);
-        // Hit areas are the native DS:4C06/4BE8 tables.
+        // Hit areas are those of the original's switch and speed tables.
         require(classic_settings_hit(222,130).widget==0&&classic_settings_hit(232,142).widget==0&&classic_settings_hit(233,142).widget<0,"small switch area is 11x13");
         require(classic_settings_hit(200,24).widget==9&&classic_settings_hit(218,46).widget==9&&classic_settings_hit(219,46).widget<0,"large switch area is 19x23");
         require(classic_settings_hit(191,90).speed==0&&classic_settings_hit(285,90).speed==70&&classic_settings_hit(190,90).speed<0&&classic_settings_hit(286,90).speed<0,"speed row 191..285");
@@ -39,15 +46,15 @@ int main(int argc,char** argv){
             ClassicApplication app(data,output,references/"START.HOK");
             const auto before=app.session().game().checkpoint_bytes();
             app.motion(127,219);app.render_screen("settings");app.draw();
-            require(differences(app.canvas(),goldens/"settings-start.rgb")==0,"settings page matches the native capture in all 76800 pixels");
+            require(differences(app.canvas(),goldens/"settings-start.rgb")==0,"settings page matches the original in all 76800 pixels");
             require(app.session().game().checkpoint_bytes()==before,"opening and drawing leave the game untouched");
             const auto defaults=app.session().game().settings();
             require(defaults.speed==70&&defaults.flags[10]==1&&defaults.scrolling[0]==1&&defaults.end_year>=2000&&defaults.level==2,"native defaults");
-            // The same clicks as the native capture session.
+            // The same clicks as in the original's reference session.
             app.click(227,136,false);app.click(287,164,false);app.click(210,35,false);app.click(230,65,false);app.click(250,90,false);
             app.motion(227,69);app.draw();
             require(app.screen()==ClassicScreen::Settings,"settings page stays open");
-            require(differences(app.canvas(),goldens/"settings-changed.rgb")==0,"changed settings match the native capture in all 76800 pixels");
+            require(differences(app.canvas(),goldens/"settings-changed.rgb")==0,"changed settings match the original in all 76800 pixels");
             const auto changed=app.session().game().settings();
             require(changed.flags[0]==1&&changed.flags[8]==1&&changed.flags[9]==1&&changed.scrolling[0]==0&&changed.speed==50,"toggles reach the game state");
             require(app.session().dirty(),"a setting change marks the game dirty");
@@ -56,10 +63,10 @@ int main(int argc,char** argv){
             require(app.session().game().settings().flags[9]==2,"Torszenen second step");
             app.draw();
             app.motion(209,34);app.draw();//the native pointer sat one row higher than the click position
-            require(differences(app.canvas(),goldens/"settings-hint.rgb")==0,"modal rink hint over the not yet redrawn page matches the native capture");
+            require(differences(app.canvas(),goldens/"settings-hint.rgb")==0,"modal rink hint over the not yet redrawn page matches the original");
             app.click(121,171,false);// dismiss the hint: the page is redrawn with the lens
             app.motion(121,170);app.draw();
-            require(differences(app.canvas(),goldens/"settings-rink.rgb")==0,"Torszenen mode 2 matches the native capture");
+            require(differences(app.canvas(),goldens/"settings-rink.rgb")==0,"Torszenen mode 2 matches the original");
             app.click(210,35,false);app.click(210,35,false);app.click(210,35,false);
             require(app.session().game().settings().flags[9]==2&&app.screen()==ClassicScreen::Settings,"the hint is shown only once");
             app.click(210,35,false);

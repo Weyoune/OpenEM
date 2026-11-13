@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic strengths page "Stärken" (ui/classic_strengths.cpp): the twelve clubs of a league
+// sorted by overall, defence or attack strength, with the columns K, T, F (each clamped to 99 for display), the
+// overall value, the faces of the last eight results with their summary, morale, and the highlight of the
+// managers' clubs; plus the values for START and MONAT1 and the exact pixels of the drawing.
+//
+// Usage: classic_strengths_tests [DATA] — DATA holds EM.EXE, the graphics, START.HOK and MONAT1.HOK.
 #include "ui/classic_strengths.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -9,14 +15,20 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `condition` is false.
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// State offset of the team record `id` (61 bytes; +0x16 owner, +0x17 morale, +0x18..+0x1D the six strength bytes,
+// alternately defence (even) and attack (odd)).
 size_t team(int id) { return 0x17E7 + size_t(id) * 61; }
+// Writes the six strength bytes of team `id`.
 void stats(HokFile& h, int id, std::initializer_list<uint8_t> values) {
     size_t p = team(id) + 0x18;
     for (const auto value : values) h.state.at(p++) = value;
 }
+// A state with one active manager at club 7, a national manager (block 5) at team 52, the other managers at 149,
+// and 150 teams named "T" with morale 50 and strength 0.
 HokFile fixture() {
     HokFile h;
     h.state.assign(0xBB00, 0);
@@ -30,17 +42,19 @@ HokFile fixture() {
     }
     return h;
 }
+// The row of team `id`; throws if the page does not list it.
 const ClassicStrengthsRow& find(const std::array<ClassicStrengthsRow,12>& rows, int id) {
     for (const auto& row : rows) if (row.team == id) return row;
     throw std::runtime_error("missing strength row");
 }
+// Sort order (the original's exchange sort, including its order of equal keys), column arithmetic and clamps.
 void sorting_and_arithmetic() {
     auto h = fixture();
     stats(h, 0, {1,1,1,1,1,1}); stats(h, 1, {1,1,1,1,1,1});
     stats(h, 2, {2,2,2,2,2,2});
     auto rows = classic_strengths_rows(h);
     require(rows[0].team == 2 && rows[1].team == 1 && rows[2].team == 0,
-            "4219 exchange sort indirectly reverses equal keys after a later larger key");
+            "exchange sort indirectly reverses equal keys after a later larger key");
     stats(h, 0, {10,50,20,40,30,70}); stats(h, 1, {70,0,20,0,10,0});
     rows = classic_strengths_rows(h);
     require(rows[0].team == 0 && rows[0].values == std::array<int,4>{30,30,50,36},
@@ -49,20 +63,22 @@ void sorting_and_arithmetic() {
     require(classic_strengths_rows(h,0,2)[0].team == 0, "attack uses odd strength bytes");
     stats(h, 0, {0,1,0,1,0,4});
     require(find(classic_strengths_rows(h),0).values == std::array<int,4>{0,0,2,1},
-            "43D2..455F overall uses raw sums rather than truncated displayed columns");
+            "overall uses raw sums rather than truncated displayed columns");
     stats(h, 0, {255,255,255,255,255,255});
     stats(h, 1, {254,254,254,254,254,254});
     rows = classic_strengths_rows(h);
     require(rows[0].team == 0 && rows[0].values == std::array<int,4>{99,99,99,255},
             "first three values clamp99,but overall and sorting retain full byte range");
 }
+// Result faces from the last eight results (table row +7 of team 0 at state 0x3BAC: s/S win, u/U draw, n/N loss,
+// other bytes no game), the summary face, highlights, league offsets, purity and invalid arguments.
 void faces_and_highlights() {
     auto h = fixture();
     const char* history = "sUn-NuS?";
     std::copy_n(history, 8, h.state.begin() + 0x3BAC);
     auto rows = classic_strengths_rows(h);
     require(rows[0].faces == std::array<uint8_t,8>{3,2,1,0,1,2,3,0} && rows[0].summary_face == 2,
-            "47BF preserves unknown-result gaps and summarizes wins minus losses");
+            "result faces preserve unknown-result gaps and summarize wins minus losses");
     std::fill_n(h.state.begin() + 0x3BAC, 8, uint8_t('s'));
     require(classic_strengths_rows(h)[0].summary_face == 3, "summary win upper clamp3");
     std::fill_n(h.state.begin() + 0x3BAC, 8, uint8_t('N'));
@@ -73,16 +89,16 @@ void faces_and_highlights() {
     h.state.at(team(9) + 0x16) = 1;
     rows = classic_strengths_rows(h);
     require(find(rows,7).color == 24 && find(rows,8).color == 30 && find(rows,9).color == 30,
-            "42E7 highlight uses active manager club,not team owner or inactive managers");
+            "highlight uses active manager club,not team owner or inactive managers");
     h.state.at(0x0DC6) = 2;
     require(find(classic_strengths_rows(h),8).color == 24, "second active manager is highlighted");
     require(find(classic_strengths_rows(h,4),52).color == 24,
             "manager5 is always eligible regardless of human manager count");
     require(classic_strengths_rows(h,1)[0].team == 12 && classic_strengths_rows(h,2)[0].team == 24,
-            "07C0 league starts use absolute team indices");
+            "league starts use absolute team indices");
     const auto before = h.state;
     (void)classic_strengths_rows(h,4,2);
-    require(before == h.state, "page data helper performs no146C entry writes");
+    require(before == h.state, "page data helper performs no entry cache writes");
     for (const auto args : {std::pair{3,0}, std::pair{5,0}, std::pair{0,-1}, std::pair{0,3}}) {
         bool rejected = false;
         try { (void)classic_strengths_rows(h,args.first,args.second); }
@@ -91,8 +107,8 @@ void faces_and_highlights() {
     }
 }
 
-// Independent original byte extraction in strengths_ui/data.json, not a generated raster.
-// Each row is team,K,T,F,overall,morale; preserve native tie order exactly.
+// The pages the original shows for START and MONAT1 in the three sort modes (overall, defence, attack), written
+// out as values, not as a raster. Each row is team,K,T,F,overall,morale; the original's tie order is kept exactly.
 using Vector = std::array<std::array<int,6>,12>;
 constexpr std::array<Vector,3> start{{
     {{{3,92,90,55,79,49},{4,93,94,48,78,49},{7,80,80,52,71,48},{1,83,79,50,70,48},
@@ -116,6 +132,7 @@ constexpr std::array<Vector,3> month{{
       {7,80,80,51,70,53},{5,80,83,48,70,51},{8,77,75,55,69,53},{1,78,76,52,68,53},
       {2,74,77,52,67,47},{6,75,75,50,66,47},{9,71,69,51,63,47},{11,71,69,47,62,47}}}
 }};
+// Compares the rows of START.HOK and MONAT1.HOK in all three modes with the tables above.
 void reference_values(const std::filesystem::path& data) {
     for (int file = 0; file < 2; ++file) {
         auto h = decode_hok(read_file(data / (file == 0 ? "START.HOK" : "MONAT1.HOK")));
@@ -126,11 +143,13 @@ void reference_values(const std::filesystem::path& data) {
                 const auto& row = rows[r];
                 require(std::array<int,6>{row.team,row.values[0],row.values[1],row.values[2],
                                          row.values[3],row.morale} == expected[r],
-                        "saved-state rows differ from independently extracted original data.json");
+                        "saved-state rows differ from the original's page");
             }
         }
     }
 }
+// Exact pixels of the drawn page: number columns, result face crops from KB graphic 33, the morale bar and the
+// dividers; drawing must not change the state.
 void paint_primitives(const std::filesystem::path& data) {
     ClassicCanvas c(data);
     auto h = fixture(); stats(h,0,{0,1,0,1,0,4});
@@ -144,7 +163,7 @@ void paint_primitives(const std::filesystem::path& data) {
                         "%0            %0            %2            %1",30);
     for (int y = 29; y <= 35; ++y) for (int x = 142; x < 254; ++x)
         require(c.pixels().at(x,y) == digits.at(x,y),
-                "native whole numeric string uses digit-width %padding and0831 without shadow");
+                "native whole numeric string uses digit-width %padding and mini font without shadow");
     const auto& atlas = c.asset(33);
     for (int y = 0; y < 5; ++y) for (int x = 0; x < 6; ++x) {
         // First result and summary are wins: exactly the original25,36 crop.
@@ -167,7 +186,7 @@ void paint_primitives(const std::filesystem::path& data) {
 int main(int argc, char** argv) {
     try {
         sorting_and_arithmetic(); faces_and_highlights();
-        // Parent CMake may supply the original EM directory for asset/reference checks.
+        // CMake may supply the original game folder for asset/reference checks.
         if (argc > 1) { reference_values(argv[1]); paint_primitives(argv[1]); }
         std::printf("Native classic strengths raw-fixture tests passed\n");
         return 0;

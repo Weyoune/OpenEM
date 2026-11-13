@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Play-off bracket page (see classic_playoff.hpp). All offsets are into the save state.
 #include "ui/classic_playoff.hpp"
 #include <algorithm>
 #include <array>
@@ -8,25 +9,29 @@
 namespace em::ui {
 namespace {
 constexpr auto mini=ClassicFontId::Mini;
-constexpr std::array<int,4> height_extra{1,2,3,3}; //EXE DS4E10
-constexpr std::array<int,3> heading_at{1,5,7}; //DS4E0D
+constexpr std::array<int,4> height_extra{1,2,3,3}; // extra frame lines per play-off stage (EM.EXE table)
+constexpr std::array<int,3> heading_at{1,5,7}; // 1-based pairing index before which each stage heading appears
 constexpr std::array<const char*,3> heading_text{"VIERTELFINALE","HALBFINALE","ENDSPIEL"};
+// Bounds-checked pointer into the save state.
 const uint8_t* bytes(const HokFile& h,size_t at,size_t count) {
     if(at>h.state.size() || count>h.state.size()-at)
         throw FormatError("classic playoff: truncated native state");
     return h.state.data()+at;
 }
 int byte(const HokFile& h,size_t at) { return *bytes(h,at,1); }
+// Two-digit number, left-padded with the blank digit '%'.
 std::string number(int n) {
     auto result=std::to_string(n);
     if(n>=0 && result.size()<2) result.insert(0,2-result.size(),'%');
     return result;
 }
+// Team name (first 22 bytes of the 61-byte team record at 0x17E7), up to the first NUL.
 std::string name(const HokFile& h,int id) {
     const auto* p=bytes(h,0x17e7+size_t(id)*61,22);
     size_t count=0;while(count<22 && p[count]) ++count;
     return {reinterpret_cast<const char*>(p),count};
 }
+// True if team is the club of one of the human managers (count at 0x0DC6, club at manager block +0x14).
 bool human(const HokFile& h,int team) {
     const int count=byte(h,0x0dc6);
     if(count>6) throw FormatError("classic playoff: invalid human manager count");
@@ -34,10 +39,12 @@ bool human(const HokFile& h,int team) {
         if(byte(h,0x0dcd+size_t(m)*0x1af+0x14)==team) return true;
     return false;
 }
+// Finds the next play-off day (event bit 0x40) from the calendar cursor 0xB953 on and stores its index, date
+// and the " d.m." caption in out. Index 0 means "today" and uses the current season day (u32 at 0x8E2D).
 void preview(ClassicPlayoffView& out,const HokFile& h,const SeasonCalendar& calendar) {
     (void)bytes(h,0xb953,2);
     const int cursor=le16(h.state,0xb953);
-    if(cursor>209) return; //EXE DS4E01, even before the unavailable bracket branch
+    if(cursor>209) return; // the original's limit, applied even before the unavailable-bracket branch
     size_t at=size_t(cursor);
     while(at<calendar.events.size() && !((calendar.events[at]>>1)&32)) ++at;
     if(at>=calendar.events.size()) throw FormatError("classic playoff: missing future calendar event");
@@ -45,7 +52,7 @@ void preview(ClassicPlayoffView& out,const HokFile& h,const SeasonCalendar& cale
         throw FormatError("classic playoff: calendar date outside host range");
     (void)bytes(h,0x8e2d,6);
     uint32_t day=at?uint32_t(at):le32(h.state,0x8e2d);
-    if(day==2000) day=0; //1271 sentinel, not a new season-day write
+    if(day==2000) day=0; // 2000 is a sentinel for day 0 (not a new season-day write)
     if(day>uint32_t(std::numeric_limits<int>::max()-252))
         throw FormatError("classic playoff: current day outside host range");
     out.preview_calendar_index=int(at);
@@ -53,9 +60,10 @@ void preview(ClassicPlayoffView& out,const HokFile& h,const SeasonCalendar& cale
     out.native_caption="   "+std::to_string(out.preview_date->day)+"."+
                        std::to_string(out.preview_date->month)+".";
 }
+// Played games of pairing pair: results at 0x0205 + game * 14 + pair * 2 (home, away byte; >= 100 ends the
+// list). Pairings of completed earlier stages (before the cursor) show all five stored games, the current
+// stage the games 0..game-1 played so far.
 std::vector<ClassicPlayoffScore> scores(const HokFile& h,int pair,int cursor,int game) {
-    //4248..42B3: completed earlier stages inspect all5 stored legs. The
-    //current stage inspects G completed legs; day218 changes only Cup type0.
     const int last=2*pair<cursor?4:int(static_cast<int8_t>(static_cast<uint8_t>(game-1)));
     if(last>4) throw FormatError("classic playoff: current history exceeds five legs");
     std::vector<ClassicPlayoffScore> out;
@@ -64,7 +72,7 @@ std::vector<ClassicPlayoffScore> scores(const HokFile& h,int pair,int cursor,int
         if(p[0]>=100 || p[1]>=100) break;
         int left=p[0],right=p[1],dots=0;
         if(left>29) {left-=30;dots=1;if(left>29) {left-=30;dots=2;}}
-        //43A0: the right marker overwrites the earlier left marker.
+        // As in the original, the right marker overwrites the earlier left marker.
         if(right>29) {right-=30;dots=1;if(right>29) {right-=30;dots=2;}}
         out.push_back({187+26*j,dots,uint8_t(j%2?30:1),number(left)+":"+number(right)});
     }
@@ -97,8 +105,8 @@ ClassicPlayoffView classic_playoff_view(const HokFile& h,const SeasonCalendar& c
         }
         const int home=byte(h,0x8e91+size_t(p)*2),away=byte(h,0x8e92+size_t(p)*2);
         if(home>=64) continue;
-        //An invalid away ID leaves native click-array stack residue. Do not
-        //invent a deterministic modal target for that malformed pairing.
+        // An invalid away ID leaves undefined click targets in the original. Do not
+        // invent a deterministic modal target for that malformed pairing.
         if(away>=64) throw FormatError("classic playoff: incomplete native pairing");
         ClassicPlayoffRow row;
         row.pair=p; row.home=home; row.away=away; row.baseline=y;
@@ -128,7 +136,7 @@ void draw_classic_playoff(ClassicCanvas& c,const HokFile& h,const SeasonCalendar
     c.frame(136,201,2,2); c.text_native(mini,160,221,"Liga",7,-1,160);
     c.frame(5,view.frame_top,13,view.frame_rows);
     c.blit(36,13,view.frame_top+4,0,0,22,22);
-    c.blit(36,286,view.frame_top+4,0,0,22,22); //2115:0A79 opaque
+    c.blit(36,286,view.frame_top+4,0,0,22,22); // drawn opaque
     c.text_native(ClassicFontId::NewBold,0,view.frame_top+19,view.native_title,7,1,319);
     c.text_native(ClassicFontId::Flow,0,view.frame_top+34,view.available?view.native_caption:
                   "Die Paarungen stehen noch nicht fest...",30,0,319);

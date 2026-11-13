@@ -1,18 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Fixed read-only DOSBox observations: pending quote, Behalten and the shifted-row sale.
+// Tests for the sale offers of the transfer page (src/game/sale_quote.cpp): an interested club
+// makes an offer for one of the manager's players; the manager keeps him ("Behalten") or sells.
+// Covered: the amount formula (signed 16-bit jitter, division before multiplication), quote
+// creation (only random draws, no state change), keeping, selling with the original's
+// shifted-row buyer quirk, the same flow through Game and its checkpoint, and the modal offer
+// dialog of the classic UI (pixel-exact against reference screenshots, immune to stray input).
+// All expected states are complete save states recorded with the original game.
+// Arguments: the game data folder, the folder of the reference saves/screens, and a work folder.
 #include "ui/classic_app.hpp"
 #include "game/checkpoint.hpp"
 #include <SDL.h>
 #include <cstdio>
 #include <stdexcept>
 using namespace em;using namespace em::ui;namespace fs=std::filesystem;
+// Throws `message` as a test failure unless `ok`.
 static void require(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
+// Requires two encoded saves to have identical states; prints up to 12 differing offsets and
+// fails with `message` and the number of differing bytes.
 static void same_state(const Bytes& actual,const Bytes& expected,const char* message){
     const auto a=decode_hok(actual),b=decode_hok(expected);size_t differences=0;
     for(size_t n=0;n<a.state.size();++n)if(a.state[n]!=b.state[n]){if(differences<12)std::fprintf(stderr,"state%04zx:%u expected%u\n",n,a.state[n],b.state[n]);++differences;}
     if(differences)throw std::runtime_error(std::string(message)+":"+std::to_string(differences)+" bytes");
 }
+// Current state of the game's Borland-compatible random generator.
 static uint32_t seed(const Game& g){return decode_game_checkpoint(g.checkpoint_bytes()).borland_random;}
+// Compares the 320x240 canvas with a reference screen stored as raw 24-bit RGB (row-major) and
+// fails with the number of differing pixels and the position of the first one.
 static void native_rgb(const ClassicCanvas& canvas,const fs::path& path){
     const auto expected=read_file(path);const auto actual=canvas.argb();require(expected.size()==320*240*3,"native sale golden size");size_t count=0,first=0;
     for(size_t p=0;p<actual.size();++p){const uint32_t rgb=uint32_t(expected[p*3])<<16|uint32_t(expected[p*3+1])<<8|expected[p*3+2];if((actual[p]&0xffffff)!=rgb){if(!count)first=p;++count;}}
@@ -22,10 +35,13 @@ static void native_rgb(const ClassicCanvas& canvas,const fs::path& path){
 int main(int argc,char** argv){try{
     if(argc!=4)throw std::runtime_error("sale_quote_tests DATA NATIVE WORK");
     const fs::path data=argv[1],native=argv[2],work=argv[3];const auto exe=read_file(data/"EM.EXE");const auto tables=load_contract_tables(exe);
+    // Amount formula edge cases: a listed player with two contract years, and a zero-width range.
     BorlandRandom boundary(1);const auto amount=native_sale_amounts(600000,true,false,2,boundary);
     require(amount.gross==504600&&amount.severance==144170&&amount.net==360430&&boundary.state()==2156045615u,"native signed16 jitter and division-before-multiply vector");
     BorlandRandom divisor(7);bool zero_divisor=false;try{(void)native_sale_range(divisor,-32768,32767);}catch(const FormatError&){zero_divisor=true;}
     require(zero_divisor&&divisor.state()==7,"native zero divisor is reported without a fabricated draw");
+    // Club offer for squad row 6 (player 26, bidder team 3): keep, then on a second position sell.
+    // 51 is the leftover click coordinate the original carries into the buyer lookup (see SaleQuote).
     const auto before=read_file(native/"native-transfer-entry.hok");auto h=decode_hok(before);const auto original=h.state;BorlandRandom random(1829654223u);SaleQuote quote;
     require(begin_native_sale(h,tables,random,0,6,51,quote),"native club quote opens");
     require(quote.id==26&&quote.bidder==3&&quote.amounts.gross==1130100&&quote.amounts.net==1130100&&quote.amounts.severance==0,"native SCHIFFL quote");
@@ -38,13 +54,14 @@ int main(int argc,char** argv){try{
     same_state(encode_hok(h),read_file(native/"native-club-sale-open.hok"),"native sale open all47761");int buyer=-1;
     require(finish_native_sale(h,random,quote,true,&buyer)&&buyer==0&&random.state()==797554904u,"native shifted bidder and three buyer draws");
     same_state(encode_hok(h),read_file(native/"native-club-sold.hok"),"native sold all47761");
+    // Offer for an own player on the transfer list (block 4, row 0).
     const auto pool_before=read_file(native/"native-pool-sale-before.hok");
     h=decode_hok(pool_before);random=BorlandRandom(797554904u);
     require(begin_native_sale(h,tables,random,4,0,32767,quote),"unsupported buyer pointer still permits Behalten");
     const auto unsupported=h.state;const auto unsupported_seed=random.state();bool outside=false;
     try{(void)finish_native_sale(h,random,quote,true);}catch(const FormatError&){outside=true;}
     require(outside&&h.state==unsupported&&random.state()==unsupported_seed,"unavailable native heap context is rejected before mutation");
-    require(finish_native_sale(h,random,quote,false),"Behalten never dereferences buyer SI");
+    require(finish_native_sale(h,random,quote,false),"Behalten never uses the buyer pointer");
     h=decode_hok(pool_before);random=BorlandRandom(797554904u);
     require(begin_native_sale(h,tables,random,4,0,250,quote)&&quote.id==26&&quote.bidder==3,"native owned pool quote opens");
     require(quote.amounts.gross==798600&&quote.amounts.severance==228170&&quote.amounts.net==570430&&random.state()==2464783399u,"native pool worth, jitter, factor and severance");
@@ -63,11 +80,14 @@ int main(int argc,char** argv){try{
     require(resumed.finish_sale_offer(quote,true)&&seed(resumed)==797554904u,"Game finishes restored quote context");
     same_state(resumed.save_bytes(),read_file(native/"native-club-sold.hok"),"Game exported native sold all47761");
     require(resumed.offers().empty()&&resumed.budget().balance==2762300,"Game budget and interest metadata refreshed");
+    // The offer dialog of the classic UI: opened by clicking the row on the transfer page.
     fs::create_directories(work);fs::path initial;
     for(int n=1;;++n){initial=work/("sale-"+std::to_string(n)+".OEM");if(!fs::exists(initial))break;}
     Game ui_game(exe,before,1829654223u);write_new_save(initial,ui_game.checkpoint_bytes());
     ClassicApplication app(data,work,initial);
-    //The captured native process previously visited Stadium; its exit patches KB4 edge2 to3.
+    //In the reference session the stadium screen had been visited before; leaving it patches
+    //edge 2 of the KB4 graphics to 3. Visiting it here reproduces that, and must not touch the
+    //game state or the random generator.
     const auto cold=app.session().game().checkpoint_bytes();app.render_screen("stadium");app.click(20,50,true);
     require(app.screen()==ClassicScreen::Main&&app.session().game().checkpoint_bytes()==cold,"stadium atlas lifetime is independent of game state/RNG");
     app.render_screen("transfer");app.motion(51,66);app.draw();app.click(51,66,false);app.draw();

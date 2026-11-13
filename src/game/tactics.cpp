@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The tactics dialog model: loading, editing, normalizing and committing a plan; see tactics.hpp.
 #include "game/tactics.hpp"
 #include "game/lineup.hpp"
 #include <algorithm>
 
 namespace em {
 namespace {
-constexpr size_t kProfiles = 0xB96B, kSelected = 0xBA8B;
-constexpr size_t kTeams = 0x17E7;
+constexpr size_t kProfiles = 0xB96B, kSelected = 0xBA8B;  // presets and selected preset per manager
+constexpr size_t kTeams = 0x17E7;                           // team records (61 bytes each)
 
+// Validates `manager` and that the state is large enough; returns it as an index.
 size_t manager_index(const HokFile& h, int manager) {
     if (manager < 0 || manager >= kHokManagers)
         throw FormatError("tactics: invalid manager");
@@ -16,19 +18,23 @@ size_t manager_index(const HokFile& h, int manager) {
     (void)h.state.at(kSelected + m);
     return m;
 }
+// State offset of the team record of manager m's club (manager block +0x14).
 size_t team_offset(const HokFile& h, size_t m) {
     const size_t id = h.state.at(0x0DCD + m * 0x1AF + 0x14);
     if (id >= 150) throw FormatError("tactics: invalid manager team");
     return kTeams + id * 61;
 }
+// Throws FormatError for modes or a preset outside the dialog's ranges.
 void validate(const TacticsPlan& p) {
     if (p.lineMode > 5 || p.effortMode > 2 || p.offenseMode > 2 || p.preset > 3)
         throw FormatError("tactics: invalid native mode or preset");
 }
+// Throws FormatError unless delta is -1 or +1.
 void direction(int delta) {
     if (delta != -1 && delta != 1)
         throw FormatError("tactics: arrow delta must be -1 or +1");
 }
+// Copies the current effort/offence values into the selected preset.
 void remember(TacticsPlan& p) {
     p.profiles[p.preset].effort = p.effort;
     p.profiles[p.preset].offense = p.offense;
@@ -47,6 +53,8 @@ void sync_team(HokFile& h, size_t team) {
         t.offence[i] = h.state.at(team + 0x36 + i);
     }
 }
+// Writes all plan fields into the state (see the table in tactics.hpp); the effort base is
+// written to +0x26 and +0x2D.
 void write_plan(HokFile& h, const TacticsPlan& p, size_t m, size_t team) {
     h.state.at(0x078A + 2 * m) = uint8_t(p.autoLineup);
     h.state.at(0x01F9 + m) = p.lineMode;
@@ -104,7 +112,7 @@ bool edit_mode(TacticsPlan& p, int control, int delta) {
     const int next = int(mode) + delta, maximum = control == 1 ? 5 : 2;
     if (next < 0 || next > maximum) return false;
     mode = uint8_t(next);
-    // This also applies to lineMode entering1, not only to the two SEMI modes.
+    // This also applies to lineMode entering 1, not only to the effort and offence modes.
     if (mode == 1) remember(p);
     return true;
 }
@@ -129,14 +137,14 @@ bool edit_numeric(TacticsPlan& p, int arrow, int delta) {
         const int limit = kind == 0 ? 100 : 7;
         maximum = uint8_t(limit);
         if (row == 0) {
-            // 2971..2998 deliberately excludes the fifth situation addition.
+            // The original deliberately excludes the fifth situation addition here.
             for (size_t i = 1; i < 5; ++i)
                 if (limit - int(values[i]) < int(maximum)) maximum = uint8_t(limit - values[i]);
         } else maximum = uint8_t(limit - values[0]);
     }
     if (delta < 0 && *value != 0) --*value;
     else if (delta > 0 && *value < maximum) ++*value;
-    // Native2A9E runs these two six-byte copies even if a bound prevented change.
+    // The original makes these two six-byte copies even if a bound prevented a change.
     remember(p);
     return true;
 }

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// ClassicApplication glue for the squad-list hover help: decides which list
+// the current screen shows, updates the hover state from the mouse position
+// and draws footer help, row rules and the transfer-pool trail.
 #include "ui/classic_app.hpp"
 
 namespace em::ui {
+// The squad list shown on the current screen, if any.
 std::optional<ClassicRosterKind> ClassicApplication::roster_kind() const{
     switch(screen_){
         case ClassicScreen::Contracts:return ClassicRosterKind::Contracts;
@@ -10,6 +14,9 @@ std::optional<ClassicRosterKind> ClassicApplication::roster_kind() const{
         default:return std::nullopt;
     }
 }
+// Recomputes the hover help from the mouse position while no dialog is
+// open. On the transfer page the pool list (right) is tracked as well; each
+// pool row the mouse crossed is remembered in pool_trail_ (bit per row).
 void ClassicApplication::update_roster_hover(){
     if(!session_.loaded()||player_detail_||contract_editor_||fee_editor_||sale_quote_||!notice_.empty()||quit_question_||talent_question_||file_preview_)return;
     const auto kind=roster_kind();
@@ -24,11 +31,13 @@ void ClassicApplication::update_roster_hover(){
         else if(roster_hover_.row>=0)pool_help_visible_=false;
     }else{transfer_hover_={};pool_rules_=pool_help_visible_=false;}
 }
+// Draws the hover help of the current list and, on the transfer page, the
+// pool trail and pool help.
 void ClassicApplication::draw_roster_hover(){
     const auto kind=roster_kind();
     if(kind&&hover_kind_==kind)draw_classic_roster_hover(canvas_,*kind,roster_hover_,roster_rules_);
     // Leaving a pool row repaints both of its rules in the separator colour 31 over 180..314, one pixel wider on
-    // each side than the drawn separators (DOSBox loan-fee.rgb): the rows the mouse crossed keep that trace
+    // each side than the drawn separators, as the original does: the rows the mouse crossed keep that trace
     // until the lists are redrawn.
     if(kind==ClassicRosterKind::Transfer)
         for(int row=0;row<12;row++)

@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Crash-safe writing of a new savegame file (declared in session.hpp): the bytes go to a uniquely named
+// temporary file next to the destination, are flushed to disk and then moved/linked to the final name,
+// which must not exist yet. An existing file is never overwritten.
 #include "ui/session.hpp"
 
 #include <atomic>
@@ -18,9 +21,13 @@
 
 namespace em::ui {
 namespace {
+// Counter that makes temporary file names unique within the process.
 std::atomic<unsigned long> serial{0};
 }
 
+// Writes bytes to the new file destination (parent directories are created). Throws FormatError with a
+// user-facing message for an empty name or an existing file, std::system_error on I/O failure; the
+// temporary file is removed on every failure.
 void write_new_save(const std::filesystem::path& destination, const Bytes& bytes) {
     namespace fs = std::filesystem;
     if (destination.filename().empty()) throw FormatError("Bitte einen Dateinamen eingeben.");

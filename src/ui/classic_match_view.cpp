@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Implementation of the classic match display (see classic_match_view.hpp):
+// drawing of boards, minute panel, goal flashes and board messages; the
+// timing of frames and message steps; inserting flashes, messages and goal
+// scenes into the observed minutes; building a minute's frame from the
+// running matches; and click handling on the boards.
 #include "ui/classic_match_view.hpp"
 
 #include <algorithm>
@@ -9,20 +14,20 @@
 
 namespace em::ui {
 namespace {
-constexpr auto kMini = ClassicFontId::Mini;        // native font 3
-constexpr auto kBold = ClassicFontId::NewBold;     // native font 1
-constexpr int kBoardKb = 19, kSpriteKb = 38, kKey = 0xC0;
-constexpr int kBoardStep = 45;
-constexpr uint8_t kBarColors[2] = {0x18, 0x13};    // DS:5425 / DS:5427
+constexpr auto kMini = ClassicFontId::Mini;        // the game's font 3
+constexpr auto kBold = ClassicFontId::NewBold;     // the game's font 1
+constexpr int kBoardKb = 19, kSpriteKb = 38, kKey = 0xC0;  // board picture KB/19, sprites/digits KB/38, transparency key
+constexpr int kBoardStep = 45;                     // vertical distance between boards
+constexpr uint8_t kBarColors[2] = {0x18, 0x13};    // the two line colours of a bar
 
-// ovl14_1540: horizontal bar, background 0x11 unless full, two lines x..x+value in DS:5427.
+// Horizontal bar: background 0x11 unless full, two lines x..x+value in the bar colours.
 void hbar(ClassicCanvas& c, int x, int y, int length, int value) {
     value = std::min(value, length);
     if (value < length) c.rect(x, y, x + length, y + 1, 0x11);
     if (value > 0)
         for (int row = 0; row < 2; row++) c.line(x, y + row, x + value, y + row, kBarColors[row]);
 }
-// ovl14_1477: vertical bar in the columns x+2 / x+3, filled from the bottom (DS:5425), the rest 0x12.
+// Vertical bar in the columns x+2 / x+3, filled from the bottom in the bar colours, the rest 0x12.
 void vbar(ClassicCanvas& c, int x, int y, int length, int value) {
     value = std::min(value, length);
     if (value > 0)
@@ -30,24 +35,24 @@ void vbar(ClassicCanvas& c, int x, int y, int length, int value) {
     if (value < length)
         for (int col = 0; col < 2; col++) c.line(x + col + 2, y, x + col + 2, y + length - value, 0x12);
 }
-// ovl14_15c3: a lamp; off a 5 x 5 square of colour 0x10, on the KB38 sprite at (0x4C, 10).
+// A lamp; off a 5 x 5 square of colour 0x10, on the KB/38 sprite at (0x4C, 10).
 void lamp(ClassicCanvas& c, int x, int y, bool on) {
     if (!on) c.rect(x, y + 1, x + 4, y + 5, 0x10);
     else c.blit(kSpriteKb, x + 1, y + 2, 0x4C, 10, 4, 4, true, kKey);
 }
-// ovl14_13a4: one KB38 digit (8 x 10). Live mode puts it on the clean screen, the plain mode on a colour 3 cell.
+// One KB/38 digit (8 x 10). Live mode puts it on the clean screen, the plain mode on a colour 3 cell.
 void digit(ClassicCanvas& c, bool plain, int value, int x, int y) {
     if (plain) c.rect(x, y, x + 7, y + 9, 3);
     c.blit(kSpriteKb, x, y, value * 8, 0, 8, 10, true, 0);
 }
-// ovl14_0300: two two-digit numbers (score).
+// Two two-digit numbers (score).
 void score(ClassicCanvas& c, int home, int away, int x, int y) {
     digit(c, false, home / 10 % 10, x, y);
     digit(c, false, home % 10, x + 9, y);
     digit(c, false, away / 10 % 10, x + 0x15, y);
     digit(c, false, away % 10, x + 0x1E, y);
 }
-// ovl14_0000: the minute panel (three period bars, minute in two digits).
+// The minute panel: three period bars (20 minutes each, 4 pixels per minute) and the minute in two digits.
 void minute_panel(ClassicCanvas& c, bool plain, int minute) {
     int rest = minute;
     for (int k = 0; k < 3; k++) {
@@ -57,12 +62,13 @@ void minute_panel(ClassicCanvas& c, bool plain, int minute) {
     digit(c, plain, minute / 10 % 10, 0x60, 0xC4);
     digit(c, plain, minute % 10, 0x6A, 0xC4);
 }
-// 199F:0164 with DS:038D = 0 (thousands separators) for the attendance.
+// The attendance with '.' as thousands separator, as the game formats it.
 std::string thousands(long value) {
     std::string s = std::to_string(value);
     for (int n = int(s.size()) - 3; n > 0; n -= 3) s.insert(size_t(n), ".");
     return s;
 }
+// Copies a w x h rectangle of a work buffer to the screen, skipping colour 0.
 void copy(ClassicCanvas& c, const Image& from, int sx, int sy, int x, int y, int w, int h) {
     for (int row = 0; row < h; row++)
         for (int col = 0; col < w; col++) {
@@ -73,7 +79,8 @@ void copy(ClassicCanvas& c, const Image& from, int sx, int sy, int x, int y, int
         }
 }
 
-// ovl14_16ac: the static part of one board.
+// The static part of one board: frame, crests, names and attendance ("(ausw.)" for an away game; values above 200000
+// have 200000 subtracted; a sold-out arena is shown in colour 0x10).
 void board_frame(ClassicCanvas& c, const ClassicBoard& b, int y0) {
     c.blit(kBoardKb, 3, y0 - 3, 0, 0, 0x139, 0x2C, true, kKey);
     c.blit(b.team[0].crest, 0x60, y0, 0, 0, 0x26, 0x26, true, kKey);
@@ -86,7 +93,8 @@ void board_frame(ClassicCanvas& c, const ClassicBoard& b, int y0) {
     c.text(kMini, 0x30, y0 + 0x26, text, b.sold_out ? 0x10 : 0, -1, 0x52);
 }
 
-// ovl14_0d46: the live part of one board.
+// The live part of one board: score, line lamps and energy bars, skaters, penalty counters, chances per period,
+// penalty minutes, period scores, effort and offence bars.
 void board_live(ClassicCanvas& c, const ClassicBoard& b, int index) {
     const int y = index * kBoardStep + 0xF;
     score(c, b.goals[0] % 30, b.goals[1] % 30, 0x8B, index * kBoardStep + 6);
@@ -97,8 +105,8 @@ void board_live(ClassicCanvas& c, const ClassicBoard& b, int index) {
             for (int k = 0; k < 4; k++) lamp(c, x + kind * 8 + 8, y + k * 7 - 1, t.line[kind] == k);
             vbar(c, x + kind * 0x18, y, 0x19, std::max(0, (t.energy[kind] - 0x32) / 2));
         }
-        // the digits go through a 97 x 25 work buffer (DGROUP 6727, font 3, cleared to 0) and are copied out
-        // (sub_21D23 skips colour 0, so only the glyphs reach the screen)
+        // the digits go through a 97 x 25 work buffer (small font, cleared to 0) and are copied out
+        // (the copy skips colour 0, so only the glyphs reach the screen)
         Image work(0x61, 0x19, 0);
         const ClassicFont& f = c.font();
         f.draw(work, kMini, 0, 5, std::to_string(t.skaters), 7);
@@ -120,29 +128,29 @@ void board_live(ClassicCanvas& c, const ClassicBoard& b, int index) {
         if (side == 0) copy(c, work, 0x4B, 0, 0x99, y + 4, 0xE, 0x17);
     }
 }
-// 1902:0885 (sub_198A5) centred on a single column: x = centre - width / 2, moved to 0 when the text would leave the screen.
+// The game's centred text on a single column: x = centre - width / 2, moved to 0 when the text would leave the screen.
 void centred(ClassicCanvas& c, int centre, int y, const std::string& text) {
     int x = centre - c.font().measure(kMini, text) / 2;
     if (x + c.font().measure(kMini, text) > 0x13F || x < 0) x = 0;
     c.text(kMini, x, y, text, 1, 0);
 }
 
-// FUN_162c_23c4 seg003:2B52..2C7C: the goal flash over the message panel (font 3 selected by 1902:06DD).
+// The goal flash over the message panel, in the small font.
 void goal_flash(ClassicCanvas& c, const ClassicGoalFlash& f) {
     centred(c, 0xF5, 0xC0, f.home);
-    centred(c, 0x127, 0xC0, "-");  // DS:495C
+    centred(c, 0x127, 0xC0, "-");
     centred(c, 0x10D, 0xC7, f.away);
-    for (int a = 0; a < 4; a += 3) {  // the colon: a 2 x 2 dot in colour 4 on a black shadow, twice (1902:0800 fills boxes)
+    for (int a = 0; a < 4; a += 3) {  // the colon: a 2 x 2 dot in colour 4 on a black shadow, twice (filled boxes)
         c.rect(0x101, 0xCF + a, 0x102, 0xD0 + a, 0);
         c.rect(0x100, 0xCE + a, 0x101, 0xCF + a, 4);
     }
     if (!f.score) return;  // delay(50) before the digits
     int home = f.goals[0];
-    while (home > 0x1D) home -= 0x1E;  // only the home goals lose their +30 marker (seg003:2B48)
+    while (home > 0x1D) home -= 0x1E;  // only the home goals lose their +30 marker, as in the game
     score(c, home, f.goals[1], 0xEF, 0xCC);
 }
 
-// ovl14_0690: caption (DS:5456 / 545E / 5469 / 5473) and result (DS:547C ...) of an event kind.
+// Caption and result text of a board-message kind (see ClassicBoardMessage).
 const char* message_caption(int kind) {
     if (kind <= 1) return "Chance:";
     if (kind <= 3) return "Strafzeit:";
@@ -153,15 +161,16 @@ const char* message_result(int kind) {
     static const char* const results[7] = {"Vergeben", "TOR!", "2 Minuten", "5 Minuten", "", "Vergeben", "TOR!"};
     return results[std::clamp(kind, 0, 6)];
 }
+// The second line of the final step: "Vorlage: <assist>" for chances and injuries, the reason for penalties.
 std::string message_second(const ClassicBoardMessage& m) {
-    if (m.kind <= 1 || m.kind == 4) return m.second.empty() ? std::string() : "Vorlage: " + m.second;  // DS:54AC
+    if (m.kind <= 1 || m.kind == 4) return m.second.empty() ? std::string() : "Vorlage: " + m.second;
     if (m.kind <= 3) return m.second;  // the reason of a penalty
     return {};
 }
-constexpr int kMessageX = 0xC7, kMessageY = 0xB7, kMessageW = 0x6F, kMessageH = 0x20;
+constexpr int kMessageX = 0xC7, kMessageY = 0xB7, kMessageW = 0x6F, kMessageH = 0x20;  // message work buffer on screen
 
-// ovl14_0690 / ovl14_05a0: the work buffer (dword_31107) is drawn with 1902:0885 between x 0 and 0x6F and copied
-// without colour 0 (sub_21D23) over the panel restored from the background page (sub_20265 from 0x4B00).
+// One board-message step: the work buffer is drawn with centred text between x 0 and 0x6F and copied without colour 0
+// over the panel restored from the background page.
 void board_message(ClassicCanvas& c, const ClassicBoardMessage& m) {
     Image work(kMessageW, kMessageH, 0);
     const ClassicFont& font = c.font();
@@ -193,8 +202,8 @@ void board_message(ClassicCanvas& c, const ClassicBoardMessage& m) {
     copy(c, work, 0, 0, kMessageX, kMessageY, kMessageW, kMessageH);
 }
 
-// ovl14_03be: one entry 0 per vowel ("25AEIOU", DS:541D; the character after a vowel is skipped), at most 0x1C, padded
-// with 9 to eight entries.
+// The reporter's lip-sync list of a text: one entry 0 per vowel (the characters of "25AEIOU" count as vowels; the
+// character after a vowel is skipped), at most 0x1C entries, padded with 9 to eight entries.
 std::vector<int> lip_sync(const std::string& utf8) {
     const std::string s = ClassicFont::utf8_to_native(utf8);
     std::vector<int> out;
@@ -207,11 +216,11 @@ std::vector<int> lip_sync(const std::string& utf8) {
     while (out.size() < 8) out.push_back(9);
     return out;
 }
-// 2115:019E waits value / 3 BIOS ticks; ovl14_04f2 (speed < 41) shows seven mouth sprites and the closed mouth, one per
-// vertical retrace (FUN_199f_010e).
+// The game's delay(value) waits value / 3 BIOS ticks; the mouth animation (speed < 41) shows seven mouth sprites and the
+// closed mouth, one per vertical retrace (70 Hz).
 int units_ms(int units) { return units * 54925 / 3000; }
 int mouth_ms(int speed) { return speed < 41 ? 8 * 1000 / 70 : 0; }
-// ovl14_05a0 after drawing a line: per lip-sync entry the mouth (0) or delay(6), only below speed 41.
+// After drawing a line: per lip-sync entry the mouth animation (entry 0) or delay(6), only below speed 41.
 int speak_ms(const std::string& text, int speed) {
     if (speed >= 41) return 0;
     int ms = 0;
@@ -227,7 +236,7 @@ void draw_classic_match_view(ClassicCanvas& c, const ClassicMatchFrame& frame) {
     }
     c.background(22);
     if (frame.boards.empty()) {
-        // ovr030:2642: "Spiele laufen" (DS:0620) centred in font 1, a plain panel and the minute display
+        // "Spiele laufen" centred in the bold font, a plain panel and the minute display
         c.text(kBold, 0, 0x50, "Spiele laufen", 0x1E, 0, 0x13F);
         c.outline(3, 0xB7, 0x7B, 0xDA, 0);
         c.rect(4, 0xB8, 0x7A, 0xD9, 3);
@@ -252,7 +261,7 @@ void draw_classic_cup_minute(ClassicCanvas& c, const HokFile& before_day, const 
                              const std::vector<ClassicCupLive>& live) {
     ClassicCupView view = classic_cup(before_day, calendar);
     const size_t title = view.native_caption.find("   ");
-    view.native_caption = view.native_caption.substr(0, title) + "        " + std::to_string(minute) + ".Minute";  // ovr029:3D2C: title, DS:4E5F (7 blanks), number, ".", DS:279B; 8 blanks after our trimmed title (raster test)
+    view.native_caption = view.native_caption.substr(0, title) + "        " + std::to_string(minute) + ".Minute";  // the game writes title, 7 blanks, number, ".Minute"; 8 blanks here because our title is trimmed
     const int game = int(static_cast<int8_t>(before_day.state.at(0x031B)));
     const auto number = [](int v) { std::string s = std::to_string(v); if (s.size() < 2) s.insert(0, 2 - s.size(), '%'); return s; };
     for (auto& group : view.groups)
@@ -282,13 +291,13 @@ std::vector<ClassicCupLive> classic_cup_live(int minute, const std::vector<LiveM
 }
 
 int classic_match_minute_ms(int speed) {
-    constexpr int kDrawing = 80;  // one minute of drawing in DOSBox-X (60 minutes in about 5 s at speed 70)
+    constexpr int kDrawing = 80;  // the time the original needs to draw one minute (60 minutes in about 5 s at speed 70)
     if (speed >= 70) return kDrawing;
     return kDrawing + (30 - speed / 2) * 55 / 3;
 }
 
 int classic_match_frame_ms(const ClassicMatchFrame& frame, int speed) {
-    // 2115:019E waits value / 3 BIOS ticks of 54.925 ms
+    // the game's delay(value) waits value / 3 BIOS ticks of 54.925 ms
     if (frame.hold_ms >= 0) return frame.hold_ms;
     if (frame.flash) return (frame.flash->score ? 70 / 3 : 50 / 3) * 54925 / 1000;
     return classic_match_minute_ms(speed);
@@ -360,7 +369,7 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
                      units_ms(slow + 1 + (speed == 50)) + (result[size_t(i)] ? units_ms(4) : mouth_ms(speed)));
         }
     }
-    // the final lines reach the screen only through ovl14_05a0 with a player name
+    // the final lines reach the screen only with a player name
     if (!message.player.empty()) {
         step(ClassicBoardMessage::Step::Final, true, 1, speak_ms(message.player, speed));
         const std::string second = message_second(message);
@@ -372,7 +381,7 @@ std::vector<ClassicMatchFrame> classic_board_message_steps(const ClassicMatchFra
 
 ClassicGoalScene classic_goal_scene_of(const ClassicBoard& b, int minute) {
     std::array<int, 2> colour{b.team[0].colour, b.team[1].colour};
-    int distance = 0;  // ovl14 1D69: sum of the nibble differences
+    int distance = 0;  // clash rule: sum of the nibble differences of the two shirt colours
     for (int shift = 0; shift < 12; shift += 4) distance += std::abs((colour[0] >> shift & 15) - (colour[1] >> shift & 15));
     if (distance < 6) colour[1] = colour[0] ^ 0xFFF;
     ClassicGoalScene s;
@@ -380,7 +389,7 @@ ClassicGoalScene classic_goal_scene_of(const ClassicBoard& b, int minute) {
     s.colour = colour;
     s.names = {b.team[0].name, b.team[1].name};
     s.goals = {b.goals[0] % 30, b.goals[1] % 30};
-    // DS:54BE / DS:54C9: the attendance of the manager's home game, else "AUSWÄRTS"
+    // the attendance of the manager's home game, else "AUSWÄRTS"
     s.info = b.team[0].human ? std::to_string(b.attendance) + " ZUSCHAUER" : "AUSWÄRTS";
     s.minute = minute;
     return s;
@@ -389,16 +398,16 @@ ClassicGoalScene classic_goal_scene_of(const ClassicBoard& b, int minute) {
 std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFrame> frames, int speed, int goal_scenes,
                                                       const std::filesystem::path& data) {
     const bool scenes = goal_scenes && !data.empty();
-    // Stufe 2 ("Eisfeld bleibt an", DS:5A55): ovl06_161d opens the rink once (ovl14_4938 mode 1) instead of the boards;
-    // the minute loop only renews "<m>.MINUTE" (FUN_1bbf_30b5 + ovl14_5258), the scenes run in place (mode 2) and end
-    // without restoring a board; DS:5A56 stays 0, so there are neither board messages nor goal flashes.
+    // Stufe 2 ("Eisfeld bleibt an"): the game opens the rink once instead of the boards; the minute loop only renews
+    // "<m>.MINUTE", the scenes run in place and end without restoring a board; since no board is shown there are
+    // neither board messages nor goal flashes.
     const bool rink_stays = scenes && goal_scenes == 2;
     if (speed >= 70 && !scenes) return frames;
     int chance_count = 0;
     std::vector<ClassicMatchFrame> out;
     std::optional<ClassicMatchFrame> last;
     std::optional<ClassicGoalScene> rest;  // Stufe 2: the view between the scenes
-    const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {  // the match ovl06_161d opens (first board)
+    const auto human_board = [](const ClassicMatchFrame& f) -> const ClassicBoard* {  // the match the rink is opened for (first board)
         return f.boards.empty() ? nullptr : &f.boards.front();
     };
     const auto scene_of = [](const ClassicBoard& b, int minute) { return classic_goal_scene_of(b, minute); };
@@ -409,7 +418,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
         if (rink_stays && !rest)
             if (const ClassicBoard* b = human_board(frame)) {
                 rest = scene_of(*b, frame.minute);  // camera (0, 0), no objects
-                rest->info.clear();                // ovl06_161d opens the rink without the attendance line (DOSBox)
+                rest->info.clear();                // the game opens the rink without the attendance line
             }
         if (last && !frame.boards.empty() && last->boards.size() == frame.boards.size()) {
             ClassicMatchFrame base = *last;
@@ -418,11 +427,11 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                 const ClassicBoard& now = frame.boards[b];
                 const ClassicBoard& before = last->boards[b];
                 if (now.team[0].name != before.team[0].name || now.team[1].name != before.team[1].name) continue;
-                // ovl14_1dc7: the goal scene of every chance of a match on a board (FUN_162c_23c4 var_9 != 0x1E; DS:5A56)
+                // the goal scene of every chance of a match on a board
                 const bool scene_board = scenes;
                 std::array<int, 2> running{before.goals[0], before.goals[1]};
                 std::vector<bool> used(now.scenes.size());
-                // ovl14_1dc7: delay(30) before the scene (the board, at Stufe 2 the resting rink), then ovl14_4938
+                // delay(30) before the scene (on the board, at Stufe 2 on the resting rink), then the scene
                 const auto play = [&](const std::string& script, int side, bool goal, int minute) {
                     ClassicGoalScene s = scene_of(now, minute);
                     s.goals = {running[0] % 30, running[1] % 30};
@@ -440,7 +449,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                     if (rink_stays) rest = out.back().scene;
                     chance_count++;
                 };
-                // the scene the simulation drew for this chance (ovl15_0143 on the Borland stream), if any
+                // the scene the simulation drew for this chance (on the game's random stream), if any
                 const auto drawn = [&](int side, bool goal, bool penalty) -> const ClassicBoard::Scene* {
                     for (size_t i = 0; i < now.scenes.size(); i++) {
                         const ClassicBoard::Scene& d = now.scenes[i];
@@ -462,7 +471,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                                 script = classic_goal_scene_script(d->number, side, d->goal, d->variant == 'e', d->variant == 'j');
                             } else {
                                 // without drawn scenes (a view built without the simulation): a fixed pick;
-                                // ovr038:4CBD: the j scenes when the attacking side has skaters + running penalties = 6
+                                // the j scenes when the attacking side has skaters + running penalties = 6
                                 const int penalties = ((t.penalty_code & 7) != 0) + ((t.penalty_code >> 4 & 7) != 0);
                                 script = classic_goal_scene_script(2 + (frame.minute * 7 + chance_count * 3 + side) % 10, side,
                                                                    m.kind == 1, false, t.skaters + penalties == 6);
@@ -474,12 +483,12 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                         m.team = t.name;
                         for (ClassicMatchFrame& f : classic_board_message_steps(base, m, speed, goal_scenes != 0)) out.push_back(std::move(f));
                     };
-                    // the picks of ovl14_2349 made in this minute (manager's club): chances first, then shoot-out shots
+                    // the scorer/assist picks made in this minute (manager's club): chances first, then shoot-out shots
                     std::vector<const ClassicBoardTeam::Credit*> chance_credits;
                     for (size_t i = p.credits.size(); i < t.credits.size(); i++)
                         if (!t.credits[i].shot) chance_credits.push_back(&t.credits[i]);
                     size_t next_credit = 0;
-                    // ovl06_364f -> ovl14_1dc7 (kind 4): a player of the manager's club injured in this minute
+                    // kind 4: a player of the manager's club injured in this minute
                     for (size_t i = 0; i < t.scorers.size() && i < p.scorers.size(); i++)
                         if (t.scorers[i].injured && !p.scorers[i].injured) {
                             ClassicBoardMessage m{4};
@@ -488,7 +497,7 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                         }
                     const int minutes = t.penalty_minutes - p.penalty_minutes;
                     if (minutes == 2 || minutes == 5) {
-                        // ovl06_02d8 -> ovl14_0690: the penalised player and "wegen " + DS:05CC[rand(0, 12)] (5 minutes: fixed 5)
+                        // the penalised player and "wegen " + one of the 13 reasons, picked with rand(0, 12) (5 minutes: always 5)
                         static const char* const reasons[13] = {
                             "Stockschlags.", "Ellbogenchecks.", "hohem Stocks.", "Haltens.", "Hakens.", "Übertr. Härte.",
                             "Cross-Checks.", "Faustschlags.", "Bandenchecks.", "Reklamierens.", "Beinstellen.",
@@ -526,8 +535,8 @@ std::vector<ClassicMatchFrame> classic_board_messages(std::vector<ClassicMatchFr
                         emit(m);
                     }
                 }
-                // ovl06_3adb: every shot of a shoot-out plays its scene (penalty = 1, variant e, minute 0x78), then its board
-                // message (kind 5 / 6; with goal scenes the shoot-out runs at DS:5A56 = 0, so there is none)
+                // every shot of a shoot-out plays its scene (penalty shot, variant e, minute 0x78), then its board
+                // message (kind 5 / 6; with goal scenes the shoot-out runs without boards, so there is none)
                 size_t shot_credit[2] = {before.team[0].credits.size(), before.team[1].credits.size()};
                 for (const auto& [side, goal] : now.shots) {
                     if (scene_board)
@@ -583,7 +592,7 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         const MatchProgress p = m.run->progress();
         if (frame.boards.size() >= 4 || !((mode(m.home) | mode(m.away)) & 0x80)) {
             if (!(mode(m.home) | mode(m.away))) continue;
-            ClassicReportedMatch r;  // FUN_162c_23c4 flashes the goals of this match
+            ClassicReportedMatch r;  // the goals of this match are flashed in the message panel
             r.home = m.home; r.away = m.away;
             r.names[0] = m.run->home_state().name;
             r.names[1] = m.run->away_state().name;
@@ -598,7 +607,7 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         for (int k = 0; k < 3; k++) for (int s = 0; s < 2; s++) b.period_goals[k][s] = p.period_goals[k][s];
         for (const GoalScene& g : p.scenes) b.scenes.push_back({g.side, g.goal, g.number, g.variant, g.penalty, g.shown});
         b.shots = p.shots;
-        if (p.reporter == 0) frame.blink = true;  // ovl06_2522: rand(0, 4) = 0 closes the reporter's eyes (ovl14_045c)
+        if (p.reporter == 0) frame.blink = true;  // the minute loop's rand(0, 4) = 0 closes the reporter's eyes
         for (int side = 0; side < 2; side++) {
             const int team = side == 0 ? m.home : m.away;
             const HokTeam& live = side == 0 ? m.run->home_state() : m.run->away_state();
@@ -620,10 +629,10 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
             t.human = team == game.human_team();
             t.id = team;
             if (team == game.human_team()) {
-                // FUN_162c_0d9f: a squad player with a role in line 4 of the kind (squad +0x15 = 4 + 0x80 * kind)
+                // a squad player with a role in line 4 of the kind (squad +0x15 = 4 + 0x80 * kind) lights the fourth lamp
                 for (const HokSquadPlayer& sp : h.squad)
                     if (sp.role && (sp.line & 0x7F) == 4) t.fourth_line[(sp.line & 0x80) ? 1 : 0] = true;
-                // ovl14_2349 credits the goal while the minute runs (Game::credit_human_goal): the counters name the
+                // the game credits the goal while the minute runs (Game::credit_human_goal): the counters name the
                 // scorer and the assist of the manager's goals (the players of a missed chance are not observable)
                 for (size_t slot = 0; slot < h.squad.size(); slot++) {
                     const HokSquadPlayer& sp = h.squad[slot];
@@ -636,7 +645,7 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
                     s.injured = (h.state.at(0x696D + slot * 52 + 9) & 3) == 2;  // squad +0x09 status 2 (injured)
                     t.scorers.push_back(std::move(s));
                 }
-                // the picks of ovl14_2349 name the players of every chance and shot (also a missed one) and the penalty
+                // the game's scorer/assist picks name the players of every chance and shot (also a missed one) and the penalty
                 const auto name_of = [&](int slot) -> std::string {
                     if (slot < 0 || size_t(slot) >= h.squad.size()) return {};
                     const int player = h.squad[size_t(slot)].player;
@@ -651,7 +660,7 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
         if (m.home == game.human_team()) {
             b.attendance = attendance;
             b.sold_out = sold_out;
-            // ovl14_2630: fill level (attendance << 2) / capacity, 2 without places
+            // fill level (attendance << 2) / capacity, 2 without places
             const long capacity = long(game.budget().places[0]) + game.budget().places[1];
             b.arena = capacity ? int((attendance << 2) / capacity) : 2;
         }
@@ -661,11 +670,11 @@ ClassicMatchFrame classic_match_frame(const Game& game, int minute, const std::v
 }
 
 std::optional<ClassicBoardOrder> classic_board_click(const ClassicMatchFrame& frame, int x, int y) {
-    if (frame.boards.empty() || frame.scene || frame.waits()) return std::nullopt;  // DS:5A56: only with boards
+    if (frame.boards.empty() || frame.scene || frame.waits()) return std::nullopt;  // clicks count only while boards are shown
     ClassicBoardOrder order;
     bool hit = false;
     if (x > 2 && x < 0x15 && y > 0xE1 && y < 0xEF) { order.quick = true; hit = true; }
-    // ovl14_162c: a bar of width 0x19 and height 7; ovl14_1678: a lamp of 6 x 6
+    // a bar is 0x19 wide and 7 high (value proportional to x), a lamp 6 x 6
     const auto bar = [&](int left, int top, int range) {
         return x >= left && x <= left + 0x19 && y >= top && y <= top + 6 ? (x - left) * range / 0x19 : -1;
     };
@@ -694,8 +703,8 @@ bool classic_match_display_wanted(const Game& game, bool human_plays, uint8_t ev
     if (human_plays) return true;
     const GameSettings s = game.settings();
     if (event == kEventSectionEnd) return false;
-    if (event & kEventEuroCup) return s.flags[11] != 0;           // Europapokal (DS:0228)
-    if (event & kEventWorldChampionship) return s.flags[12] != 0;  // WM-Spiele (DS:0229)
+    if (event & kEventEuroCup) return s.flags[11] != 0;           // Europapokal
+    if (event & kEventWorldChampionship) return s.flags[12] != 0;  // WM-Spiele
     if (!(event & kEventLeagueMask)) return s.flags[10] != 0;     // DEB-Pokal, play-offs
     return s.flags[1] != 0 || s.flags[4] != 0 || s.flags[7] != 0;
 }

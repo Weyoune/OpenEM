@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Jugendteams page (see classic_youth.hpp).
 #include "ui/classic_youth.hpp"
 #include "game/youth.hpp"
 #include <bit>
@@ -8,9 +9,12 @@ namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
 constexpr std::array<std::string_view, 3> labels{"Sch}ler", "Jugend", "Junioren"};
+// Light, fill and dark colour of each youth team's bar and graph.
 constexpr std::array<std::array<uint8_t, 3>, 3> colors{{{18,17,16},{15,13,12},{23,22,8}}};
+// The low 16 bits as a signed value, as the original's 16-bit coordinates wrap.
 int word(uint32_t bits) { const auto v = uint16_t(bits); return v < 32768 ? int(v) : int(v) - 65536; }
 
+// Number, optionally grouped with separator; non-negative values padded to width with the blank digit '%'.
 std::string number(int32_t value, int width, char separator, bool grouped) {
     const int64_t magnitude = value < 0 ? -int64_t(value) : value;
     auto text = std::to_string(magnitude);
@@ -21,7 +25,8 @@ std::string number(int32_t value, int width, char separator, bool grouped) {
     return text;
 }
 
-// 5396:0106. Four edge strokes are asymmetric; their corners are not an outline().
+// A bevelled bar in the team's colours. The four edge strokes are asymmetric as in the original; their
+// corners are not an outline().
 void bar(ClassicCanvas& c, int left, int top, int right, int bottom, size_t kind) {
     c.line(left, uint8_t(top), word(uint32_t(right) - 1u), uint8_t(top), colors[kind][0]);
     c.line(left, uint8_t(top), left, uint8_t(bottom), colors[kind][0]);
@@ -43,7 +48,8 @@ ClassicYouthView classic_youth_view(const HokFile& h, const FinanceTables& finan
         team.rank = h.state.at(at + i);
         team.league = h.state.at(at + 3 + i);
         team.raw_funding = youth_funding_amount(h, int(i), manager);
-        // 033C divides raw first;034C then multiplies low32 by money_den.
+        // As in the original: divide the raw amount by money_num first, then multiply the low 32 bits by
+        // money_den. The bar is amount * 70 / (10000 << team) pixels.
         const uint32_t amount = uint32_t(int64_t(team.raw_funding) / finance.money_num) * uint32_t(finance.money_den);
         team.display_funding = std::bit_cast<int32_t>(amount);
         const uint32_t pixels = amount * 70u;
@@ -56,7 +62,7 @@ ClassicYouthView classic_youth_view(const HokFile& h, const FinanceTables& finan
         team.caption_baseline = caption_y - 5;
         team.native_caption = number(team.rank + 1, 1, separator, false) + ".Platz" +
                               number(team.league + 1, 2, separator, false) + ".Liga";
-        // Native captures058..061 keep ungrouped10000/20000/40000 in this view.
+        // The original shows these amounts (e.g. 10000/20000/40000) without thousands separators.
         team.native_amount = number(team.display_funding, 5, separator, false);
     }
     return out;
@@ -91,7 +97,7 @@ void draw_classic_youth(ClassicCanvas& c, const HokFile& h, const FinanceTables&
         c.blit(33, team.graph_x, team.graph_y - 3, 30 + int(i) * 16, 0, 16, 10);
         c.text_native(mini, team.graph_x + 2, team.caption_baseline, team.native_caption, colors[i][0], 0);
     }
-    // DS4EBD/4EC9 coordinate table; axes overwrite earlier grid/icon pixels.
+    // Graph axes from the game's coordinate table; they overwrite earlier grid/icon pixels.
     c.line(53,53,53,126,29); c.line(54,52,54,127,5); c.line(55,53,55,126,29);
     c.line(54,126,242,126,29); c.line(53,127,243,127,5); c.line(54,128,242,128,29);
     for (int y = 54; y < 125; y += 2) c.rect(56,y,57,y,29);

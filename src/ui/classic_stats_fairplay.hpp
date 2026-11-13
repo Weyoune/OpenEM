@@ -8,11 +8,12 @@
 
 namespace em::ui {
 
-// Statistiken -> Fairplay (ovr028:0000 = ovl04_0000(1)): the twelve clubs of
-// the active manager's league sorted by their assessed league penalty minutes
-// (u16 at table row +0x4A, DS:82A1), with minutes per game. The page waits
-// for one click (sub_19B08) and closes again.
-std::array<int, 12> classic_stats_fairplay_order(const HokFile&);  // team indices
+// Statistiken -> Fairplay: the twelve clubs of the active manager's league sorted by their assessed league
+// penalty minutes (u16 at league table row +0x4A; table at save state 0x3BA5, 0x50 bytes per team), with
+// minutes per game. The page waits for one click and closes again.
+// The twelve team indices in display order (fewest penalty minutes first).
+std::array<int, 12> classic_stats_fairplay_order(const HokFile&);
+// Paints the page.
 void draw_classic_stats_fairplay(ClassicCanvas&, const HokFile&);
 
 }  // namespace em::ui

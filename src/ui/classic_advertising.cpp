@@ -4,12 +4,18 @@
 #include <string_view>
 #include <utility>
 
+// The classic advertising screen: view model, hit test and drawing (see classic_advertising.hpp).
+
 namespace em::ui {
 namespace {
 constexpr auto mini=ClassicFontId::Mini;
+// Sponsor names as stored in the game: 0..9 for the boards and surfaces, 10..14 the TV
+// stations of surface 8. Game text in the game's encoding ('{' = ä).
 constexpr std::array<std::string_view,15> names{"JWE Service GmbH","CCH","Korona Soft","PC Games",
     "Amiga Games","Rushware","Herrenh{user","Play Time","Software 2000","KRON Soft",
-    "ARB","4 SAT","SET 1","LTR minus","premium"}; //EXE DS0741
+    "ARB","4 SAT","SET 1","LTR minus","premium"};
+// The five "Firmen-Info" lines per sponsor 0..9 (game text, reproduced verbatim including its
+// typos; '{' = ä, '}' = ü).
 constexpr std::array<std::array<std::string_view,5>,10> information{{
     {"J.W.E. Service GmbH","Telekommunikation vom Fachbetrieb.","Telefone, Anrufbeantworter, Telefax","Beratung - Verkauf - Installation","Telefon/Fax: 0511/602094"},
     {"Computer Center Holstein","Ihr Lieferant fuer PCs und PC Zubehoer","Max-Planck-Str. 9","2420 Eutin","Tel.: 04521-74300"},
@@ -22,13 +28,19 @@ constexpr std::array<std::array<std::string_view,5>,10> information{{
     {"","Publisher f}r anspruchsvolle Software","Hotline : 04521-800444","Mailbox : 04521-800447",""},
     {"KrOn Software","Gegr. 1988. Bescheidendstes Programmierteam Deutschlands.","Besteht aus: Werner Krahe und Jens Onnen.","W}rden uns freuen, wenn Sie dieses","Spielchen ORIGINAL (legal) erworben haben..."}
 }};
+// Surface kind of a contract slot: 0 for the boards 0..6, 1..4 for slots 7..10.
 int kind(int slot) {return slot<7?0:slot-6;}
+// State offset of the running contract of `slot` for `manager`.
 size_t contract_at(int manager,int slot) {return 0xacfc+size_t(manager)*0x6e+size_t(slot)*10;}
+// Decodes the 10-byte advertising record at state offset `at`.
 ClassicAdvertisingRecord record(const HokFile& h,size_t at) {
     return {int32_t(le32(h.state,at)),h.state.at(at+4),h.state.at(at+5),h.state.at(at+6),
             h.state.at(at+7),le16(h.state,at+8)};
 }
+// A surface is free for a new deal when empty or when flag bit 7 is set.
 bool free(const ClassicAdvertisingRecord& r) {return r.amount==0 || (r.flags&128)!=0;}
+// Formats an integer like the game: optional thousands grouping with `separator`; positive
+// numbers are padded on the left to `width` with '%' (a blank-width glyph in the game font).
 std::string number(int64_t value,int width=1,bool grouped=false,char separator='.') {
     const bool negative=value<0; auto s=std::to_string(negative?-value:value);
     if(grouped) for(size_t i=s.size();i>3;i-=3) s.insert(i-3,1,separator);
@@ -36,6 +48,7 @@ std::string number(int64_t value,int width=1,bool grouped=false,char separator='
     if(int(s.size())<width) s.insert(0,size_t(width-int(s.size())),'%');
     return s;
 }
+// Internal currency units -> grouped display amount (',' as separator when money_num is 4).
 std::string money(int64_t amount,const FinanceTables& t,int width=1) {
     if(t.money_num<=0 || t.money_den<=0) throw FormatError("classic advertising: invalid currency");
     return number(amount*t.money_den/t.money_num,width,true,t.money_num==4?',':'.');
@@ -43,7 +56,10 @@ std::string money(int64_t amount,const FinanceTables& t,int width=1) {
 ClassicAdvertisingHit hit(ClassicAdvertisingAction action,int slot,int l,int t,int r,int b,bool enabled=true) {
     return {action,slot,l,t,r,b,enabled};
 }
+// Adds a detail-panel line (colour 0, no shadow).
 void text(ClassicAdvertisingView& v,int x,int y,std::string s) {v.detail.push_back({x,y,-1,0,-1,std::move(s)});}
+// Draws a 57x12 button from KB image 4 at (x, y), keeping the four corner pixels of the
+// background, with the centred label.
 void button(ClassicCanvas& c,int x,int y,std::string_view label) {
     const std::array<uint8_t,4> corners{c.pixels().at(x,y),c.pixels().at(x+56,y),c.pixels().at(x,y+11),c.pixels().at(x+56,y+11)};
     c.blit(4,x,y,17,179,57,12);
@@ -51,6 +67,8 @@ void button(ClassicCanvas& c,int x,int y,std::string_view label) {
     c.pixels().at(x,y+11)=corners[2]; c.pixels().at(x+56,y+11)=corners[3];
     c.text_native(mini,x,y+7,label,29,1,x+59);
 }
+// Draws the sponsor logo (from the logo atlas, KB image 11) on every surface with a running
+// contract: the seven boards along the top, surfaces 7 and 8 on the left, 9 and 10 on the right.
 void contracts(ClassicCanvas& c,const HokFile& h,int manager) {
     for(int slot=0;slot<11;++slot) {
         const auto r=record(h,contract_at(manager,slot)); if(!r.amount) continue;
@@ -63,6 +81,8 @@ void contracts(ClassicCanvas& c,const HokFile& h,int manager) {
         else c.blit(11,268,92+36*(slot-9),1,1+25*r.sponsor,33,23);
     }
 }
+// Outlines the selected surface in colour 18. Surfaces 9 and 10 outline the whole facility
+// area and, with `leaf`, also the surface itself.
 void outline_selection(ClassicCanvas& c,int slot,bool leaf=true) {
     if(slot<7) c.outline(39+35*slot,34,73+35*slot,58,18);
     else {
@@ -80,13 +100,18 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
     if(h.state.at(0xaeb4)>5) throw FormatError("classic advertising: invalid saved difficulty");
     FinanceTables t=tables; t.level=h.state.at(0xaeb4); t.cost_factor=int32_t(le32(h.state,0x06b0));
     auto b=budget_from_save(h,manager);
-    //56D1:16B7 reads the four current raw cached team values. Do not depend
-    //on whether a caller has rebuilt HokFile's separately decoded team model.
+    // The team strength is the sum of the four cached team values stored in the team record
+    // (0x17E7 + team * 61, +0x18..+0x1B), read from the raw state so the result does not depend
+    // on whether the caller has refreshed the decoded team model.
     if(b.team<0 || b.team>=150) throw FormatError("classic advertising: invalid manager team");
     b.team_strength=0;
     for(size_t i=0;i<4;++i) b.team_strength+=h.state.at(0x17e7+size_t(b.team)*61+0x18+i);
     ClassicAdvertisingView v; v.selection=selection;
     v.income=monthly_income(b,true); v.expenses=monthly_expenses(t,b,true,true);
+    // Loans between human managers (manager block +0x19B, one i32 per other manager): 2.5% of
+    // a negative entry the other manager holds for this one counts as income (if this manager
+    // is active), 2.5% of a negative entry this manager holds for the other one as expenses
+    // (if that one is active). Active = index below state 0x0DC6, the number of human managers.
     const size_t block=0x0dcd+size_t(manager)*0x1af;
     for(int party=0;party<4;++party) if(party!=manager) {
         const int64_t principal=int32_t(le32(h.state,block+0x19b+size_t(party)*4));
@@ -94,9 +119,10 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
         if(manager<h.state.at(0x0dc6) && reciprocal<0) v.income-=reciprocal*25/1000;
         if(party<h.state.at(0x0dc6) && principal<0) v.expenses-=principal*25/1000;
     }
-    v.saldo=int32_t(uint32_t(v.income-v.expenses));
+    v.saldo=int32_t(uint32_t(v.income-v.expenses));  // wraps to 32 bits like the game
     v.nativeIncome=money(v.income,t,7)+" DM"; v.nativeExpenses=money(v.expenses,t,7)+" DM";
     v.nativeSaldo=money(v.saldo,t,7)+" DM";
+    // Hit areas; 9 and 10 are usable only once stadium facility 0 / 2 is built (state 2).
     for(int i=0;i<7;++i) {
         v.surfaces[size_t(i)]=hit(ClassicAdvertisingAction::Surface,i,37+35*i,29,71+35*i,53);
         if(free(record(h,contract_at(manager,i)))) ++v.freeBoards;
@@ -112,6 +138,7 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
     const auto current=record(h,contract_at(manager,slot));
     v.renewalPending=(current.flags&127)!=0 && current.months==0;
     const size_t offers=0xa52c+size_t(manager)*0x1f4+size_t(v.kind)*100;
+    // Offers of this surface kind (state 0xA52C + manager * 0x1F4 + kind * 100).
     for(int i=v.maxOffer;i>=0;--i) if(record(h,offers+size_t(i)*10).amount!=0) {v.highestOffer=i;break;}
     if(selection.offerIndex==-1) v.selection.offerIndex=v.highestOffer;
     if(v.selection.offerIndex<0 || v.selection.offerIndex>v.maxOffer)
@@ -132,6 +159,7 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
             else if(r.flags&128) text(v,275,189,"K}ndbar.");
         }
         if(slot<7) {
+            // An offer states the boards wanted; a running deal counts the boards sharing its id.
             int boards=r.boards;
             if(!selection.browsingOffers) {
                 boards=0;for(int i=0;i<7;++i) if(record(h,contract_at(manager,i)).boards==r.boards) ++boards;
@@ -141,6 +169,8 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
         text(v,156,205,selection.browsingOffers?"Angebot":"Pr{mie");
         text(v,191,205,": "+money(r.amount,t)+" DM  pro Monat");
     } else text(v,156,189,selection.browsingOffers?"Es liegt momentan kein Angebot vor...":"Diese Werbefl{che ist noch unbefleckt.");
+    // Browsing: info for all but the TV surface; accepting needs enough free boards, or a
+    // free single surface.
     if(selection.browsingOffers) {
         v.canInfo=slot!=8;
         v.canAccept=r.amount!=0 && (slot<7?r.boards<=v.freeBoards:free(current));
@@ -157,8 +187,8 @@ ClassicAdvertisingView classic_advertising_view(const HokFile& h,const FinanceTa
 
 ClassicAdvertisingHit classic_advertising_hit(const ClassicAdvertisingView& v,int x,int y) {
     for(const auto& h:v.controls) if(h.enabled && x>=h.left && x<=h.right && y>=h.top && y<=h.bottom) return h;
-    //An unavailable facility is still a surface: selecting it leaves the
-    //offer browser and paints the inactive group, without entering a deal.
+    // An unavailable facility is still a surface: selecting it leaves the offer browser and
+    // paints the inactive group, without entering a deal.
     for(const auto& h:v.surfaces) if(x>=h.left && x<=h.right && y>=h.top && y<=h.bottom) return h;
     return {};
 }
@@ -179,8 +209,9 @@ void draw_classic_advertising(ClassicCanvas& c,const HokFile& h,const FinanceTab
     c.text_native(mini,219,227,"Saldo  :",0); c.text_native(mini,254,227,v.nativeSaldo,0);
     c.blit(4,138,183,20,0,10,17); c.outline(137,182,148,200,24);
     if(selection.contractSlot<0) {
-        //1BBF:4675 restores these regions from the saved KB151 page4B00.
-        //Our complete repaint already contains that base; this is not fill0.
+        // The original restores the detail regions from its saved copy of the background
+        // picture; the complete repaint above already contains that picture, so nothing is
+        // cleared here.
         return;
     }
     if(!v.available) {
@@ -198,7 +229,8 @@ void draw_classic_advertising(ClassicCanvas& c,const HokFile& h,const FinanceTab
 
 void draw_classic_advertising_info(ClassicCanvas& c,const ClassicAdvertisingView& v) {
     if(!v.canInfo) return;
-    //1902:0335 flags1 ->sample(35,95), then native plain bevel(32,93,290,150).
+    // Like the original: sample the pixel at (35,95); unless it is 255, draw a plain box with a
+    // shadow (32,93..290,150) whose corners take the sampled colour. Then the bevel and text.
     const auto edge=c.pixels().at(35,95);
     if(edge!=255) {
         c.rect(32,93,290,150,6); c.rect(30,91,288,148,0);

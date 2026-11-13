@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Input handling of the classic line-up page: selecting a block, assigning
+// players, removing numbers from the diagram, reserve toggling, and keeping
+// the frontend's copy of the diagram in step with the game's changes.
 #include "ui/classic_app.hpp"
 #include "ui/classic_lineup.hpp"
 #include <algorithm>
 
 namespace em::ui {
 namespace {
+// The game's notice text for a line-up refusal (empty for None).
 std::string lineup_message(ManualLineupMessage message){
     switch(message){
         case ManualLineupMessage::None:return {};
@@ -19,12 +23,21 @@ std::string lineup_message(ManualLineupMessage message){
     return {};
 }
 }
+// Opens the line-up page with no block selected and builds the diagram; the
+// six-field-player mode is on when block 1 holds six players and no
+// goalkeeper sits in cell 4 of row 4.
 void ClassicApplication::open_lineup(){
     hover_kind_=ClassicRosterKind::Lineup;roster_hover_={};roster_rules_=false;
     screen_=ClassicScreen::Lineup;selected_line_=0;lineup_cells_=classic_lineup_cells(snapshot(),squad_manager());
     const auto& first=(*lineup_cells_)[0];
     lineup_six_=std::count_if(first.begin(),first.end(),[](int n){return n!=0;})==6&&!(*lineup_cells_)[4][4];
 }
+// Lets the game apply a line-up action to squad slot, then mirrors the
+// change in the diagram: the player's old cell is cleared (in six-player
+// mode the sixth cell moves into the gap and the mode ends) and the cell the
+// game assigned is filled. Shows the game's notice, preceded by
+// "Auto-Aufstellung ist deaktiviert !" when the change switched the
+// automatic line-up off.
 void ClassicApplication::apply_lineup(size_t slot,ManualLineupAction action){
     try{
         ManualLineupResult result;
@@ -57,6 +70,12 @@ void ClassicApplication::apply_lineup(size_t slot,ManualLineupAction action){
         else if(!message.empty())notice(message);
     }catch(const std::exception& e){notice(e.what());}
 }
+// Clicks on the line-up page. Right button: on the name column opens the
+// player page, elsewhere in the list toggles the reserve, outside the list
+// returns to the main menu. Left button: the title bar returns, the bottom
+// right opens the tactics, a list row assigns the player to the selected
+// block, a block box selects the block and a number plate in it removes
+// that player. List rows are 6 pixels high from y = 29.
 void ClassicApplication::click_lineup(int x,int y,bool right){
     const auto& h=snapshot();
     int count=0;for(int slot=0;slot<29;slot++)if(h.state.at(squad_block(squad_manager())+size_t(slot)*52+15))++count;

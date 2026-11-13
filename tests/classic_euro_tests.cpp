@@ -1,4 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic European cup pages (ui/classic_euro.cpp): page 3 and 4 show the two groups, page 5
+// the final round. Checked are the fixture rows with their dates from the season calendar, scores shown as
+// stored, the saved table order, highlight colours, the explicit working date the page writes for its preview,
+// and the pages of real saves at several points of the competition.
+//
+// Usage: classic_euro_tests [DATA [REFERENCE]] — with DATA (EM.EXE and graphics) and REFERENCE (MONAT1,
+// MONAT2 and SAISEND .HOK) the real saves are checked as well.
+//
+// Competition kind 2 is the European cup group stage (two groups), kind 3 its final round (one group). Per
+// kind and group: team ids at 0x0394 (8 per kind, 4 per group), schedule at 0x03B8 (0x48 per kind, 0x24 per
+// group, 6 rounds of 6 bytes), results at 0x04D8 (same layout), table order at 0x05F8 (12 per kind, 6 per
+// group) and the stat bytes at 0x02BB/0x02EB/0x0628; 0x8F86 is the competition phase (rounds completed).
 #include "ui/classic_euro.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -7,12 +19,16 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `condition` is false.
 void require(bool condition,const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// Writes `value` little-endian as 4 bytes at state offset `at`.
 void put32(HokFile& h,size_t at,uint32_t value) {
     for (size_t i=0;i<4;++i) h.state.at(at+i)=uint8_t(value>>(8*i));
 }
+// A synthetic state on 10.09.1993 with teams 60..63 and 64..67 in the two groups and 68..71 in the final
+// round, each with a double round-robin schedule, and teams named "TEAM<n>".
 HokFile fixture() {
     HokFile h; h.state.assign(47761,0);
     h.state.at(0x8e31)=0xc9; h.state.at(0x8e32)=7;
@@ -37,6 +53,8 @@ HokFile fixture() {
     }
     return h;
 }
+// A short calendar whose days 0..12 carry the European cup bit 0x20 (day 1 combined with another bit, day 2
+// all bits set): the lookup must test bits, not compare whole event bytes.
 SeasonCalendar calendar() {
     SeasonCalendar c; c.events.assign(16,0);
     c.events[0]=0x20; //native group scan starts at1
@@ -44,6 +62,7 @@ SeasonCalendar calendar() {
     c.events[1]=0x21; c.events[2]=0xff; //bit tests,not event equality
     return c;
 }
+// Page selection, titles, footer buttons, fixture dates and the availability of the final round.
 void raw_dates_and_pages() {
     auto h=fixture(); const auto c=calendar(); const auto before=h.state;
     const auto group=classic_euro_view(h,c);
@@ -78,6 +97,8 @@ void raw_dates_and_pages() {
             ready.fixtures[0].cells[0].calendar_index==7 && ready.last_preview_date->day==21,
             "phase6 makes final available and offsets future calendar ordinals by6");
 }
+// Scores and table values are shown as unsigned bytes exactly as stored, the saved order is kept, and every
+// club with a human owner is highlighted.
 void unsigned_scores_order_and_colors() {
     auto h=fixture(); h.state.at(0x8f86)=7;
     constexpr size_t results=0x04d8+2*0x48,stat=2*12;
@@ -94,7 +115,7 @@ void unsigned_scores_order_and_colors() {
     require(view.completed==6 && !view.last_preview_date,"completed groups do not scan future calendar");
     require(view.fixtures[0].cells[0].scores==std::array<int,2>{255,128} &&
             view.fixtures[0].cells[0].native=="255:128",
-            "27A5 displays unsigned scores directly without signed/sentinel/overtime decoding");
+            "displays unsigned scores directly without signed/sentinel/overtime decoding");
     require(view.fixtures[0].cells[1].scores==std::array<int,2>{9,7} &&
             view.fixtures[0].cells[1].native=="%9:%7","return leg reverses the stored away/home bytes");
     require(view.fixtures[0].home_color==30 && view.fixtures[0].away_color==24 &&
@@ -113,6 +134,8 @@ void unsigned_scores_order_and_colors() {
             !final.fixtures[2].cells[0].played && !final.fixtures[0].cells[1].played,
             "phase7 has exactly one final round played");
 }
+// prepare_classic_euro_working writes only the preview date (state 0x8E21..0x8E2C) and nothing when there is
+// no future date; a failed lookup leaves the state untouched.
 void working_date_only() {
     auto h=fixture(); const auto c=calendar(); const auto before=h.state;
     require(prepare_classic_euro_working(h,c,3),"future group commits its last preview date explicitly");
@@ -134,14 +157,18 @@ void working_date_only() {
     try {(void)prepare_classic_euro_working(h,SeasonCalendar{},3);} catch(const FormatError&) {rejected=true;}
     require(rejected && h.state==no_calendar,"failed date lookup is atomic before working-date mutation");
 }
+// Expected table of a group: per rank {team, points, minus points, goals for, goals against}.
 using TableVector=std::array<std::array<int,5>,4>;
+// Requires the four table rows of `view` to equal `expected`.
 void table_vector(const ClassicEuroView& view,const TableVector& expected) {
     for (size_t i=0;i<4;++i) {
         const auto& row=view.rows[i];
         require(std::array<int,5>{row.team,row.points,row.minus_points,row.goals_for,row.goals_against}==expected[i],
-                "table differs from independently extracted original HOK/data.json vector");
+                "table differs from the original's saved table");
     }
 }
+// Tables, dates and scores of MONAT1 (before the groups), MONAT2 (after the first final-round game) and
+// SAISEND (all games played); drawing must not change the state.
 void original_references(const std::filesystem::path& data,const std::filesystem::path& refs) {
     const auto c=load_season_calendar(read_file(data/"EM.EXE"));
     auto h=decode_hok(read_file(refs/"MONAT1.HOK"));

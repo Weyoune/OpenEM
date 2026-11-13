@@ -35,18 +35,20 @@
 
 namespace em::ui {
 
+// Outcome of a script run.
 struct ClassicScriptReport {
     bool ok = true;
     std::vector<std::string> failures;     // with script line
     std::vector<std::string> gaps;         // notices of unfinished UI parts (known gaps included)
-    std::vector<std::string> log;
+    std::vector<std::string> log;          // dated log lines
     std::map<std::string, int> modals;     // how often each dialog kind was answered
     std::map<std::string, int> screens;    // frames shown per screen
     std::map<std::string, int> notices;    // distinct notice texts
-    long inputs = 0, ticks = 0;
+    long inputs = 0, ticks = 0;            // inputs sent and frames drawn
     int days = 0;                          // days played
 };
 
+// English name of a screen as used in `screen=NAME` conditions and logs ("?" for an unknown value).
 std::string classic_screen_name(ClassicScreen screen);
 // A program restart for the script command `restart [FILE]`: a new application that starts with FILE of the game
 // folder (empty: the start menu of a new game), as `openem --save` would.

@@ -5,6 +5,8 @@
 
 namespace em::ui {
 
+// Names the topmost modal (title, notices, questions, match frames, editors, ...) together with its text,
+// slot and timer deadline where relevant; an empty modal means the plain page of category_ is active.
 ClassicUiProbe ClassicApplication::probe() const {
     ClassicUiProbe p;
     p.category = category_;

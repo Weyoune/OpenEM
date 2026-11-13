@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM) and Paarungen -> EuroCup
-// against captures of the original EM.exe.
+// Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM) and Paarungen -> EuroCup: view logic with values
+// the original shows for MONAT1 and MORNPOST, and raster comparison with reference images of the original EM.EXE.
+//
+// Usage: classic_stats_tests DATA REFERENCE GOLDENS (REFERENCE holds MONAT1.HOK and MORNPOST.HOK)
+//   EM_STATS_ACTUAL=<folder> writes every rendered scene as raw RGB (<scene>-<save>.actual.rgb).
+//   Exit code 1 if a check or a picture fails, 2 on an error.
 #include "ui/classic_app.hpp"
 #include "ui/classic_stats_club.hpp"
 #include "ui/classic_stats_fairplay.hpp"
@@ -20,7 +24,9 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
+// Number of failed checks and pictures.
 int failures = 0;
+// Reports and counts a failed check without stopping the test.
 void check(bool ok, const char* what) {
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++failures; }
 }
@@ -57,10 +63,10 @@ int main(int argc, char** argv) {
             check(!classic_stats_players_view(h).empty_notice, "empty squad keeps the native local row value");
         }
 
-        // References (work/exp/stats_20261108): DOSBox-X captures for Frueher, WM and Fairplay
-        // (the DOSBox pointer sits one pixel above the host click), em_realcode_boot captures with
-        // DOSBox DAC scaling (v<<2)|(v>>4) for the rest. The Unicorn run has no EMS: it never shows
-        // Fairplay, leaves the WM crest strip black and differs in eight Frueher background pixels.
+        // Reference images of the original (GOLDENS/<scene>-<save>.rgb); the 6-bit VGA colours are scaled to
+        // 8 bits as (v<<2)|(v>>4). In the Frueher, WM and Fairplay references the pointer sits one pixel above
+        // the click position, which the mouse positions below reproduce.
+        // One scene: screen name for render_screen, pointer position and the save to load.
         struct Scene { const char* name; int mouse_x, mouse_y; const char* save; };
         constexpr std::array<Scene, 11> scenes{{
             {"stats-history", 80, 218, "MONAT1"},

@@ -2,6 +2,8 @@
 // Acceptance run of version 1.0: a new game played through the classic UI, headless, from a script
 // (tests/scripts/classic_season_run.txt, ui/classic_script.hpp): a whole season with cup, play-offs and the
 // season change, saving and loading in between, into the next season. Prints the run's log and the list of UI gaps.
+//
+// Usage: classic_season_run_tests DATA SCRIPT OUTPUT — EM_SEASON_RUN_TRACE set prints every step while it runs.
 #include <chrono>
 #include <fstream>
 #include <iostream>

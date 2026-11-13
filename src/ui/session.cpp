@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The game session (see session.hpp): staged actions on checkpoints, loading/saving, new games, day advance
+// with contract questions, and the small text helpers.
 #include "ui/session.hpp"
 #include "game/checkpoint.hpp"
 #include "game/wm_mode.hpp"
@@ -12,7 +14,9 @@
 
 namespace em::ui {
 namespace {
+// Thrown from the contract decider to stop a staged day at the first unanswered contract question.
 struct NeedContract {};
+// Lower-case file extension including the dot.
 std::string extension(const std::filesystem::path& file) {
     std::string ext = file.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -65,16 +69,17 @@ void Session::load(const std::filesystem::path& file, uint32_t seed) {
     const bool native=!is_game_checkpoint(bytes);
     if(native){
         if(!native_history_header(bytes))throw FormatError("HOK: invalid native version or marker");
-        const uint32_t identity=le32(bytes,0xb4);
+        const uint32_t identity=le32(bytes,0xb4);  // save identity (u32 at 0xB4 of the .HOK)
         if(save_history_.contains(identity))throw NativeReloadError{};
-        //7348:1D8B inserts after the header guard, before state checksums.
-        //Preserve this native runtime side effect even if payload validation fails.
+        // The original remembers the identity after the header check, before the state checksums.
+        // Preserve this side effect even if payload validation fails.
         save_history_.remember(identity);
         if(game_){game_->set_native_save_history(save_history_);dirty_=true;revision_++;}
         verify_hok_checksums(bytes);
     }
-    // Install retained RNG/gates/counts before the native live-return path;
-    // cold construction would restore modeB and overwrite loaded team caches.
+    // Hand over the running game's random state, gates and counters when loading a .HOK, as the original
+    // keeps them across a load; a cold construction would restore the default mode and overwrite the loaded
+    // team caches.
     auto next = std::make_unique<Game>(exe_,bytes,seed,native?game_.get():nullptr);
     if(native)next->set_native_save_history(save_history_);
     else save_history_=next->native_save_history();
@@ -131,7 +136,7 @@ void Session::start_wm_game(const NewGameSetup& setup, uint32_t seed) {
         start_from(encode_hok(em::start_wm_only_game(decode_hok(read_file(*base)), *database_, setup)), seed);
         return;
     }
-    // the world generator in the WM-only mode (var_57 = 2), REAL-CODE equal to the original's new game (WELTGENERATOR.md)
+    // the world generator in the WM-only mode (start mode 2), the same way the original starts a new game
     NewGameOptions options;
     options.mode = kStartModeWm;
     const Bytes db = read_file(data_directory_ / "KB" / "23.vga");
@@ -153,7 +158,7 @@ void Session::continue_generator_streams(const std::array<uint32_t, 2>& streams)
     if (!game_ || std::getenv("EM_OLD_GENSTREAMS")) return;
     game_->set_borland_state(streams[0]);
     game_->set_game_rng_state(streams[1]);
-    game_->enter_first_menu();  // September 10 up to the first menu, as the original (REAL-CODE 11.11.2026)
+    game_->enter_first_menu();  // September 10 up to the first menu, as the original
 }
 
 void Session::add_manager(const NewGameSetup& setup) {
@@ -218,6 +223,8 @@ void Session::add_news(std::string text) {
     if (news_.size() > 500) news_.erase(news_.begin(), news_.begin() + long(news_.size() - 500));
 }
 
+// Takes over the staged game, detaches its callbacks, updates dirty/revision and moves its log into the news
+// (at most 500 entries are kept).
 void Session::commit(std::unique_ptr<Game> next, const Bytes& before) {
     const bool changed = next->checkpoint_bytes() != before;
     next->set_contract_decider({});  // never retain callbacks referring to a staged stack frame
@@ -274,6 +281,9 @@ ActionResult Session::apply_observed(const std::function<ActionResult(Game&)>& a
     return result;
 }
 
+// Plays the next day on a staged game. Contract questions are answered from contract_answers_ in order; the
+// first unanswered one becomes contract_question_ and the staged day is discarded (it is replayed from the
+// same checkpoint once the question is answered).
 bool Session::advance_day() {
     if (contract_question_) return false;
     const Bytes before = game().checkpoint_bytes();
@@ -285,7 +295,7 @@ bool Session::advance_day() {
         q.player = player.player;
         q.name = player.player >= 0 ? next->save().players.at(size_t(player.player)).name : "Spieler";
         q.age = player.age;
-        q.monthly_salary = proposal;  // the proposal of ovl02_0000 (raw)
+        q.monthly_salary = proposal;  // the season review's proposal (internal units)
         q.slot = slot;
         q.index = int(question);
         q.luck = next->daily_luck();
@@ -329,6 +339,8 @@ bool Session::advance_day() {
     return true;
 }
 
+// Plays the next day on a throw-away copy: true if it contains an interactive match; false if not, if a
+// contract question would come first or if a season ends on that day.
 bool Session::next_day_has_match() const {
     auto next = staged_game(game().checkpoint_bytes());
     next->set_contract_decider([](const ContractPlayer&, long) -> int { throw NeedContract{}; });

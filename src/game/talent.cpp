@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Talent scout ("Talent" button of the transfer page) of EM.EXE.
+// Talent scout ("Talent" button of the transfer page). These are Game members declared in
+// game/game.hpp.
 //
-// Start, ovr035:08CB..0A55 (manager counter +0xEC == 0, click on the button): question
+// Start (manager counter +0xEC == 0, click on the button): question
 // "M|chten Sie, da~ Ihr 'Spion' / f}r Sie auf Talentsuche geht? / Preis: <price> DM" with
-// "Aber immer!" / "Lieber nicht.". On yes the price u32 DS:020D + 4 * manager (state 0x18) is
+// "Aber immer!" / "Lieber nicht.". On yes the price (u32 per manager at state 0x18 + 4 * manager) is
 // paid when the cash is strictly above it, else "Sie haben nicht / genug Geld !". The counter
 // becomes rand(3, 10), plus 6 when rand(0, 3) == 0.
 //
-// Evaluation, seg002:0AC5 (= 146e:0aC5), called by the club day loop ovr038:33FA on the
-// twice-weekly days just before 162c:1c5b(1) and 146e:0c89: a running counter drops by one; when it
-// reaches zero (DS:4860 is 0) the search ends with
-//   rand(0, 5 - level / 2) == 0: seg002:089F(manager, rand(40, 90), 80) creates the player and
+// Evaluation, run by the club day loop on the twice-weekly days just before the team rating drift
+// (rerate_team mode 1): a running counter drops by one; when it reaches zero the search ends with
+//   rand(0, 5 - level / 2) == 0: talent_player(manager, rand(40, 90), 80) creates the player and
 //     posts "Ihre Talentsuche war ein Erfolg. / Ein junger Spieler st|~t zu Ihrem Kader.";
 //     a full squad (reserved count >= 28) creates nobody and posts nothing
 //   otherwise "Ihr Talentsp{her gibt die / Suche ohne Erfolg auf... Pech..."
-// Every message (ovr036:01CA) first draws its display date rand(0, 3).
+// Every message first draws its display date rand(0, 3).
 //
-// seg002:089F(manager, s, percent): a free player (global +0x1A == 6) among IDs rand(1, 179);
-// +0x19 = 0, age rand(18, 21), form rand(45, 55), skills +0x16 and +0x15 = rand(s - 5, s + 1),
-// club = the manager's; 59B5:2CD1(id, 0 years, 0, 0, 29) inserts him; owner = manager; squad
-// +0x19 = rand(3, 12) << 4 | rand(3, 12); salary = worth(salary) * percent / 100; value =
-// worth(value); contract rand(2, 3) years.
+// Creating the player (manager, skill s, salary percent): a free player (global +0x1A == 6) among
+// IDs rand(1, 179); +0x19 = 0, age rand(18, 21), form rand(45, 55), skills +0x16 and +0x15 =
+// rand(s - 5, s + 1), club = the manager's; native_insert_player (0 contract years) inserts him;
+// owner = manager; squad +0x19 = rand(3, 12) << 4 | rand(3, 12); salary = worth(salary) * percent /
+// 100; value = worth(value); contract rand(2, 3) years.
 #include "game/game.hpp"
 #include "game/native_roster.hpp"
 #include "game/messages.hpp"
@@ -29,16 +29,19 @@
 
 namespace em {
 namespace {
-constexpr size_t kRecord = 52, kPlayerBase = 0x4FC6;
-constexpr size_t kPrice = 0x18, kLevelByte = 0xAEB4;  // the price: u32 per manager (DS:020D + 4 * manager, ovr032:1F44..1FAE)
+constexpr size_t kRecord = 52, kPlayerBase = 0x4FC6;  // squad record size, player records (ID 1 first)
+constexpr size_t kPrice = 0x18, kLevelByte = 0xAEB4;  // the price: u32 per manager at 0x18 + 4 * manager; game level
 constexpr size_t counter_at(int manager) { return manager_block(manager) + 0xEC; }  // running steps, manager block +0xEC
+// Stores a little-endian 32-bit value.
 void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at(at + size_t(n)) = uint8_t(v >> (8 * n)); }
 }  // namespace
 
 long Game::talent_search_price() const { return long(int32_t(le32(save_.state, kPrice + 4 * size_t(active_manager_)))); }
 int Game::talent_search_days() const { return save_.state.at(counter_at(active_manager_)); }
 
-TalentResult Game::start_talent_search() {  // for the active manager (docs/MEHRSPIELER_PLAN.md step 5)
+// Starts the search for the active manager (see the file header). Not available to the national coach or without a
+// German club.
+TalentResult Game::start_talent_search() {
     const int a = active_manager_;
     if (national_coach_ >= 0 || mgr_[a].team < 0 || mgr_[a].team >= 52) return TalentResult::Unavailable;
     if (save_.state.at(counter_at(a)) != 0) return TalentResult::Running;
@@ -52,6 +55,9 @@ TalentResult Game::start_talent_search() {  // for the active manager (docs/MEHR
     return TalentResult::Started;
 }
 
+// Creates the scouted player for manager m (see the file header); false when the squad is full. The work is done on a
+// decoded copy and then the squad block and the player record are copied back, the decoded models are updated and the
+// injured-role list follows a shifted insertion.
 bool Game::talent_player(int skill, long percent, int m) {
     const size_t kSquadBase = squad_block(m);
     if (native_reserved_players(save_, m) >= 28) return false;
@@ -94,7 +100,7 @@ bool Game::talent_player(int skill, long percent, int m) {
     return true;
 }
 
-// 146e:0ac5 walks the managers 0..N-1 itself (DS:A70E from 0 while below DS:0386, 146e:0ac8..0ba4).
+// The evaluation walks the human managers 0..N-1 itself.
 void Game::talent_search_week() {
     for (int m = 0; m < managers_; m++) talent_search_step(m);
 }
@@ -103,9 +109,9 @@ void Game::talent_search_step(int m) {
     if (national_coach_ == m || mgr_[size_t(m)].team < 0 || mgr_[size_t(m)].team >= 52) return;
     uint8_t& counter = save_.state.at(counter_at(m));
     if (counter == 0) return;
-    if (--counter != 0) return;  // DS:4860 (immediate evaluation) is never set in a normal game
+    if (--counter != 0) return;  // the original's "evaluate immediately" switch is never set in a normal game
     const int level = save_.state.at(kLevelByte);
-    // ovr036:01CA (two lines, general entry of the current manager); its date draw is rand(0, 3)
+    // a two-line general message of the manager; its date draw is rand(0, 3)
     auto talent_message = [&](const char* first, const char* second) {
         const GameDate d = date_of_season_day(day_ + 1, save_.year);
         native_add_message(save_.state, brng_, {d.day, d.month, d.year, day_ + 1}, MessageKind::TwoLines,

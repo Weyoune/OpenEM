@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Headless original-pixel goldens. No arguments: palette/invalid-input checks.
-// With argv[1] = original EM directory: fonts and the actual KB21 palette.
-// Expected values were independently extracted from original bytes/assembly;
-// provenance: work/exp/day_20261103/font/NOTES.md and the native palette PNG.
+// Headless pixel checks of the classic UI basics: the save header preview (ui/classic_preview.cpp), the VGA
+// palette decoder, the three bitmap fonts read from EM.EXE (ui/classic_font.cpp) and the rank graph of the club
+// info (ui/classic_graph.cpp).
+// No arguments: preview, palette and invalid-input checks.
+// With argv[1] = original game folder: fonts, the actual KB21 palette and the rank graph.
+// The expected widths, ink counts and pixels are those of the original game's fonts and screens.
 #include "ui/classic_font.hpp"
 #include "ui/classic_graph.hpp"
 #include "ui/classic_preview.hpp"
@@ -20,8 +22,10 @@ using em::ui::ClassicFont;
 using em::ui::ClassicFontId;
 namespace fs = std::filesystem;
 
+// Number of failed CHECKs.
 static int failures = 0;
-#define CHECK(cond)                                                               \
+// Reports a failed condition with file and line and counts it, without stopping the test.
+#define CHECK(cond)                                                             \
     do {                                                                          \
         if (!(cond)) {                                                            \
             std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
@@ -29,6 +33,7 @@ static int failures = 0;
         }                                                                         \
     } while (0)
 
+// True when `action` throws a std::exception.
 template<class Action>
 static bool throws_exception(Action action) {
     try { action(); }
@@ -36,13 +41,16 @@ static bool throws_exception(Action action) {
     return false;
 }
 
+// Number of pixels of `image` with palette index `color`.
 static size_t count_color(const Image& image, uint8_t color) {
     return size_t(std::count(image.pixels.begin(), image.pixels.end(), color));
 }
 
+// Palette decoding and the rejection of invalid font sources, without game files.
 static void unit_tests() {
-    // Original KB21 index1 carries E4 EC F0. Runtime native PNG establishes
-    // RGB 92 B2 C3: this distinguishes DAC masking from 8-bit RGB and <<2-only.
+    // Original KB21 index 1 carries E4 EC F0. The original shows it as RGB 92 B2 C3: the VGA DAC keeps only the
+    // low six bits of each value, which are then scaled to 8 bits. This distinguishes DAC masking from 8-bit RGB
+    // and from a plain <<2.
     Bytes palette(765, 0);
     palette[3] = 228; palette[4] = 236; palette[5] = 240;
     CHECK((decode_palette(palette).rgb[1] == std::array<uint8_t, 3>{146, 178, 195}));
@@ -56,6 +64,8 @@ static void unit_tests() {
     CHECK(throws_exception([] { ClassicFont font(Bytes(0x10000, 0)); }));
 }
 
+// Expected rendering of one umlaut: its UTF-8 text, its byte in the game's code page, and per font (Mini, Flow,
+// NewBold) the advance width and the number of ink pixels.
 struct UmlautGolden {
     std::string_view utf8;
     uint8_t cp437;
@@ -63,6 +73,8 @@ struct UmlautGolden {
     std::array<size_t, 3> ink;
 };
 
+// Metrics, widths and glyph pixels of the Mini, Flow and NewBold fonts of EM.EXE, umlaut mapping, clipping,
+// opaque drawing, the digit-width padding glyph and the rejection of truncated or invalid executables.
 static void original_fonts(const fs::path& original_dir) {
     const Bytes exe = read_file(original_dir / "EM.EXE");
     const ClassicFont font(exe);
@@ -112,7 +124,7 @@ static void original_fonts(const fs::path& original_dir) {
         CHECK(count_color(space, 7) == 1024);
 
         // CP437 aliases and UTF-8 must choose the very same native glyphs.
-        // Each independent original glyph has a fixed width and ink count.
+        // Each original glyph has a fixed width and ink count.
         for (const auto& golden : umlauts) {
             const std::string native(1, char(golden.cp437));
             CHECK(font.measure(id, golden.utf8) == golden.advances[f]);
@@ -176,8 +188,8 @@ static void original_fonts(const fs::path& original_dir) {
     // exception, before drawing. These are input-boundary checks, not fonts.
     Bytes truncated(exe.begin(), exe.begin() + std::min<size_t>(exe.size(), 0x1e00));
     CHECK(throws_exception([&] { ClassicFont invalid(truncated); }));
-    // Original Flow glyphs7E/7F share file FB08: width + eight rows ends
-    // at FB11 exclusive. Cutting at FB10 removes its final required row.
+    // In EM.EXE the Flow glyphs 7E/7F share file offset 0xFB08: width + eight rows end
+    // at 0xFB11 exclusive. Cutting at 0xFB10 removes its final required row.
     Bytes missing_font_tail(exe.begin(), exe.begin() + std::min<size_t>(exe.size(), 0xfb10));
     CHECK(throws_exception([&] { ClassicFont invalid(missing_font_tail); }));
     Bytes bad_header = exe;
@@ -185,6 +197,7 @@ static void original_fonts(const fs::path& original_dir) {
     CHECK(throws_exception([&] { ClassicFont invalid(bad_header); }));
 }
 
+// The 765-byte palette KB\21.vga decodes to black at index 0 and 92 B2 C3 at index 1.
 static void original_palette(const fs::path& original_dir) {
     const Bytes bytes = read_file(original_dir / "KB" / "21.vga");
     CHECK(bytes.size() == 765);
@@ -192,6 +205,7 @@ static void original_palette(const fs::path& original_dir) {
     CHECK((decode_palette(bytes).rgb[1] == std::array<uint8_t, 3>{146, 178, 195}));
 }
 
+// True when both images have the same pixels in the inclusive rectangle left..right x top..bottom.
 static bool same_region(const Image& actual, const Image& expected,
                         int left, int top, int right, int bottom) {
     for (int y = top; y <= bottom; ++y)
@@ -201,6 +215,9 @@ static bool same_region(const Image& actual, const Image& expected,
     return true;
 }
 
+// The rank graph of the club info: curves of the own club and an opponent from the packed ranks (two per byte,
+// low nibble first, at table row +0x34 = state 0x3BD9 for team 0), labels, caption, the end of the regular season
+// and the variants without a graph.
 static void ranking_graph(const fs::path& original_dir) {
     using em::ui::ClassicCanvas;
     using em::ui::draw_classic_ranking_graph;
@@ -210,7 +227,7 @@ static void ranking_graph(const fs::path& original_dir) {
     h.matchday[0] = h.matchday[1] = h.matchday[2] = 2;
     const auto clear = [&] { canvas.rect(0, 0, 319, 239, 2); };
 
-    //5cb4:1529..15c2: first completed round uses step85, ending at x90;
+    // The first completed round uses step 85, ending at x 90;
     // the labels use the terminated loop index n, placing them at x92.
     h.state[0x3bd9] = 2;          // own third place => y51
     h.state[0x3bd9 + 80] = 6;     // opponent seventh place => y59
@@ -241,7 +258,7 @@ static void ranking_graph(const fs::path& original_dir) {
     canvas.font().draw(packed_label, ClassicFontId::Mini, 91, 67, "11.", 24);
     CHECK(same_region(canvas.pixels(), packed_label, 91, 60, 109, 69));
 
-    //16b1..1741: overlapping sixth-place labels separate by moving only the
+    // Overlapping sixth-place labels separate by moving only the
     // own label seven pixels upward. Opponent curve is drawn second.
     h.matchday[0] = 2;
     h.state[0x3bd9] = h.state[0x3bd9 + 80] = 5;
@@ -288,6 +305,9 @@ static void ranking_graph(const fs::path& original_dir) {
 
 int main(int argc, char** argv) {
     try {
+        // Save header preview (0xB0 bytes): "KRON_0.99" signature, +0x0A year (i32), +0x0E number of managers
+        // (at most 4), +0x0F matchday; from +0x10 one 40-byte record per manager: +0 league, +1 world cup flag,
+        // +2 manager name, +21 club name (19-byte fields).
         Bytes prefix(0xB0,0xA5);
         std::copy_n("KRON_0.99",10,prefix.begin());
         prefix[0x0A]=0xC9;prefix[0x0B]=7;prefix[0x0C]=prefix[0x0D]=0;

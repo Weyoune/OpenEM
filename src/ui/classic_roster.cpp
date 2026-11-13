@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Squad list drawing (see classic_roster.hpp). Offsets are into the save state.
 #include "ui/classic_roster.hpp"
 
 #include <algorithm>
@@ -7,12 +8,14 @@
 
 namespace em::ui {
 namespace {
+// Squads: 0x618 bytes per manager from 0x696D, 52-byte slots; byte +0x0F is the 1-based player id.
 constexpr size_t kSquads = 0x696d, kSquadStride = 0x618, kRecord = 52;
+// Player table: 33-byte records, id 1 at 0x4FC6.
 constexpr size_t kPlayers = 0x4fc6, kPlayerRecord = 33;
 constexpr auto kMini = ClassicFontId::Mini;
 
-// 199F:0164, with DS038D=1 as restored by the main header. Native byte25h
-// is a five-pixel blank; an ordinary space is only two Mini pixels wide.
+// Number formatting without thousands separators, padded to width. The pad glyph '%' (byte 0x25) is a
+// five-pixel blank; an ordinary space is only two Mini pixels wide.
 std::string number(int value, int width = 1) {
     std::string result = std::to_string(value);
     if (value >= 0 && int(result.size()) < width)
@@ -31,21 +34,28 @@ uint32_t word32(const uint8_t* r) {
            uint32_t(r[2]) << 16 | uint32_t(r[3]) << 24;
 }
 
+// Text colour of a row: by role (goalkeeper 30, defender 24, forward 9). Outside the line-up view, slot byte
+// +0x18 with bit 0x80 (player retires) gives 16, other non-zero values give 17 (< 100) or 7 on the contracts
+// page; on the transfer page flag 0x40 of byte +0x09 gives 22.
 uint8_t row_color(const uint8_t* r, int role, ClassicRosterView view) {
     constexpr std::array<uint8_t, 3> colors{30, 24, 9};
     uint8_t color = colors[size_t(role)];
-    // F0C7's caller passes flag1: skip the overrides at1FC6..2030.
+    // The line-up page skips all colour overrides.
     if (view == ClassicRosterView::Lineup) return color;
     const bool contracts = view == ClassicRosterView::Contracts;
     if (r[0x18] & 0x80) color = 16;
     else if (contracts && r[0x18]) color = r[0x18] < 100 ? 17 : 7;
-    // Original mask90C6 applies this after retirement, overriding its color.
+    // The original applies this after the retirement colour, overriding it.
+    // (Only the Transfer view reaches here with contracts == false.)
     if (!contracts && (r[0x09] & 0x40)) color = 22;
     return color;
 }
 
+// STATUS column: "RESERVE" (+0x0A set and +0x15 & 0x7F zero), "IM TEAM" (+0x0A set), or by bits 0..1 of
+// +0x09 "***", "GESP." (suspended) with the count from +0x0D, or "VERL." (injured); those three switch
+// color to 16.
 std::string status(const uint8_t* r, uint8_t& color) {
-    std::string result = " "; // DS5105
+    std::string result = " "; // leading blank of every status text
     if (r[0x0a] && !(r[0x15] & 0x7f)) return result + "RESERVE";
     const int state = r[0x09] & 3;
     if (!state) return result + (r[0x0a] ? "IM TEAM" : " ");
@@ -56,10 +66,12 @@ std::string status(const uint8_t* r, uint8_t& color) {
     return result;
 }
 
+// V.DAUER column: contract years (+0x0B) as "n Jahr(e)", "kein V." without contract, "(v)" when insured
+// (u32 insurance at +0x30 non-zero).
 std::string duration(const uint8_t* r) {
     if (!r[0x0b]) return "kein V.";
     std::string result = number(r[0x0b]) + " Jahr";
-    // 59B5:240C compares the FIRST formatted digit, not the numeric year.
+    // The original compares the FIRST formatted digit, not the numeric year.
     result += result.front() > '1' ? "e" : "  ";
     if (word32(r + 0x30)) result += "(v)";
     return result;
@@ -84,9 +96,9 @@ void draw_classic_roster(ClassicCanvas& canvas, const HokFile& h,
     const size_t base = kSquads + size_t(manager) * kSquadStride;
     (void)record(h, base, kSquadStride);
 
-    // Contracts passes count-1 from 645B:0D27; that helper counts occupied
-    // records among slots0..28 (only0..11 for manager4). The transfer caller
-    // instead passes literal29 as its inclusive final slot, thus draws30 rows.
+    // The contracts page draws as many rows as there are occupied records among slots 0..28 (only 0..11 for
+    // squad 4, the transfer pool) — counted, not searched, as in the original. The transfer page always draws
+    // slots 0..29.
     int rows = 30;
     if (contracts) {
         rows = 0;
@@ -114,16 +126,16 @@ void draw_classic_roster(ClassicCanvas& canvas, const HokFile& h,
 
     for (int slot = 0; slot < rows; ++slot) {
         const uint8_t* r = h.state.data() + base + size_t(slot) * kRecord;
-        if (!r[0x0f]) continue; // Native rows retain their slot's vertical gap.
+        if (!r[0x0f]) continue; // an empty slot keeps its vertical gap, as in the original
         const uint8_t* p = h.state.data() + kPlayers + size_t(r[0x0f] - 1) * kPlayerRecord;
-        const int role = std::min(int(p[0x18]) / 25, 2); // 1238:0000
+        const int role = std::min(int(p[0x18]) / 25, 2); // position byte: 0..24 TOR, 25..49 ABW, 50.. STU
         const uint8_t color = row_color(r, role, view);
         const int baseline = 33 + 6 * slot;
         const auto draw = [&](int x, const std::string& value, uint8_t ink) {
             canvas.text(kMini, x, baseline, value, ink);
         };
         constexpr std::array<const char*, 3> roles{"TOR", "ABW", "STU"};
-        // F0C7 starts with NR, whose original allocation is11 pixels.
+        // The line-up list starts with NR, which takes 11 pixels.
         const int shift = lineup ? 11 : 0;
         if (lineup && r[0x0a]) draw(7, number(slot + 1, 2), color);
         draw(7 + shift, roles[size_t(role)], r[0x0c] ? 19 : color);
@@ -146,8 +158,8 @@ void draw_classic_roster(ClassicCanvas& canvas, const HokFile& h,
              r[0x13] > 130 ? 16 : color);
         if (contracts) {
             draw(177, duration(r), color);
-            // 59B5:2446 selects width7; 199F:02D8 converts raw DM by /3.
-            // DS038D=1 disables thousands separators here (header cash uses0).
+            // Monthly salary (i32 at +0x28) in DM (internal units / 3), width 7, without thousands
+            // separators (unlike the cash display in the header).
             const int salary = int(static_cast<int32_t>(word32(r + 0x28))) / 3;
             draw(212, number(salary, 7) + " DM", color);
         }

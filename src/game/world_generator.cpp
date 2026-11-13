@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The new-game world generator and Manager -> Neuer (see world_generator.hpp).
+//
+// The generator works like the original program: on an image of the program's data segment,
+// whose initialised part is copied from EM.EXE, plus two separate buffers for the 150 team
+// records (0x3D bytes) and the 200 player records (0x21 bytes). The `ds*` constants are offsets
+// into that image (for initialised data, EM.EXE file offset kDgroupFile + offset). At the end the
+// image is mapped to the HOK save state through kBlocks, the block table of the save format.
 #include "game/world_generator.hpp"
 
 #include <algorithm>
@@ -23,48 +30,49 @@
 namespace em {
 namespace {
 
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // DGROUP in EM.EXE (docs/formats/EXE.md)
-constexpr size_t kDgroupInit = 0xE7E0;            // initialised part: up to the FBOV block at 0x255B0
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // EM.EXE file offset of the data segment (header + segment start)
+constexpr size_t kDgroupInit = 0xE7E0;            // size of its initialised part (the rest starts zeroed)
+// Record sizes: team, player, manager block, squad block (30 rows), squad row.
 constexpr size_t kTeamRec = 0x3D, kPlayerRec = 0x21, kManagerRec = 0x1AF, kSquadBlock = 0x618, kSquadRec = 0x34;
-constexpr int kTeams = 150, kPlayerIds = 200;
+constexpr int kTeams = 150, kPlayerIds = 200;  // team records; player IDs 0..199 (0 unused)
 
-// DGROUP offsets
-constexpr size_t dsLevel = 0x0118, dsEndChoice = 0x0119, dsSquadSize = 0x011A;
-constexpr size_t dsRatingBounds = 0x0125;  // 3 x {low, high}
+// Offsets into the data image. The start options:
+constexpr size_t dsLevel = 0x0118, dsEndChoice = 0x0119, dsSquadSize = 0x011A;  // level, end, start league (+1 strength)
+constexpr size_t dsRatingBounds = 0x0125;  // u8[3][2] {low, high} club rating bounds per class
 constexpr size_t dsGroupCounter = 0x015C;  // u8[3] free IDs per position group (counted down)
 constexpr size_t dsDbSlots = 0x0164;       // u8[4] database slot bounds per group: 0, 2, 12, 25
 constexpr size_t dsGroupSizes = 0x0169;    // u8[4][4] squad size per group and setting
-constexpr size_t dsFaces = 0x0178;
-constexpr size_t dsShareTarget = 0x01FD;  // u32[4]
-constexpr size_t dsNationValue = 0x026C;  // u32[12]
-constexpr size_t dsSession = 0x02C4;      // u32
+constexpr size_t dsFaces = 0x0178;         // u8[4] face per manager
+constexpr size_t dsShareTarget = 0x01FD;  // u32[4] share target prices (initial price = target / 50)
+constexpr size_t dsNationValue = 0x026C;  // u32[12] friendly price per nation
+constexpr size_t dsSession = 0x02C4;      // u32 session id of the new game
 constexpr size_t dsIdBound = 0x0381;      // u8[4] position groups: IDs 1..20, 21..96, 97..199
-constexpr size_t dsManagerCount = 0x0386, dsCupWinner = 0x0387, dsEuroWinner = 0x0388;
-constexpr size_t dsDayCounter = 0x03B7, dsSeasonYear = 0x03BB;
-constexpr size_t dsGermany = 0x06AC, dsFirstNation = 0x06AD, dsDayStart = 0x06AF;
-constexpr size_t dsMatchday = 0x07A9, dsWmRound = 0x07AE, dsEuroRound = 0x07AF;
-constexpr size_t dsLeagueSize = 0x07B1, dsLeagueStart = 0x07C0;
-constexpr size_t dsClassLimit1 = 0x07C1, dsClassLimit2 = 0x07C2;
-constexpr size_t dsLevelSalary = 0x0ED8;
+constexpr size_t dsManagerCount = 0x0386, dsCupWinner = 0x0387, dsEuroWinner = 0x0388;  // u8 each
+constexpr size_t dsDayCounter = 0x03B7, dsSeasonYear = 0x03BB;  // u32 day counter, u16 season year
+constexpr size_t dsGermany = 0x06AC, dsFirstNation = 0x06AD, dsDayStart = 0x06AF;  // nation of the coach, first nation index, start day
+constexpr size_t dsMatchday = 0x07A9, dsWmRound = 0x07AE, dsEuroRound = 0x07AF;  // matchday per league, WM / EuroCup round
+constexpr size_t dsLeagueSize = 0x07B1, dsLeagueStart = 0x07C0;  // u8[3] teams per league, first team index per league
+constexpr size_t dsClassLimit1 = 0x07C1, dsClassLimit2 = 0x07C2;  // first team of the second / third rating class
+constexpr size_t dsLevelSalary = 0x0ED8;  // game level for salaries (5 - level option)
 constexpr size_t dsYouth = 0xA075;  // youth teams, 0x15 bytes per manager (state 0x06B8)
-constexpr size_t dsDistributionCursor = 0x48FB;
-constexpr size_t dsNationSkills = 0x4C4E, dsFormString = 0x4DC7;
-constexpr size_t dsNameRetry = 0x55EE;  // word_2A5BE: a duplicate name widens the club range by 24
-constexpr size_t dsEndYear = 0x5A14, dsYear = 0x5A18, dsMonth = 0x5A1C, dsDay = 0x5A20;
-constexpr size_t dsLeagueLists = 0x5CCB, dsCupRound = 0x5CF3, dsCupDraw = 0x5CFB;
-constexpr size_t dsSquads = 0x5DC3;
+constexpr size_t dsDistributionCursor = 0x48FB;  // u8[3] player distribution cursors (not saved)
+constexpr size_t dsNationSkills = 0x4C4E, dsFormString = 0x4DC7;  // fixed national team skills; "--------"
+constexpr size_t dsNameRetry = 0x55EE;  // u16 flag: after a duplicate name the club range widens by 24
+constexpr size_t dsEndYear = 0x5A14, dsYear = 0x5A18, dsMonth = 0x5A1C, dsDay = 0x5A20;  // end year, date
+constexpr size_t dsLeagueLists = 0x5CCB, dsCupRound = 0x5CF3, dsCupDraw = 0x5CFB;  // u8[3][12] league team lists, cup
+constexpr size_t dsSquads = 0x5DC3;  // 6 squad blocks (state 0x696D)
 constexpr size_t dsRows = 0x8257;  // 64 x 0x50: titles, table row, curve
-constexpr size_t dsManagers = 0x965B;
+constexpr size_t dsManagers = 0x965B;  // 6 manager blocks (state 0x0DCD)
 constexpr size_t dsWmFlag = 0x9FAC;
-constexpr size_t dsCurrentManager = 0xA70E, dsLastManager = 0xA70D;
-constexpr size_t dsEntrantSlots = 0xA763, dsEntrantCount = 0xA775, dsEntrants = 0xA776;
+constexpr size_t dsCurrentManager = 0xA70E, dsLastManager = 0xA70D;  // manager being processed / last one
+constexpr size_t dsEntrantSlots = 0xA763, dsEntrantCount = 0xA775, dsEntrants = 0xA776;  // European cup entrants
 constexpr size_t dsStartFlag = 0xA899;
-constexpr size_t dsHeadToHead = 0xAB7B, dsSeries = 0xB57B, dsRecordOpp = 0xBB0F, dsRecords = 0xBD0F;
+constexpr size_t dsHeadToHead = 0xAB7B, dsSeries = 0xB57B, dsRecordOpp = 0xBB0F, dsRecords = 0xBD0F;  // result books
 constexpr size_t dsCompetition = 0xCFFA, dsCompetitionRound = 0xCFFB;
-constexpr size_t dsMode = 0xD0B9, dsWmPhase = 0xD0C1, dsChampion = 0xD0E6;
+constexpr size_t dsMode = 0xD0B9, dsWmPhase = 0xD0C1, dsChampion = 0xD0E6;  // game mode, friendlies/WM phase, champion
 
-// The save writer ovl16_11bd: HOK state offset, DGROUP offset, size; heap 1 = teams, 2 = players
-// (re/out/hok_layout.csv).
+// One block of the save format: `size` bytes of the data image at `ds` (or of a record buffer,
+// heap 1 = teams, 2 = players) are stored at HOK state offset `state`.
 struct Block {
     uint16_t state, ds, size;
     uint8_t heap;
@@ -95,8 +103,9 @@ constexpr Block kBlocks[] = {
     {0xB953, 0xA969, 0x0002, 0}, {0xB955, 0x0246, 0x0010, 0}, {0xB965, 0xA8A0, 0x0001, 0}, {0xB966, 0x5A50, 0x0005, 0},
     {0xB96B, 0xCAE9, 0x0120, 0}, {0xBA8B, 0xCAE3, 0x0006, 0},
 };
-constexpr size_t kStateSize = 0xBA91;
+constexpr size_t kStateSize = 0xBA91;  // size of the HOK save state
 
+// Little-endian stores.
 void put16(Bytes& b, size_t o, uint16_t v) {
     b.at(o) = uint8_t(v);
     b.at(o + 1) = uint8_t(v >> 8);
@@ -125,6 +134,7 @@ void cstrcpy(Bytes& dst, size_t d, const Bytes& src, size_t s) {
     if (d + n < dst.size()) dst[d + n] = 0;
 }
 
+// The contract view (value/salary inputs) of squad row `r` and player record `p`.
 ContractPlayer contract_from(const uint8_t* r, const uint8_t* p) {
     ContractPlayer c;
     c.bonus_a = r[0x00];
@@ -146,34 +156,43 @@ ContractPlayer contract_from(const uint8_t* r, const uint8_t* p) {
     c.team = p[0x1D];
     return c;
 }
+// Stores a little-endian i32 at `r`.
 void store32(uint8_t* r, long v) {
     for (int k = 0; k < 4; k++) r[k] = uint8_t(uint32_t(v) >> (8 * k));
 }
 
+// The world under construction: the data image, the team and player record buffers, the
+// master database and both random streams (Borland and the game's own generator).
 struct World {
-    Bytes ds = Bytes(0x10000, 0);
-    Bytes teams = Bytes(size_t(kTeams) * kTeamRec, 0);
-    Bytes players = Bytes(size_t(kPlayerIds) * kPlayerRec, 0);
-    const Bytes& db;
+    Bytes ds = Bytes(0x10000, 0);                                // the 64 KiB data image
+    Bytes teams = Bytes(size_t(kTeams) * kTeamRec, 0);          // team records
+    Bytes players = Bytes(size_t(kPlayerIds) * kPlayerRec, 0);  // player records, index = ID
+    const Bytes& db;                                             // KB\23.vga
     ContractTables contracts;
     BorlandRandom brng;
-    GameRandom grng{0};  // DS:E017 starts at 0 (dseg:E017 dw 0)
-    std::vector<std::string> log;
+    GameRandom grng{0};  // the game's generator starts at 0 with the program and is never seeded
+    std::vector<std::string> log;  // step markers and draw counts
 
     World(const Bytes& exe, const Bytes& d) : db(d), contracts(load_contract_tables(exe)) {
         std::copy_n(exe.begin() + long(kDgroupFile), kDgroupInit, ds.begin());
     }
-    uint8_t& d(size_t o) { return ds.at(o); }
-    uint16_t w(size_t o) const { return le16(ds, o); }
+    uint8_t& d(size_t o) { return ds.at(o); }            // byte of the data image
+    uint16_t w(size_t o) const { return le16(ds, o); }   // u16 of the data image
     uint8_t* team(size_t t) { return &teams.at(t * kTeamRec); }
     uint8_t* player(size_t id) { return &players.at(id * kPlayerRec); }
-    size_t manager(size_t m) const { return dsManagers + m * kManagerRec; }
-    uint8_t& club_of(size_t m) { return d(manager(m) + 0x14); }  // DS:966F
+    size_t manager(size_t m) const { return dsManagers + m * kManagerRec; }  // manager block m
+    uint8_t& club_of(size_t m) { return d(manager(m) + 0x14); }  // manager block +0x14: club team index
     uint8_t* squad(size_t m, size_t slot) { return &ds.at(dsSquads + m * kSquadBlock + slot * kSquadRec); }
-    int b(int lo, int hi) { return brng.range(lo, hi); }
-    int g(long lo, long hi) { return int(grng.range(lo, hi)); }
+    int b(int lo, int hi) { return brng.range(lo, hi); }               // Borland rand(lo, hi)
+    int g(long lo, long hi) { return int(grng.range(lo, hi)); }        // game generator rand(lo, hi)
 
-    // ---- ovl04_4d3b (ovr028:4D3B): team records from KB\23.vga --------------------------------------
+    // ---- team records from KB\23.vga ---------------------------------------------------------
+    // For all 150 teams: +0x3B/+0x3C a signed word from the database's word table (file offset
+    // 2 * t), +0x17 rand(47, 53), skills +0x18/+0x19 and +0x1A/+0x1B rolled around the database
+    // value a (file 0x16C + 3t) as a - rand(0, a/10) + rand(0, a/10), form +0x1C/+0x1D rand(45, 55)
+    // (minus 5 beyond team 64), the national teams fixed skills from the EXE table minus 2; the
+    // 64 league/EuroCup teams also get +0x34 and the empty form string; then the names and the
+    // initial league team lists.
     void team_records() {
         for (size_t t = 0; t < size_t(kTeams); t++) {  // +0x3B = (s8 hi << 8) + s8 lo of the word table at file 0
             const int v = int(int8_t(db.at(2 * t))) * 256 + int(int8_t(db.at(2 * t + 1)));
@@ -196,7 +215,7 @@ struct World {
                 r = b(0, spread);
                 team(t)[0x1A + k] = uint8_t(a - r + b(0, spread));
                 team(t)[0x1C + k] = uint8_t(b(45, 55) - (t > 64 ? 5 : 0));
-                if (int(t) >= first && int(t) < first + 12) {  // the national teams take fixed values from DS:4C4E
+                if (int(t) >= first && int(t) < first + 12) {  // the national teams take fixed values from dsNationSkills
                     team(t)[0x18 + k] = uint8_t(d(dsNationSkills + size_t(nation++)) - 2);
                     team(t)[0x1A + k] = uint8_t(d(dsNationSkills + size_t(nation++)) - 2);
                     put16(ds, dsRows + 0x4E + t * 0x50, 0);
@@ -215,7 +234,8 @@ struct World {
             for (size_t j = 0; j < d(dsLeagueSize + l); j++) d(dsLeagueLists + l * 12 + j) = uint8_t(counter++);
     }
 
-    // ---- ovl10_05c4 (ovr034:05C4) --------------------------------------------------------------
+    // ---- manager reset: clears the head-to-head books, sets the cup phase bytes +0xE8..+0xEA of
+    // all six managers to 30, the faces 1..4 and 0xFF history entries of the four human blocks.
     void reset_managers() {
         std::fill_n(ds.begin() + long(dsHeadToHead), 0x1594, uint8_t(0));
         for (size_t m = 0; m < 6; m++)
@@ -226,7 +246,11 @@ struct World {
         }
     }
 
-    // ---- ovl06_0c29 (ovr030:0C29): two teams change places --------------------------------------
+    // ---- two teams change places -------------------------------------------------------------
+    // All references to a / b2 (player teams, managers' clubs; with mode & 0x7F also the cup,
+    // league and EuroCup winners) are swapped. mode & 0x80 swaps only name, +0x16, +0x34 and
+    // +0x3B/+0x3C of the records; otherwise the whole records and, for league teams (< 64), also
+    // their table rows, series, records and head-to-head entries.
     void swap_teams(int a, int b2, int mode) {
         auto relabel = [&](uint8_t& v) {
             if (v == a) v = uint8_t(b2);
@@ -259,14 +283,16 @@ struct World {
         swap_ds(dsSeries, 0x15);
         swap_ds(dsRecords, 0x10);
         swap_ds(dsRecordOpp, 8);
-        for (size_t i = 0; i < 64 * 8; i++) relabel(d(dsRecordOpp + i));  // ovl06_11ed
+        for (size_t i = 0; i < 64 * 8; i++) relabel(d(dsRecordOpp + i));  // opponents stored in the records
         for (size_t m = 0; m < d(dsManagerCount); m++)
             std::swap_ranges(ds.begin() + long(dsHeadToHead + m * 0x280 + size_t(a) * 10),
                              ds.begin() + long(dsHeadToHead + m * 0x280 + size_t(a) * 10 + 10),
                              ds.begin() + long(dsHeadToHead + m * 0x280 + size_t(b2) * 10));
     }
 
-    // ---- ovl06_099d (ovr030:099D): the league shuffle ---------------------------------------
+    // ---- the league shuffle (game generator) -------------------------------------------------
+    // 20 random swaps among the 12 nations (with their friendly prices and the coach's nation),
+    // then 55 random swaps inside each of the three leagues, also swapping them in the league lists.
     void shuffle_leagues() {
         const int first = int(int8_t(d(dsFirstNation)));
         for (int i = 0; i < 20; i++) {
@@ -298,7 +324,8 @@ struct World {
         }
     }
 
-    // ---- ovl05_51a5 (ovr029:51A5): European cup entrants ----------------------------------------
+    // ---- European cup entrants: the champion, then the EuroCup winner if it is a league team
+    // and not listed yet; the other slots stay 0x80 (empty).
     void euro_entrants() {
         d(dsEntrantCount) = 0;
         std::fill_n(ds.begin() + long(dsEntrantSlots), 18, uint8_t(0x80));
@@ -306,7 +333,7 @@ struct World {
         d(dsEntrantSlots + slot++) = d(dsChampion);
         d(dsEntrants + d(dsEntrantCount)++) = d(dsChampion);
         const uint8_t winner = d(dsEuroWinner);
-        if (winner < 64) {  // ovl05_5362: not yet in the list
+        if (winner < 64) {  // only when not yet in the list
             bool listed = false;
             for (size_t i = 0; i < d(dsEntrantCount); i++) listed |= d(dsEntrants + i) == winner;
             if (!listed) {
@@ -316,7 +343,9 @@ struct World {
         }
     }
 
-    // ---- ovl16_0214: the database entry of a team by its name, slot `slot` -------------------
+    // ---- the database offset of player name `slot` of the club named like team `t` ------------
+    // The database holds 64 clubs of 0x20B bytes from file offset 0x4AE: a 23-byte name, then
+    // 20-byte player names. A team without a matching club yields the entry past the last club.
     size_t db_entry(size_t t, int slot) const {
         size_t s = 0x4AE;
         for (int k = 0; k < 64; k++, s += 0x20B)
@@ -324,7 +353,11 @@ struct World {
         return s + 0x17 + size_t(20 * slot);
     }
 
-    // ---- ovl16_0280: a random name of a computer club (and its club for `target`) --------------
+    // ---- a random player name from a computer club ---------------------------------------------
+    // Draws a database slot of position group `group` and a first-division club no human manager
+    // runs (after a duplicate name the range widens by 24 clubs) until the name is non-empty and
+    // not used by any player yet. With `target` != 0xFF that player's team becomes the club.
+    // Returns the database offset of the name.
     size_t random_name(int group, int target) {
         for (;;) {
             const int slot = b(d(dsDbSlots + size_t(group)), d(dsDbSlots + size_t(group) + 1) - 1);
@@ -355,11 +388,17 @@ struct World {
         }
     }
 
-    // ---- ovl09_2cd1 (ovr033:2CD1) with (player, 2, 0, 15000, 0x1D): sign a player ----------------
+    // ---- sign player `id` into the squad of the current manager ------------------------------
+    // The row goes after the players of the same or a lower position class (position / 25, at
+    // most 2), at most at `last`; later rows shift down. The new row gets exhaustion rand(80,
+    // 120), experience rand(35, 65), the packed trend/direction/high bit, `years`, `mode` (+0x0C),
+    // goals, games, skills and form from the player record and the valued salary (mode 99:
+    // times rand(90, 115) %). The player then belongs to the manager's club (not for the pool,
+    // block 4). Returns the slot.
     int sign_player(int id, int years, int mode, int last) {
         const size_t m = d(dsCurrentManager);
         uint8_t* p = player(size_t(id));
-        auto pclass = [&](int x) { return std::min(2, player(size_t(x))[0x18] / 25); };  // 1238:0000
+        auto pclass = [&](int x) { return std::min(2, player(size_t(x))[0x18] / 25); };  // position class
         const int cls = pclass(id);
         int at = 0;
         while (squad(m, size_t(at))[0x0F] && pclass(squad(m, size_t(at))[0x0F]) <= cls && at < last) at++;
@@ -369,7 +408,7 @@ struct World {
         r[0x0F] = uint8_t(id);
         r[0x13] = uint8_t(b(80, 120));
         r[0x0E] = 0;
-        r[0x0E] = uint8_t(b(35, 65));  // ovl11_307a
+        r[0x0E] = uint8_t(b(35, 65));  // experience
         r[0x14] = uint8_t(b(1, 13));
         r[0x14] |= uint8_t(b(1, 3) << 4);
         r[0x14] |= uint8_t(b(0, 1) << 7);
@@ -382,14 +421,21 @@ struct World {
         r[0x12] = p[0x17];
         ContractTables t = contracts;
         t.level = d(dsLevelSalary);
-        long salary = player_worth(t, contract_from(r, p), Worth::Salary, brng);  // ovl11_3d36(record, 1)
+        long salary = player_worth(t, contract_from(r, p), Worth::Salary, brng);  // the salary valuation
         if (mode == 99) salary = salary * b(90, 115) / 100;
         store32(r + 0x28, salary);
         if (m != 4 && p[0x1D] != club_of(m)) p[0x1D] = club_of(m);
         return at;
     }
 
-    // ---- ovl16_0730 (ovr040:0730): players and squads -------------------------------------------
+    // ---- players and squads (Borland) -------------------------------------------------------
+    // Rolls all 199 player records (age 18..33, skills around rand(30, 89) +-10 with a second
+    // chance below 45, form 45..55, owner 6 = nobody), then fills the squads of the human
+    // managers group by group (goalkeepers, defence, attack; sizes from dsGroupSizes) with players
+    // named after their club's database entries (or random names), signed for two years, aged
+    // 19..31, with the +0x19 nibbles. The remaining players get random names, a random +0x12 and
+    // (outside "Nur WM", when the game ends after 2000) no team; finally every player gets the
+    // position value of his ID range.
     void generate_players() {
         for (size_t m = 0; m < 6; m++)
             for (size_t slot = 0; slot < 30; slot++) squad(m, slot)[0x0F] = 0;
@@ -446,7 +492,10 @@ struct World {
         }
     }
 
-    // ---- 162c:1c5b(10) = seg003:1C5B: club values of the season start ---------------------------
+    // ---- club values of the season start (game generator) -----------------------------------
+    // Every club before the nations gets a trend rand(0, 2s + 6) - 6 with s = rand(0, 6) and
+    // moves both skill pairs by trend +-1, clamped to the bounds of its rating class; all teams up
+    // to the last nation get fresh form values rand(45, 55).
     void rerate_clubs() {
         const int first = int(int8_t(d(dsFirstNation)));
         for (int t = 0; t < first + 12; t++) {
@@ -469,13 +518,14 @@ struct World {
     }
 };
 
+// The HOK state offset of a data-image offset (throws when that byte is not saved).
 size_t state_of(size_t ds_offset) {
     for (const Block& bl : kBlocks)
         if (!bl.heap && ds_offset >= bl.ds && ds_offset < size_t(bl.ds) + bl.size) return bl.state + (ds_offset - bl.ds);
     throw FormatError("world generator: DGROUP offset outside the save");
 }
 
-// The saved blocks of the world as a HOK state (ovl16_11bd), and back.
+// The saved blocks of the world as a HOK state, and back.
 Bytes world_state(const World& w) {
     Bytes st(kStateSize, 0);
     for (const Block& bl : kBlocks) {
@@ -493,14 +543,16 @@ void load_world_state(World& w, const Bytes& st) {
     }
 }
 
-// A HOK file around a state: header of ovl16_11bd (tag, year, managers, matchday, previews, "EH0").
-// The managers are those of the state (DS:0386, names in the manager blocks).
+// A HOK file around a state, with the header the game writes: tag "KRON_0.99", +0x0A u32 year
+// (1993 while the state still holds 0), +0x0E manager count, +0x0F first-division matchday, per
+// manager at +0x10 + 40m the league (club / 12), name and club name of the load preview, and
+// "EH0" at +0xB0. The managers are those of the state (count at 0x0DC6, names in the manager blocks).
 HokFile make_hok(Bytes st) {
     HokFile h;
     h.header.assign(kHokHeaderSize, 0);
     const char tag[] = "KRON_0.99";
     std::copy(tag, tag + sizeof tag, h.header.begin());
-    const uint32_t year = le32(st, 0x8E29);  // DS:5A18, 0 during the generator
+    const uint32_t year = le32(st, 0x8E29);  // the year of the date, 0 during the generator
     put32(h.header, 0x0A, year ? year : 1993);
     const size_t managers = std::min<size_t>(st.at(0x0DC6), 4);
     h.header[0x0E] = uint8_t(managers);
@@ -518,7 +570,10 @@ HokFile make_hok(Bytes st) {
     return decode_hok(encode_hok(h));
 }
 
-// ovl11_34ef: the transfer list (manager block 4, slots 0-9), see Game::refresh_transfer_list.
+// The transfer list refresh (squad block 4, slots 0-9), as Game::refresh_transfer_list does it
+// in the day loop: listed players the pool owns (+0x1A = 4) leave, then free slots are refilled
+// with random unowned players (+0x1A = 6) with fresh form, skills re-rolled from their club's
+// values, a new squad row in position order, value and salary. All draws use `brng`.
 void refresh_transfer_list(Bytes& st, ContractTables contracts, BorlandRandom& brng) {
     constexpr size_t kPlayers = 0x4FA5, kTeamsState = 0x17E7, kBlock = 0x696D + 4 * kSquadBlock;
     constexpr int kSlots = kTransferRefreshSlots;
@@ -529,7 +584,7 @@ void refresh_transfer_list(Bytes& st, ContractTables contracts, BorlandRandom& b
         std::memmove(rec(slot), rec(slot + 1), size_t(kSlots - slot) * kSquadRec);
         rec(kSlots)[0x0F] = 0;
     };
-    auto pclass = [&](int id) {  // 1000:0180
+    auto pclass = [&](int id) {  // position class: goalkeeper 0, defence (< 60) 1, attack 2
         const int pos = pl(id)[0x18];
         return pos == 0 ? 0 : pos < 60 ? 1 : 2;
     };
@@ -557,7 +612,7 @@ void refresh_transfer_list(Bytes& st, ContractTables contracts, BorlandRandom& b
         uint8_t* pr = pl(p);
         pr[0x17] = uint8_t(brng.range(45, 55));
         const int club = pr[0x1D];
-        if (club < kTeams && st.at(kTeamsState + size_t(club) * kTeamRec + 0x16) == 0) {  // ovl11_381e
+        if (club < kTeams && st.at(kTeamsState + size_t(club) * kTeamRec + 0x16) == 0) {  // computer club: skills from its values
             const uint8_t* tm = &st.at(kTeamsState + size_t(club) * kTeamRec);
             const int lo = club >= 52 && club < 64 ? 10 : 0;
             const int a = std::clamp(tm[0x19] + brng.range(lo, 14) - 10, 10, 99);
@@ -596,10 +651,10 @@ void refresh_transfer_list(Bytes& st, ContractTables contracts, BorlandRandom& b
 
 }  // namespace
 
-// One pass of the manager loop ovr027:1B27..2076 for manager m (see generate_world). `new_game`: the old manager count
-// var_64 is 0 (the one-manager branch for an end in 1994 needs it).
+// One pass of the start menu's manager loop for manager m (see generate_world). `new_game`: the
+// game had no managers before (the one-manager branch for an end in 1994 needs it).
 static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTables& sponsor_tables) {
-    {  // sub_14D33: the training plan DS:A8A1 + 0x1C * m (7 days x 4 units)
+    {  // the default training plan, data image 0xA8A1 + 0x1C * m (7 days x 4 units)
         uint8_t* plan = &w.d(0xA8A1 + 0x1C * m);
         if (w.d(dsLevelSalary) == 0) std::fill_n(plan, 0x1C, uint8_t(1));
         else if (std::all_of(plan, plan + 0x1C, [](uint8_t v) { return v == 0; })) {
@@ -643,8 +698,8 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
     put32(w.ds, w.manager(m) + 0x18B, 99999);
     if (std::getenv("EM_OLD_WORLDLOOP")) return;
 
-    // the club draw (ovr027:1C0B)
-    auto in_euro = [&](int t) {  // sub_52E70(t, 1): one of the eight EuroCup group teams DS:5D1B
+    // the club draw
+    auto in_euro = [&](int t) {  // one of the eight EuroCup group teams (data image 0x5D1B)
         for (size_t i = 0; i < 8; i++)
             if (w.d(0x5D1B + i) == t) return true;
         return false;
@@ -654,7 +709,7 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
             if (w.club_of(j) == t) return true;
         return false;
     };
-    auto team_class = [&](int t) {  // ovl05_5aa5 / 2
+    auto team_class = [&](int t) {  // the league class of a team (0, 1, 2)
         if (t < w.d(dsClassLimit1)) return 0;
         if (t < w.d(dsClassLimit2)) return 1;
         if (t <= w.d(dsFirstNation)) return 2;
@@ -668,7 +723,7 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
         while (taken(drawn) || in_euro(drawn));
         w.swap_teams(w.club_of(m), drawn, 0x80);
     }
-    if (new_game && w.w(dsEndYear) == 0x7CA && w.d(dsManagerCount) == 1) {  // ovr027:1CCA
+    if (new_game && w.w(dsEndYear) == 0x7CA && w.d(dsManagerCount) == 1) {  // one manager, one season: a EuroCup club
         w.d(w.manager(m) + 0xE9) = 1;
         const int lo = w.d(dsLeagueStart), hi = lo + w.d(dsLeagueSize) - 1;
         int drawn = 0;
@@ -676,7 +731,8 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
         while (taken(drawn) || !in_euro(drawn));
         w.swap_teams(w.club_of(m), drawn, 0x80);
     }
-    // the strengths of the new squad (ovr027:1D74)
+    // the strengths of the new squad: skills base +-2 from the start-strength table (data image
+    // 0x4B42 + 3 * start league + strength), form 40..60
     const int base = w.d(0x4B42 + 3 * size_t(v) + w.d(dsSquadSize + 1));
     int occupied = 0;
     for (size_t si = 0; si < 0x1D; si++) occupied += w.squad(m, si)[0x0F] != 0;
@@ -695,7 +751,8 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
             }
         }
     }
-    // the manager fields (ovr027:1E2B..1F6A)
+    // the manager fields: league +0xEB, +0xE4, stadium places +0x133 / +0x137 (more for a
+    // one-season game), stadium facilities +0x116, +0xE5 = 0x10
     const size_t mb = w.manager(m);
     w.d(mb + 0xEB) = uint8_t(v);
     w.d(mb + 0xE4) = uint8_t(int32_t((20 - 2 * v) * 2 * int32_t(le32(w.ds, 0x07A1))) / int32_t(le32(w.ds, 0x079D)));
@@ -751,6 +808,8 @@ static void manager_loop_step(World& w, size_t m, bool new_game, const SponsorTa
     load_world_state(w, h.state);
 }
 
+// See world_generator.hpp. The steps follow the original order; each is marked in the log with
+// the state of both random streams.
 WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSettings& settings, const WorldSeeds& seeds) {
     if (exe.size() < kDgroupFile + kDgroupInit) throw FormatError("world generator: EM.EXE too short");
     if (db.size() != kDbSize) throw FormatError("world generator: KB\\23.vga must be 36648 bytes");
@@ -774,30 +833,30 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
         w.log.push_back(std::string(step) + ": borland " + std::to_string(w.brng.state()) + ", game " + std::to_string(w.grng.state()) +
                         (g_borland_log ? ", borland draws " + std::to_string(g_borland_log->size()) : std::string()));
     };
-    // ---- _main_0 before the start menu
-    w.brng = BorlandRandom(seeds.start);  // ovr034:0708
-    (void)w.b(0, 2);                      // ovr034:0714: intro or not
+    // ---- program start, before the start menu
+    w.brng = BorlandRandom(seeds.start);  // first seed
+    (void)w.b(0, 2);                      // intro or not
     for (int hi : seeds.intro_draws) (void)w.b(0, hi);  // the draws of the intro animation (see WorldSeeds)
-    w.team_records();                     // ovr034:086B
+    w.team_records();
     mark("team records");
-    w.brng = BorlandRandom(seeds.menu);  // ovr034:08A5
-    const int warm = w.b(100, 300);      // ovl00_0539
+    w.brng = BorlandRandom(seeds.menu);  // second seed
+    const int warm = w.b(100, 300);      // warm-up of the game generator: rand(100, 300) draws
     for (int i = 0; i < warm; i++) (void)w.g(0, 1);
     w.d(dsManagerCount) = 0;
     w.reset_managers();
-    w.d(dsLeagueLists) = 2;  // ovr034:08B8..08C2 (byte_2AC9B, byte_2AC9D, byte_320B6)
+    w.d(dsLeagueLists) = 2;  // three start values the program sets before the shuffle
     w.d(dsLeagueLists + 2) = 0;
     w.d(dsChampion) = 2;
     w.shuffle_leagues();
     w.euro_entrants();
-    for (size_t gr = 0; gr < 3; gr++) std::fill_n(w.ds.begin() + long(0xD014 + gr * 32), 32, uint8_t(0));  // ovl05_5a4d
+    for (size_t gr = 0; gr < 3; gr++) std::fill_n(w.ds.begin() + long(0xD014 + gr * 32), 32, uint8_t(0));  // cleared competition tables
     std::fill_n(w.ds.begin() + long(0x5C4B), 0x80, uint8_t(0));
-    (void)w.b(0, 0x8FFF);  // shifted out by "shl ax, 16" (ovr034:08E4)
+    (void)w.b(0, 0x8FFF);  // drawn for the high word of the session id, which the original then shifts out of range
     out.session_id = uint32_t(w.b(0, 0x8FFF) + 1);
     put32(w.ds, dsSession, out.session_id);
     mark("before start menu");
 
-    // ---- start menu ovr027:15A5 .. 186B
+    // ---- start menu "Los jetzt!": managers, clubs, faces and settings
     w.d(dsManagerCount) = 0;
     for (const WorldManager& m : managers) {
         const size_t i = w.d(dsManagerCount);
@@ -812,7 +871,7 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     w.d(dsLevel) = uint8_t(settings.level);
     w.d(dsEndChoice) = uint8_t(settings.end_choice);
     w.d(dsSquadSize) = uint8_t(settings.squad_size);
-    w.d(dsSquadSize + 1) = uint8_t(settings.squad_strength);  // DS:011B
+    w.d(dsSquadSize + 1) = uint8_t(settings.squad_strength);  // the "Start-Stärke" option
     const int mode = settings.start_mode;
     w.d(dsMode) = uint8_t((mode == 2 ? 1 : 0) + (mode == 1 ? 2 : 0));
     if (mode == 3) w.d(dsMode) = 4;
@@ -821,17 +880,18 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     put16(w.ds, dsSeasonYear, 0x7C9);
     w.d(dsLevelSalary) = uint8_t(5 - settings.level);
     w.generate_players();
-    mark("ovl16_0730");
-    w.d(dsWmRound) = 0;  // ovl05_194b(0); its ovl05_0ef7(0) is not ported
+    mark("players and squads");
+    w.d(dsWmRound) = 0;  // WM reset (its schedule is written to the state further below)
     w.d(dsWmPhase) = 0;
     w.d(dsWmFlag) = 1;
     w.d(dsCompetitionRound) = 0;
-    w.d(dsEuroRound) = 0;  // ovl05_1e6f(0); its ovl05_0ef7(2) is not ported
+    w.d(dsEuroRound) = 0;  // EuroCup reset (its schedule is written to the state further below)
     w.d(dsCompetitionRound) = 0;
     w.d(dsCompetition) = 0xFF;
-    // ovl05_1e6f(0) -> ovl05_4c7b(1, 0): the EuroCup groups are drawn here with Borland, the same routine as at the season
-    // change (competitions.cpp draw_euro_groups; REAL-CODE new game 11.11.2026: eight foreign picks (64,149) with the
-    // strength reroll (0,3), then the German entrants placed with (0,7)); all six manager phase bytes become 30
+    // The EuroCup groups are drawn here with Borland, the same rule as at the season change
+    // (competitions.cpp draw_euro_groups): eight foreign picks rand(64, 149), where a team of
+    // strength below 70 is redrawn unless rand(0, 3) == 0, then the German entrants placed into
+    // random slots rand(0, 7) that still hold a foreign team; all six manager phase bytes become 30.
     std::array<std::array<int, 4>, 2> euro_groups{};
     if (!std::getenv("EM_OLD_WORLDEURO")) {
         auto strength = [&](int t) {
@@ -858,26 +918,25 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
         euro_groups = {{{slot[0], slot[1], slot[2], slot[3]}, {slot[4], slot[5], slot[6], slot[7]}}};
         for (size_t manager = 0; manager < 6; manager++) w.d(w.manager(manager) + 0xE7) = 30;
     }
-    // ovr027:1B27..2076: after ovl16_0730 a new game (var_64 = old manager count = 0) runs the loop for added managers
-    // over every manager (Amiga FUN_001075e8 line 6309), then ovl16_0480(0). Each manager: the training plan (sub_14D33),
-    // the youth teams DS:A075 + 0x15 * m (quality 0x34 + 14 * (2 - DS:011A), grant 5, DS:011A), the balance
-    // +0x18F = DS:0ED8 * 150000 + 1200000, the reporting mode 2 of the club (sub_1902B(club, 1, 2) = Amiga FUN_001072a8:
-    // the fourth club in mode 2 demotes the first computer club of mode 2 to mode 1), +0x18B = 99999; the Borland draw of
-    // a club of the start league DS:011A with the swap ovl06_0c29(club, drawn, 0x80) (ovr027:1C0B..1CC7, when DS:011A = 0,
-    // the club is in another league or beyond DS:07CB; not a club of an earlier manager nor a EuroCup group team) and the
-    // one-manager branch (end 1994: a first-division club that IS in a EuroCup group, +0xE9 = 1); the strengths of the
-    // squad (DS:4B42 + 3 * DS:011A + DS:011B, +-2, form 40..60), values and salaries (ovl11_3d36), the league +0xEB,
-    // +0xE4, the stadium +0x116 and places +0x133/+0x137, +0xE5 = 0x10, the image +0x173 (ovl08_2893), the sponsor
-    // offers (ovl08_2ba7), the lineup (ovl09_26dc), the team refresh (162c:146c) and +0x193 = 0. All draws use the
-    // Borland stream that ovr034:0929 re-seeds afterwards.
-    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDEURO"))  // the EuroCup groups, DS:5D1B (state 0x8E71)
+    // After the players and squads a new game runs the manager loop (the one used for added managers) over every
+    // manager, then the distribution of the free national players. Each manager: the training plan, the youth teams
+    // (quality 0x34 + 14 * (2 - start league), rank 5, league = start league), the balance +0x18F = salary level *
+    // 150000 + 1200000, reporting mode 2 for the club (the fourth club in mode 2 demotes the first computer club of
+    // mode 2 to mode 1), +0x18B = 99999; the Borland draw of a club of the start league, swapped into the manager's
+    // place (only when the start league is 0, the club is in another league or beyond the limit at data image 0x07CB;
+    // never a club of an earlier manager nor a EuroCup group team) and the one-manager branch (end 1994: a
+    // first-division club that IS in a EuroCup group, +0xE9 = 1); the strengths of the squad, values and salaries,
+    // the league +0xEB, +0xE4, the stadium +0x116 and places +0x133/+0x137, +0xE5 = 0x10, the image +0x173, the
+    // sponsor offers, the lineup, the team refresh and +0x193 = 0. All draws use the Borland stream, which is
+    // re-seeded afterwards.
+    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDEURO"))  // the EuroCup groups (state 0x8E71)
         for (size_t g = 0; g < 2; g++)
             for (size_t t = 0; t < 4; t++) w.d(0x5D1B + g * 4 + t) = uint8_t(euro_groups[g][t]);
     const SponsorTables sponsor_tables = load_sponsor_tables(exe);
     for (size_t m = 0; m < managers.size() && !settings.menu_order_only; m++) {
         manager_loop_step(w, m, true, sponsor_tables);
     }
-    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDLOOP")) {  // ovl16_0480(0): the free national players
+    if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDLOOP")) {  // the free national players
         HokFile h = make_hok(world_state(w));
         const Database db_decoded = decode_db(db);
         const int renamed =
@@ -886,7 +945,7 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
             });
         for (const HokPlayer& pl : h.players)  // the new teams (the struct field; store_hok writes it in a running game)
             if (pl.raw) h.state.at(size_t(pl.raw - h.state.data()) + 0x1D) = pl.team < 0 ? 0xFF : uint8_t(pl.team);
-        w.log.push_back("ovl16_0480(0): " + std::to_string(renamed) + " national players, " + std::to_string(db_decoded.clubs.size()) +
+        w.log.push_back("free national players: " + std::to_string(renamed) + " national players, " + std::to_string(db_decoded.clubs.size()) +
                         " database clubs, " + std::to_string(h.players.size()) + " players");
         load_world_state(w, h.state);
     }
@@ -895,24 +954,24 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
             std::copy_n(w.ds.begin() + long(dsFormString), 8, w.ds.begin() + long(0x825E + 9 + t * 0x50));
     mark("manager loop");
 
-    // ---- _main_0 after the start menu
-    w.rerate_clubs();  // ovr034:0923, sub_17F1B(10)
-    mark("162c:1c5b");
+    // ---- program start, after the start menu
+    w.rerate_clubs();
+    mark("club values");
     out.game_random = w.grng.state();
-    w.brng = BorlandRandom(seeds.after);  // ovr034:0929
-    w.d(dsMatchday) = 1;                  // ovr034:092E
+    w.brng = BorlandRandom(seeds.after);  // third seed
+    w.d(dsMatchday) = 1;
 
     Bytes st = world_state(w);
     if (!std::getenv("EM_OLD_WORLDCONST")) {
-        // bytes that every original start state holds (the new game of 11.11.2026, START.state, AUTOSAVE.state) and that
-        // no ported step writes: the clubs of the pool party and the national coach (+0x14 = 0xFD), +0xEB of the national
-        // coach (50), the owner of player record 0 (+0x1A = 6) and DS:D0E5
+        // bytes that every start state of the original holds and that no ported step writes: the clubs of the pool
+        // party and the national coach (+0x14 = 0xFD), +0xEB of the national coach (50), the owner of player record 0
+        // (+0x1A = 6) and one flag byte (data image 0xD0E5)
         st.at(0x0DCD + 4 * kManagerRec + 0x14) = 0xFD;
         st.at(0x0DCD + 5 * kManagerRec + 0x14) = 0xFD;
         st.at(0x0DCD + 5 * kManagerRec + 0xEB) = 50;
         st.at(0x4FA5 + 0x1A) = 6;
         st.at(state_of(0xD0E5)) = 1;
-        // the league pair table DS:5D7B of the first matchday (sub_3E007, state 0x8DFD) and the free WM slots (state 0x8EB1)
+        // the league pairings of the first matchday (state 0x8DFD) and the free WM slots (state 0x8EB1)
         const ScheduleTables schedule = load_schedule_tables(exe);
         const auto pairs = round_robin_pairings(schedule.teams12, 0);
         for (size_t l = 0; l < 3; l++)
@@ -921,23 +980,23 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
                 st.at(0x8DFD + l * 12 + k * 2 + 1) = uint8_t(12 * l + size_t(pairs[k].away));
             }
         std::fill_n(st.begin() + 0x8EB1, 32, uint8_t(0xFF));
-        // further bytes of every start state: DS:5CF4 = 1, DS:5CF6 = 3 (next to the cup round), DS:022A = 1, DS:A969 = 1,
-        // DS:A8A0 = 8
+        // further bytes of every start state: two bytes next to the cup round (1 and 3), a settings byte (1), the
+        // event cursor (1) and the month counter (8)
         st.at(state_of(0x5CF4)) = 1;
         st.at(state_of(0x5CF6)) = 3;
         st.at(state_of(0x022A)) = 1;
         st.at(state_of(0xA969)) = 1;
         st.at(state_of(0xA8A0)) = 8;
     }
-    // the first day step rates the managers' clubs from their squads again (162c:146c, no draws; the recorded club-mode state
-    // holds it); the WM-only mode skips the club days, its clubs keep the values of 162c:1c5b (REAL-CODE 11.11.2026)
+    // the first day step rates the managers' clubs from their squads again (team refresh, no draws; the original's start
+    // state already holds it); the WM-only mode skips the club days, its clubs keep the season-start club values
     if (!settings.menu_order_only && !std::getenv("EM_OLD_WORLDLOOP") && w.d(dsMode) != 1) {
         HokFile h = make_hok(std::move(st));
         for (size_t m = 0; m < managers.size(); m++) refresh_menu_team(h, int(m));
         st = std::move(h.state);
     }
 
-    // 1238:1663: skills, random club changes, quotas, then the clubs of the free players
+    // the player distribution: skills, random club changes, quotas, then the clubs of the free players
     const ContractRandomDraw draw = [&](int lo, int hi) { return w.brng.range(lo, hi); };
     std::array<uint8_t, 3> cursors{w.d(dsDistributionCursor), w.d(dsDistributionCursor + 1), w.d(dsDistributionCursor + 2)};
     annual_global_skills(st, draw);
@@ -954,8 +1013,8 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
                 quota[size_t(gr)]--;
             }
     }
-    mark("1238:1663");
-    // ovl05_4c7b(0, 0): the first DEB cup round
+    mark("player distribution");
+    // the first DEB cup round
     st.at(state_of(0xD0E4)) = 1;
     st.at(state_of(dsCupRound)) = 0;
     st.at(state_of(0xD074)) = 0;
@@ -965,7 +1024,7 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     if (!std::getenv("EM_OLD_WORLDLOOP"))  // the cup phase byte +0xE6: 30 for all six managers, 1 for the humans in the draw
         for (size_t m = 0; m < 6; m++) st.at(0x0DCD + m * kManagerRec + 0xE6) = m < managers.size() ? 1 : 30;
     const auto cup = draw_initial_cup(humans, w.brng, &out.cup_places);
-    // the live draw (ovl05_4c7b, DS:E068 from the question of ovl05_4653): 32 places uncovered in Borland order
+    // the live draw (answer "Aber klar" to the cup question): 32 places uncovered in Borland order
     if (settings.cup_live) out.cup_reveal = cup_reveal_order(int(out.cup_places.size()), w.brng);
     if (cup.size() * 2 < 32) st.at(state_of(dsCupDraw) + cup.size() * 2) = 0xFF;
     for (size_t i = 0; i < cup.size(); i++) {
@@ -973,7 +1032,7 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
         st.at(state_of(dsCupDraw) + 2 * i + 1) = uint8_t(cup[i].away);
     }
     st.at(state_of(dsCupRound)) = 1;
-    if (!std::getenv("EM_OLD_WORLDEURO")) {  // the EuroCup groups drawn above and their schedule (ovl05_0ef7(2), kind 2)
+    if (!std::getenv("EM_OLD_WORLDEURO")) {  // the EuroCup groups drawn above and their schedule (kind 2)
         const ScheduleTables schedule = load_schedule_tables(exe);
         for (size_t g = 0; g < 2; g++) {
             for (size_t t = 0; t < 4; t++) st.at(0x03A4 + g * 4 + t) = st.at(0x8E71 + g * 4 + t) = uint8_t(euro_groups[g][t]);
@@ -984,15 +1043,15 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
                     st.at(row + p * 2) = uint8_t(euro_groups[g][size_t(pairs[p].home)]);
                     st.at(row + p * 2 + 1) = uint8_t(euro_groups[g][size_t(pairs[p].away)]);
                 }
-                // the third pair of every row reads (61, 63) in every recorded original state (new game and all
-                // REAL-CODE periods); the season change keeps it (Game::store_group_schedule writes two pairs)
+                // the third pair of every row reads (61, 63) in every state of the original; the season change
+                // keeps it (Game::store_group_schedule writes two pairs)
                 st.at(row + 4) = 61;
                 st.at(row + 5) = 63;
             }
             for (size_t i = 0; i < 6; i++) st.at(0x05F8 + 2 * 12 + g * 6 + i) = uint8_t(i);  // the group order (kind 2)
         }
     }
-    if (!std::getenv("EM_OLD_WORLDWM")) {  // ovl05_194b(0) -> ovl05_0ef7(0): the WM groups 52..57 and 58..63, five rounds
+    if (!std::getenv("EM_OLD_WORLDWM")) {  // the WM schedule: groups 52..57 and 58..63, five rounds (kind 0)
         const ScheduleTables schedule = load_schedule_tables(exe);
         for (size_t g = 0; g < 2; g++) {
             for (int r = 0; r < 5; r++) {
@@ -1006,18 +1065,18 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
             for (size_t i = 0; i < 6; i++) st.at(0x05F8 + g * 6 + i) = uint8_t(i);  // the group order (kind 0)
         }
     }
-    mark("ovl05_4c7b");
-    put32(st, state_of(dsDayCounter), uint32_t(int32_t(int8_t(w.d(dsDayStart)))));  // ovr034:0943
+    mark("cup draw");
+    put32(st, state_of(dsDayCounter), uint32_t(int32_t(int8_t(w.d(dsDayStart)))));  // the day counter starts at the start day
     {
         const uint8_t current = st.at(state_of(dsCurrentManager));
         st.at(state_of(dsCurrentManager)) = 4;
-        refresh_transfer_list(st, w.contracts, w.brng);  // ovl11_34ef
+        refresh_transfer_list(st, w.contracts, w.brng);
         st.at(state_of(dsCurrentManager)) = std::getenv("EM_OLD_WORLDCONST") ? current : 0;  // the first manager's turn
     }
-    mark("ovl11_34ef");
-    for (size_t c = 0; c < 4; c++)
-        put16(st, 0x00B0 + c * 0x48 + 0x46, uint16_t(le32(st, 0x01D0 + 4 * c) / 50));  // DS:D13A + c * 0x48
-    for (int day = 0; day < 90; day++) market_day(st, w.brng);  // 90 x ovl39_03ca
+    mark("transfer list");
+    for (size_t c = 0; c < 4; c++)  // current share price (last history entry) = target price / 50
+        put16(st, 0x00B0 + c * 0x48 + 0x46, uint16_t(le32(st, 0x01D0 + 4 * c) / 50));
+    for (int day = 0; day < 90; day++) market_day(st, w.brng);  // 90 market days fill the price history
     mark("market");
     // date of the first day (season day 1, Sunday 10.09.1993), as in the shipped start state
     put32(st, state_of(dsDay), 10);
@@ -1032,6 +1091,9 @@ WorldResult generate_world(const Bytes& exe, const Bytes& db, const WorldSetting
     return out;
 }
 
+// See world_generator.hpp. Throws FormatError (with a German message for the UI) when the save
+// is not a game state, four managers already play, the name is not 2..18 characters long or the
+// club is not free.
 HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& save, const WorldManager& manager,
                             BorlandRandom& rng) {
     if (save.state.size() != kStateSize) throw FormatError("Neuer Manager: unbekannter Spielstand");
@@ -1044,7 +1106,7 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
     if (manager.team < 0 || manager.team > 47 || w.team(size_t(manager.team))[0x16] != 0)
         throw FormatError("Neuer Manager: Verein nicht frei");
     const uint8_t current = w.d(dsCurrentManager);
-    // the start menu (ovr027:15A5..186B): name, face and club of the new row
+    // as in the start menu: name, face and club of the new row
     std::fill_n(w.ds.begin() + long(w.manager(m)), 0x13, uint8_t(0));
     for (size_t k = 0; k < manager.name.size(); k++) w.d(w.manager(m) + k) = uint8_t(manager.name[k]);
     w.d(w.manager(m) + 0x13) = uint8_t(manager.face);
@@ -1052,12 +1114,12 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
     w.team(size_t(manager.team))[0x16] = uint8_t(m + 1);
     w.d(dsFaces + m) = uint8_t(manager.face);
     w.d(dsManagerCount)++;
-    // ovr027:189E..1B11 (Amiga line 6249): reporting mode, phase bytes, history, the pool draft
+    // reporting mode, phase bytes, history, the pool draft
     {
         const size_t club = w.club_of(m);
         const size_t lo = club >= 52 && club < 64 ? 52 : 0, hi = club >= 52 && club < 64 ? 64 : 150;
         int count = 0;
-        for (size_t t = lo; t < hi; t++) {  // sub_1902B(club, 1, 2), as in manager_loop_step
+        for (size_t t = lo; t < hi; t++) {  // reporting mode 2 for the club, as in manager_loop_step
             int next = count;
             if ((w.team(t)[0x34] >> 6) == 2 && ++next == 4)
                 for (size_t u = lo; u < t; u++)
@@ -1083,7 +1145,7 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
                 if (std::getenv("EM_DEBUG_DRAFT")) std::fprintf(stderr, "draft g%zu id %d owner %d club %d\n", g, id, id < 200 ? w.player(size_t(id))[0x1A] : -1, id < 200 ? w.player(size_t(id))[0x1D] : -1);
                 if (id < 0xB4 && w.player(size_t(id))[0x1A] == 6) break;
             }
-            const int at = w.sign_player(id, 1, 0, 0x1D);  // sub_24BCC(ID, 1, 0, 15000, 0x1D)
+            const int at = w.sign_player(id, 1, 0, 0x1D);  // a one-season contract
             w.player(size_t(id))[0x1A] = uint8_t(m);
             uint8_t* r = w.squad(m, size_t(at));
             r[0x19] = uint8_t(w.b(3, 12) << 4);
@@ -1092,7 +1154,7 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
             w.player(size_t(id))[0x14] = uint8_t(w.b(0x13, 0x1F));
         }
     // the transfer list (block 4): a row whose player is now the new manager's, or plays for a club of the same name,
-    // leaves the list (sub_24BB8(row, 1, 10): the rows behind move up, row 10 is emptied); the search starts again each time
+    // leaves the list (the rows behind move up, row 10 is emptied); the search starts again each time
     auto same_name = [&](int a, int b) {
         if (a < 0 || a >= kTeams || b < 0 || b >= kTeams) return false;
         return std::equal(w.team(size_t(a)), w.team(size_t(a)) + 0x16, w.team(size_t(b)));
@@ -1109,7 +1171,8 @@ HokFile add_manager_to_game(const Bytes& exe, const Bytes& db, const HokFile& sa
             removed = true;
         }
     }
-    // the manager loop for the new manager (not a new game: no one-manager branch, no ovl16_0480(0) afterwards)
+    // the manager loop for the new manager (not a new game: no one-manager branch, no distribution of the free
+    // national players afterwards)
     w.d(dsCurrentManager) = current;
     manager_loop_step(w, m, false, load_sponsor_tables(exe));
     rng = w.brng;

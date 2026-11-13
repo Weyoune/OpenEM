@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Season-change distribution of players to computer-managed clubs (see annual_distribution.hpp).
 #include "game/annual_distribution.hpp"
 #include <bit>
 #include <cstdio>
@@ -6,15 +7,18 @@
 
 namespace em {
 namespace {
+// player_base: the record of 1-based player id n is at player_base + n * 0x21 (= 0x4FC6 for id 1)
 constexpr size_t player_base=0x4fa5,team_base=0x17e7;
-constexpr std::array<int,3> starts{0,12,24}; //DS07C0
-constexpr std::array<int,8> buckets{0,11,12,23,24,35,36,42}; //DS07C6
-constexpr std::array<int,17> cycle{0,0,1,1,2,2,3,3,4,4,5,6,7,8,9,10,11}; //DS48FE
-size_t player_at(int id){return player_base+size_t(id)*33;}
-size_t team_at(int id){return team_base+size_t(id)*61;}
+constexpr std::array<int,3> starts{0,12,24}; // first team index of each league
+constexpr std::array<int,8> buckets{0,11,12,23,24,35,36,42}; // team index ranges [first, last] of the four groups
+constexpr std::array<int,17> cycle{0,0,1,1,2,2,3,3,4,4,5,6,7,8,9,10,11}; // weighted cycle of team offsets within a league
+size_t player_at(int id){return player_base+size_t(id)*33;}  // player record of a 1-based id
+size_t team_at(int id){return team_base+size_t(id)*61;}      // team record of a team index
+// Rejects a state that is too short or counts more than four human managers.
 void validate(const Bytes& s){
     if(s.size()<47761||s.at(0x0dc6)>4)throw FormatError("annual distribution: invalid native state");
 }
+// Players 1..179 whose club is abroad (team index above 63, not 255).
 int abroad_count(const Bytes& s){
     int result=0;for(int id=1;id<180;++id){const int club=s.at(player_at(id)+29);result+=club>63&&club!=255;}return result;
 }
@@ -22,8 +26,8 @@ int abroad_count(const Bytes& s){
 int annual_cpu_target(const Bytes& state,uint8_t id,const ContractRandomDraw& draw){
     validate(state);if(!id||id>199)throw FormatError("annual distribution: invalid player");
     const size_t p=player_at(id);
-    const int mean=(int(state.at(p+21))+state.at(p+22)+state.at(p+23))/3;
-    int tries=0,tier=1;
+    const int mean=(int(state.at(p+21))+state.at(p+22)+state.at(p+23))/3;  // (skill 1 + skill 2 + form) / 3
+    int tries=0,tier=1;  // the try counter is a 16-bit value in the original
     for(;;){
         const int club=draw(0,42);const size_t team=team_at(club);bool accepted=false;
         if(state.at(team+22)==0){
@@ -49,8 +53,8 @@ int annual_cyclic_target(const Bytes& state,int league,DistributionCursors& curs
 std::array<int,4> annual_distribution_quotas(const Bytes& state){
     validate(state);std::array<int,4> human{};int total=0;
     for(size_t league=0;league<3;++league){
-        for(size_t manager=0;manager<state.at(0x0dc6);++manager){
-            if(state.at(0x0dcd+manager*0x1af+0xeb)!=league)continue;
+        for(size_t manager=0;manager<state.at(0x0dc6);++manager){  // 0x0DC6: number of human managers
+            if(state.at(0x0dcd+manager*0x1af+0xeb)!=league)continue;  // manager block +0xEB: league of the manager
             int count=0;for(size_t slot=0;slot<29;++slot)count+=state.at(0x696d+manager*0x618+slot*52+15)!=0;
             human[league]=uint8_t(human[league]+count);
         }
@@ -71,7 +75,7 @@ void annual_random_club_changes(Bytes& state,const ContractRandomDraw& draw){
                 --abroad;const int target=annual_cpu_target(state,uint8_t(id),draw);
                 state.at(player_at(id)+29)=uint8_t(target);id=0;
             }
-            if(old!=255&&state.at(team_at(old)+22)!=0)continue;
+            if(old!=255&&state.at(team_at(old)+22)!=0)continue;  // human-managed club: draw again
             if(!id||abroad>4)continue;
             break;
         }
@@ -82,7 +86,7 @@ void annual_random_club_changes(Bytes& state,const ContractRandomDraw& draw){
 }
 void annual_rebalance_clubs(Bytes& state,std::array<int,4> need,DistributionCursors& cursors,const ContractRandomDraw& draw){
     validate(state);for(auto cursor:cursors)if(cursor>=17)throw FormatError("annual distribution: invalid cursor");
-    std::array<std::vector<uint8_t>,4> pool;
+    std::array<std::vector<uint8_t>,4> pool;  // donor candidates per group; a used entry is set to 255
     for(size_t kind=0;kind<4;++kind)for(int id=1;id<180;++id){
         const size_t p=player_at(id);const int club=state.at(p+29);
         if(club<buckets[2*kind]||club>buckets[2*kind+1])continue;

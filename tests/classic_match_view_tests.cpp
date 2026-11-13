@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Match display of the classic UI (ovl14 boards, minute panel, "Spiele laufen") against DOSBox-X captures of the original
-// (work/exp/match_20261108), and the observer of the minute loop: the display must not change the day.
+// Match display of the classic UI (score boards, minute panel, "Spiele laufen", live league and cup tables, goal
+// flashes, goal scenes, board messages) against reference images of the original (GOLDENS), the timing of the
+// message steps, clicks on the manager's board, and the observer of the minute loop: the display must not change
+// the day. The last part checks match-engine details the display depends on (observed matches, message and
+// reporter draws, scene replays, lineup mode 5).
+//
+// Usage: classic_match_view_tests DATA REFERENCE GOLDENS OUTPUT
+//   REFERENCE holds START.HOK and CUPSHRP.HOK; differing pictures are written to OUTPUT as <name>.mine.rgb and a
+//   difference map <name>.diff.rgb (differing pixels red over a darkened reference).
+//   Development aids: EM_MATCH_DUMP, EM_MATCH_FIT and EM_SCENE_SEARCH (see the functions below).
 #include "ui/classic_match_view.hpp"
 #include "ui/classic_league_fixtures.hpp"
 #include "game/schedule.hpp"
@@ -25,11 +33,13 @@ namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
 
+// Throws with `message` when `condition` is false.
 static void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-// 2115:019E units (a third of a BIOS tick) in ms, as classic_board_message_steps counts them.
+// `n` units of the original's delay() routine (a third of a BIOS tick of 54.925 ms) in whole ms, as
+// classic_board_message_steps counts them.
 static int units(int n) { return n * 54925 / 3000; }
 
 // Compares with a raw 320 x 240 RGB golden; on a difference writes the render and a difference map next to OUTPUT.
@@ -63,7 +73,8 @@ static size_t differences(const ClassicCanvas& canvas, const fs::path& golden, c
     return count;
 }
 
-// Compares the rows y0..239 with the golden (the goal flash captures show a board whose live values are not modelled here).
+// Compares the rows y0..239 with the golden (the goal flash references show a board whose live values are not modelled
+// here); returns the number of differing pixels.
 static size_t differences_below(const ClassicCanvas& canvas, const fs::path& golden, int y0, const std::string& name) {
     const auto expected = read_file(golden);
     require(expected.size() == 320 * 240 * 3, "golden size " + name);
@@ -141,16 +152,19 @@ static void fit(const ClassicCanvas& canvas, const fs::path& goldens, const std:
     }
 }
 
+// A score board of `home` against `away` with the given crest pictures and all values zero.
 static ClassicBoard board(const char* home, int home_crest, const char* away, int away_crest) {
     ClassicBoard b;
     b.team[0].name = home; b.team[0].crest = home_crest;
     b.team[1].name = away; b.team[1].crest = away_crest;
     return b;
 }
-// period goals home/away for the three periods; the total follows
+// Sets the goals per period, given as home/away for each of the three periods; the totals are added up.
 static void set_score(ClassicBoard& b, std::array<int, 6> periods) {
     for (int p = 0; p < 3; p++) for (int s = 0; s < 2; s++) { b.period_goals[p][s] = periods[size_t(p * 2 + s)]; b.goals[s] += b.period_goals[p][s]; }
 }
+// Sets one side of a board: chances per period, penalty minutes, the lines shown by the two lamp columns, the
+// two energy bars, effort (0..100) and offence (0..7) bars, skaters on the ice and the penalty code.
 static void set_team(ClassicBoardTeam& t, std::array<int, 3> chances, int penalty_minutes, int line0, int line1, int energy0, int energy1,
                      int effort, int offence, int skaters = 5, int penalty_code = 0) {
     for (int p = 0; p < 3; p++) t.chances[p] = chances[size_t(p)];
@@ -161,8 +175,8 @@ static void set_team(ClassicBoardTeam& t, std::array<int, 3> chances, int penalt
     t.skaters = skaters; t.penalty_code = penalty_code;
 }
 
-// Development aid: EM_SCENE_SEARCH="capture.rgb[;arena]" finds the TORE\ script and frame of a goal scene capture (rows
-// 0..199, START colours of EHC Freiburg / Kölner EC) and prints the best candidates.
+// Development aid: EM_SCENE_SEARCH="image.rgb[;arena][|script]" finds the TORE\ script and frame of a goal scene
+// screenshot (rows 0..199, START colours of EHC Freiburg / Kölner EC), prints the six best candidates and exits.
 static void scene_search(const fs::path& data) {
     const char* env = std::getenv("EM_SCENE_SEARCH");
     if (!env) return;
@@ -211,7 +225,7 @@ int main(int argc, char** argv) {
             if (differences(canvas, goldens / (name + ".rgb"), output, name)) failures++;
         };
         {
-            // START, Saturday 11.09.1993: EHC Freiburg - Kölner EC after minute 24 (DOSBox capture dosbox/board-a.png)
+            // START, Saturday 11.09.1993: EHC Freiburg - Kölner EC after minute 24
             ClassicCanvas canvas(data);
             ClassicMatchFrame f;
             f.minute = 24;
@@ -275,8 +289,7 @@ int main(int argc, char** argv) {
             check(canvas, "games-running");
         }
         {
-            // ovl07_0eba(7, 0, 20): START with the switch Drittelpause of the Bundesliga, the Paarungen page after minute 20
-            // (dosbox-automation capture 10.11.2026, dosbox/live-period20.png)
+            // START with the switch Drittelpause of the Bundesliga: the live Paarungen page after minute 20
             const HokFile start = decode_hok(read_file(references / "START.HOK"));
             const SeasonCalendar calendar = load_season_calendar(read_file(data / "EM.EXE"));
             const ScheduleTables tables = load_schedule_tables(read_file(data / "EM.EXE"));
@@ -314,10 +327,10 @@ int main(int argc, char** argv) {
             check(later, "cup-minute-65");
         }
         {
-            // Goal flash of FUN_162c_23c4 (dosbox-automation capture of a new game, 2. Spieltag 13.09.1993, minute 1: the own
-            // EC Hedos München - EHC Freiburg on a board, every other club with reporting mode 1): EV Landsberg - Augsburger EV
-            // 0:1, first the names (goal-flash-teams), after delay(50) with the score (goal-flash-score). Compared from the
-            // message panel row downwards; the board above holds live values of the capture.
+            // Goal flash (a new game, 2. Spieltag 13.09.1993, minute 1: the own EC Hedos München - EHC Freiburg on a board,
+            // every other club with reporting mode 1): EV Landsberg - Augsburger EV 0:1, first the names (goal-flash-teams),
+            // after delay(50) with the score (goal-flash-score). Compared from the message panel row downwards; the board
+            // above holds live values of the reference game.
             for (const bool with_score : {false, true}) {
                 ClassicCanvas canvas(data);
                 ClassicMatchFrame f;
@@ -338,9 +351,9 @@ int main(int argc, char** argv) {
             require(classic_match_frame_ms(flash, 70) == 1263, "delay(70): 23 BIOS ticks with the score");
         }
         {
-            // Goal scenes of ovl14_4938 (dosbox-automation capture 09.11.2026: START with Torszenen on, EHC Freiburg - Kölner
-            // EC, arena 2 = KB243). Script and frame of each capture were found by search (EM_SCENE_SEARCH); the whole screen
-            // is compared: rink window, objects, palette KB247 with the shirt colours, panel KB246 with the texts.
+            // Goal scenes (START with Torszenen on, EHC Freiburg - Kölner EC, arena 2 = KB243). Script and frame of each
+            // reference image were found by search (EM_SCENE_SEARCH); the whole screen is compared: rink window, objects,
+            // palette KB247 with the shirt colours, panel KB246 with the texts.
             struct Case { const char* name; const char* script; int frame, minute, home, away; };
             const std::vector<Case> cases{
                 {"scene-5at-08", "5.at", 8, 16, 3, 2},   {"scene-5at-38", "5.at", 38, 16, 3, 2},
@@ -359,7 +372,7 @@ int main(int argc, char** argv) {
                 draw_classic_match_view(canvas, f);
                 check(canvas, k.name);
             }
-            // Stufe 2 "Eisfeld bleibt an" (same capture session, Torszenen level 2): the rink opened at camera (0, 0) with an
+            // Stufe 2 "Eisfeld bleibt an" (same game, Torszenen level 2): the rink opened at camera (0, 0) with an
             // empty attendance line in minute 11, and the view of 7.ht kept after the scene in minute 14 at 1:0.
             for (int k = 0; k < 2; k++) {
                 ClassicCanvas canvas(data);
@@ -374,8 +387,8 @@ int main(int argc, char** argv) {
             }
         }
         {
-            // Board messages of ovl14_0690 (dosbox-automation capture 09.11.2026: START, speed 60 written to DS:0262, EHC
-            // Freiburg - Kölner EC on the own board). Compared from the message panel row downwards like the goal flash.
+            // Board messages (START with match speed 60, EHC Freiburg - Kölner EC on the own board). Compared from the
+            // message panel row downwards like the goal flash.
             using Step = ClassicBoardMessage::Step;
             struct Case { const char* name; int minute; ClassicBoardMessage m; };
             const auto msg = [](int kind, const char* team, const char* player, const char* second, Step step, bool text, int lines) {
@@ -404,7 +417,7 @@ int main(int argc, char** argv) {
                 if (differences_below(canvas, goldens / (std::string(k.name) + ".rgb"), 0xB4, k.name)) failures++;
             }
 
-            // The steps and their times (capture: "Chance:" 312 ms, with the club 459 ms, final lines 646 ms; computer club
+            // The steps and their times (in the original: "Chance:" 312 ms, with the club 459 ms, final lines 646 ms; computer club
             // "Vergeben" 607 ms).
             ClassicMatchFrame base;
             base.boards.push_back(board("A", 80, "B", 81));
@@ -475,7 +488,7 @@ int main(int argc, char** argv) {
                         "one tick per script frame, delay(6) at the end");
                 require(played[first].scene->goals[0] == 0, "the scene starts with the score before the goal");
                 // the chance is followed by delay(20) on the board; r / w replays it with the score before it, three
-                // plays at most (ovl14_1dc7)
+                // plays at most
                 size_t after = 0;
                 while (!played[after].after_scene) after++;
                 require(!played[after].scene && played[after].hold_ms == units(20) && !played[after].boards.empty(),
@@ -496,13 +509,13 @@ int main(int argc, char** argv) {
                 require(level2.front().scene->script.empty() && level2.back().minute == 2 && level2.back().scene->minute == 2 &&
                             level2.back().scene->goals[0] == 1 && level2.back().scene->final == false && !level2.back().scene->script.empty(),
                         "the rink starts at (0, 0) and keeps the last scene with the running minute and score");
-                // j / e variants of ovl15_0143
+                // scene file names with their j / e variants (".ht"/".hv" home goal/miss, ".at"/".av" away)
                 require(classic_goal_scene_script(7, 0, true, false, true) == "2.htj" && classic_goal_scene_script(7, 1, false, true, true) == "2.ave" &&
                             classic_goal_scene_script(7, 1, false, false, false) == "7.av",
                         "scene file names");
                 require(classic_board_messages(human, 70, false, data).size() == human.size(), "no scenes when switched off");
 
-                // ovl06_3856: clicks on the board of the manager's club (home of board 0) and the quick switch
+                // clicks on the board of the manager's club (home of board 0) and the quick switch
                 {
                     ClassicMatchFrame f = human[1];
                     f.boards[0].team[0].id = 7;
@@ -643,7 +656,7 @@ int main(int argc, char** argv) {
             require(!same(4, 2) || !same(150, 210), "after the replay the menu returns");
         }
         {
-            // MatchRun::idle_next_minute (space key, ovl06_2522): an idle minute counts but plays nothing and draws nothing
+            // MatchRun::idle_next_minute (space key during the match): an idle minute counts but plays nothing and draws nothing
             const HokFile start = decode_hok(read_file(references / "START.HOK"));
             GameRandom rng(12345);
             MatchRun run(start.teams[6], start.teams[7], rng);
@@ -662,7 +675,7 @@ int main(int argc, char** argv) {
             require(rng2.state() == 12345 && plain.progress().minute == 0, "take_lineup without a change is a no-op");
         }
         {
-            // ovl06_161d: with the switch Tabelle of the Bundesliga (DS:021F, state 0xA51E) its table follows the match day
+            // with the switch Tabelle of the Bundesliga (state 0xA51E) its table follows the match day
             // and waits for a right click; then the menu returns
             HokFile start = decode_hok(read_file(references / "START.HOK"));
             start.state.at(0xA51C + 2) = 1;
@@ -684,8 +697,8 @@ int main(int argc, char** argv) {
             require(app.screen() == ClassicScreen::Main, "a right click returns to the menu (screen " + std::to_string(int(app.screen())) + ")");
         }
         {
-            // Package 2 (11.11.2026): EuroCup / WM observer, message draws below speed 70, goal scene replays, lineup mode 5,
-            // board messages for penalties and shoot-out shots
+            // Match engine details behind the display: the observed single match (EuroCup / WM), message draws below
+            // speed 70, goal scene replays, lineup mode 5, board messages for penalties and shoot-out shots
             const HokFile start = decode_hok(read_file(references / "START.HOK"));
             const HokTeam& home = start.teams[6];  // EHC Freiburg
             const HokTeam& away = start.teams[7];  // Kölner EC (reporting mode 2: a board)
@@ -703,7 +716,7 @@ int main(int argc, char** argv) {
                 require(calls == 61 && last == 60, "observer before minute 1 and after every minute");
             }
             {
-                // ovl14_0690 below speed 70: every chance of a board match draws rand(0, 1) twice; at 70 nothing changes
+                // below speed 70 every chance of a board match draws rand(0, 1) twice for its message; at 70 nothing changes
                 const auto play = [&](int speed, bool messages) {
                     g_match_speed = speed;
                     GameRandom r(4242);
@@ -714,7 +727,7 @@ int main(int argc, char** argv) {
                     return std::pair<uint32_t, int>{r.state(), res.home * 100 + res.away};
                 };
                 require(play(70, true) == play(70, false), "speed 70: no message draws");
-                require(play(60, false) == play(70, false), "without DS:5A56 no message draws");
+                require(play(60, false) == play(70, false), "without the message switch no message draws");
                 require(play(60, true).first != play(70, false).first, "speed 60 with a board: the messages draw");
                 GameRandom r(9);
                 g_match_speed = 60;
@@ -758,7 +771,7 @@ int main(int argc, char** argv) {
                         "scenes shown by the hook are marked");
             }
             {
-                // lineup mode 5 (ovr033 arg_0 != 0): a line player taken out keeps his role, the reserve toggle does nothing,
+                // lineup mode 5 (the lineup opened during a match): a line player taken out keeps his role, the reserve toggle does nothing,
                 // a player without a role cannot come in
                 HokFile h = decode_hok(read_file(references / "START.HOK"));
                 const size_t base = 0x696D;
@@ -781,7 +794,7 @@ int main(int argc, char** argv) {
                 }
             }
             {
-                // board messages: a two-minute penalty names the player and "wegen " + DS:05CC[reason]; a shoot-out shot of
+                // board messages: a two-minute penalty names the player and "wegen " + the reason text from EM.EXE; a shoot-out shot of
                 // the manager's club names its shooter (kind 6)
                 ClassicMatchFrame f0;
                 f0.minute = 5;

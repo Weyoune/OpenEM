@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Loan of a computer player from the transfer list (EM.EXE overlay 11, ovr035:1118 with the loan
-// flag [bp-0Ch] = 1, set by a click at x > 250 on the "(L)" price, ovr035:0CD7).
+// Loan of a player from the transfer list (the "(L)" price on the transfer market screen) and
+// the purchase sponsor's subsidy. Part of class Game (game.hpp).
 //
-// Native order for a list player whose global +0x1A is 4 (the computer market):
-//   - pool +0x1A bit 7 together with the manager bit: "Angebot wurde / bereits abgelehnt."
-//     (ovr035:1146..115E); only the manager bit set: the click does nothing.
+// Order of the original game for a list player whose global record byte +0x1A is 4 (the
+// computer market):
+//   - pool +0x1A bit 7 together with the manager bit: "Angebot wurde / bereits abgelehnt.";
+//     only the manager bit set: the click does nothing.
 //   - fee editor "NAME leihen", the bid in DM (x3 raw)
-//   - ovl11_391d(slot, bid, loan 1, 0): thresholds against the listed value / 3; a refusal sets
+//   - the seller's decision (seller_accepts) against the listed value / 3; a refusal sets
 //     pool +0x1A |= 0x80 | manager bit ("Ihr Angebot / wurde abgelehnt.")
-//   - cash must cover the bid (balance >= bid, ovr035:14E8), else "Sie haben nicht / genug Geld !"
-//   - 59B5:2CD1(id, 1 year, loan 99, 0, 29): capacity refusal "Schon 29 Mann / im Team." without
-//     draws; otherwise the ordinary five profile draws, the salary worth, then for loan mode 99
-//     salary * rand(90, 115) / 100; the player's club +0x1D becomes the manager's club
-//   - movmem(pool record -> new squad record, 52); then +0x0B = 1, +0x0C = old club + 0x80,
-//     +0x28 = the loan salary, +0x04 = +0x05 = +0x1A = 0 (ovr035:18DB..1945)
-//   - pool row removed (59B5:25D6(slot, 1, 10), clears the notification)
-//   - the global +0x1A stays 4 (ovr035:19B9 skips the owner store for loans)
-//   - cash -= bid, then the purchase sponsor 1238:223e (purchase_subsidy)
+//   - cash must cover the bid (balance >= bid), else "Sie haben nicht / genug Geld !"
+//   - the squad insertion with a one-year contract in loan mode: with 29 players already the
+//     refusal "Schon 29 Mann / im Team." without random draws; otherwise the ordinary five
+//     profile draws, the salary worth, then for a loan salary * rand(90, 115) / 100; the
+//     player's club +0x1D becomes the manager's club
+//   - the pool record (52 bytes) is copied into the new squad record; then +0x0B = 1,
+//     +0x0C = old club + 0x80, +0x28 = the loan salary, +0x04 = +0x05 = +0x1A = 0
+//   - the pool row is removed (this also clears its notification)
+//   - the global +0x1A stays 4 (a loan does not change the owner)
+//   - cash -= bid, then the purchase sponsor offer (purchase_subsidy)
 #include "game/game.hpp"
 #include "game/native_roster.hpp"
 
@@ -25,11 +27,17 @@
 
 namespace em {
 namespace {
+// HOK state offsets: transfer pool records (52 bytes each, like squad records) and the global
+// player records (33 bytes each).
 constexpr size_t kPoolBase = 0x81CD, kRecord = 52, kPlayerBase = 0x4FC6;
+// Stores a little-endian u32.
 void store32(Bytes& b, size_t at, uint32_t v) { for (int n = 0; n < 4; n++) b.at(at + size_t(n)) = uint8_t(v >> (8 * n)); }
 }  // namespace
 
-// For the active manager (docs/MEHRSPIELER_PLAN.md step 5); his bit in pool +0x1A is 1 << manager (bit 0 verified only).
+// Loan offer of the active manager for transfer-list row `slot` (0..10) with the bid `fee` (raw).
+// The manager's bit in pool +0x1A is 1 << manager (only bit 0 confirmed against the original).
+// A refused offer is remembered in the pool record; on success the player joins the squad
+// (insert_loan).
 PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_subsidy, bool prepare_lineup) {
     const int a = active_manager_;
     const uint8_t own_bit = uint8_t(1u << unsigned(a)), refused = uint8_t(0x80 | own_bit);
@@ -41,7 +49,7 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     if (!player || player->raw[0x1A] != 4) return PurchaseResult::Unavailable;
     const uint8_t flags = save_.state.at(source + 0x1A);
     if ((flags & refused) == refused) return PurchaseResult::Blocked;
-    if (flags & own_bit) return PurchaseResult::Unavailable;  // native: no reaction
+    if (flags & own_bit) return PurchaseResult::Unavailable;  // the original does not react to the click
     const long price = long((le32(save_.state, source + 0x2C) & 0x7FFFFFFFu) / 3u);
     if (!seller_accepts(price, fee, brng_)) {
         save_.state.at(source + 0x1A) |= refused;
@@ -51,8 +59,11 @@ PurchaseResult Game::loan_transfer_player(size_t slot, long fee, bool accept_sub
     return insert_loan(slot, fee, -1, accept_subsidy, prepare_lineup);
 }
 
-// The loaned list player joins the active manager's squad (ovr035:17B2..19DE). `seller` >= 0: the list player of that
-// human manager, who agreed (answer_manager_offer): he gets the fee, no sponsor subsidy (ovr035:1962, 1A0C).
+// The loaned list player joins the active manager's squad. The insertion is first prepared on a
+// copy of the save and a copy of the random generator, so a full squad changes nothing.
+// `seller` >= 0: the list player of that human manager, who agreed (answer_manager_offer): he
+// gets the fee and there is no sponsor subsidy. Otherwise the purchase sponsor may offer a
+// subsidy, which is booked when `accept_subsidy` is set.
 PurchaseResult Game::insert_loan(size_t slot, long fee, int seller, bool accept_subsidy, bool prepare_lineup) {
     const int a = active_manager_;
     const size_t source = kPoolBase + slot * kRecord;
@@ -103,8 +114,9 @@ PurchaseResult Game::insert_loan(size_t slot, long fee, int seller, bool accept_
     return PurchaseResult::Purchased;
 }
 
-// "Aber immer!" on the sponsor question (seg001:2329..2341): balance += offer. The offer is a multiple of
-// 300 raw (100 DM, seg001:2288); the question follows the last draw, so accepting draws nothing.
+// "Aber immer!" on the sponsor question: balance += offer (raw, wrapping like a 32-bit value).
+// The offer is a multiple of 300 raw (100 DM); anything else is rejected and returns false. The
+// question follows the last random draw, so accepting draws nothing.
 bool Game::accept_purchase_subsidy(long raw) {
     if (raw <= 0 || raw % 300 != 0) return false;
     const int a = active_manager_;

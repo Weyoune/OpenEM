@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Original5F7C:0AB5..0CCD operands and native text branches, not a model.
+// Hover help of the transfer pool on the transfer page (ui/classic_transfer_hover.cpp): which pool row lies under
+// the mouse, and the help line naming where the listed player comes from ("von <club or manager>" for players of
+// a club, "aus <country>" for foreign players with an id above 179), with the exact text branches, row geometry
+// and drawing area of the original game.
+//
+// Usage: classic_transfer_hover_tests [DATA] — DATA holds EM.EXE and the graphics; without it only the rejection
+// of an empty EXE is checked.
 #include "ui/classic_transfer_hover.hpp"
 
 #include <algorithm>
@@ -9,19 +15,26 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Number of failed CHECKs.
 int failures = 0;
+// Reports a failed condition with file and line and counts it, without stopping the test.
 #define CHECK(value) do { if (!(value)) { \
     std::fprintf(stderr,"%s:%d: CHECK failed: %s\n",__FILE__,__LINE__,#value); \
     ++failures; } } while (0)
+// True when `f` throws a std::exception.
 template<class F> bool throws(F f) {
     try { f(); } catch (const std::exception&) { return true; }
     return false;
 }
+// State offsets: transfer pool rows (52 bytes; +15 player id), global record of player id 1 (33 bytes; +0x1A
+// status, +0x1D club), team records (61 bytes, name first) and manager blocks (0x1AF bytes, name first).
 constexpr size_t kPool=0x81cd,kPlayers=0x4fc6,kTeams=0x17e7,kManagers=0x0dcd;
+// Writes the zero-terminated `text` at state offset `at`.
 void name(Bytes& state,size_t at,const std::string& text) {
     std::copy(text.begin(),text.end(),state.begin()+std::ptrdiff_t(at));
     state.at(at+text.size())=0;
 }
+// Row geometry, help texts for club, foreign and manager-owned players, and the pixels the help drawing touches.
 void original_goldens(const std::filesystem::path& data) {
     ClassicTransferHelp help(read_file(data/"EM.EXE"));
     HokFile h;h.state.resize(0x8dfd);

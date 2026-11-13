@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The opponent shown in the main menu (ui/classic_opponent.cpp): for the calendar day under the event cursor
+// (state 0xB953) the lookup finds the manager's next match in the league, the WM, the European cup, the
+// relegation round, the play-offs or the DEB cup, and on which side (0 = home, 1 = away) his team plays. The
+// competition is chosen by the calendar event of the day (bit 1..4 league per division, 0x08 cup, 0x10 WM,
+// 0x20 European cup, 0x40 play-offs/relegation, 0xFF end of season). All cases run on synthetic states; the
+// lookup is read-only.
 #include "ui/classic_opponent.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -8,15 +14,20 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `condition` is false.
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
+// Writes `values` to consecutive state bytes starting at `at`.
 void bytes(HokFile& h, size_t at, std::initializer_list<uint8_t> values) {
     for (const auto value : values) h.state.at(at++) = value;
 }
+// Marks `team` as owned by `manager` (team record +0x16 holds manager + 1, 0 = computer).
 void owner(HokFile& h, int team, int manager) {
     h.state.at(0x17E7 + size_t(team) * 61 + 0x16) = uint8_t(manager + 1);
 }
+// A state with the event cursor at calendar day 37, a different displayed day counter, all six managers at club 4,
+// empty cup/play-off pairing lists (0xFF) and no play-off or WM knockout cursor (0x03B6/0x03B7 = 0xFF).
 HokFile fixture() {
     HokFile h;
     h.state.assign(0xBB00, 0);
@@ -28,19 +39,24 @@ HokFile fixture() {
     h.state.at(0x03B6) = 0xFF; h.state.at(0x03B7) = 0xFF;
     return h;
 }
+// A calendar of 300 days whose only event is `event` on day 37.
 SeasonCalendar calendar(uint8_t event) {
     SeasonCalendar c;
     c.events.assign(300, 0);
     c.events[37] = event;
     return c;
 }
+// Requires a match against `team` with the manager's side `side`.
 void match(const ClassicOpponent& result, int team, int side, const char* message) {
     require(result.has_match() && result.team == team && result.side == side, message);
 }
+// Requires no match (team and side 0xFF).
 void free(const ClassicOpponent& result, const char* message) {
     require(!result.has_match() && result.team == 0xFF && result.side == 0xFF, message);
 }
 
+// League pairings (state 0x8DFD, 12 bytes per division: consecutive pairs home/away), the event cursor, the
+// suppressed lookup and the end-of-season event.
 void league_cursor_and_ff() {
     auto h = fixture(); auto c = calendar(7);
     bytes(h, 0x8DFD, {0, 1, 4, 9, 2, 3, 5, 6, 7, 8, 10, 11});
@@ -48,7 +64,7 @@ void league_cursor_and_ff() {
     auto result = classic_opponent(h, c);
     match(result, 9, 1, "league participant2 is home and faces adjacent participant3");
     require(result.calendarIndex == 37 && result.calendarEvent == 7 && result.selectedEvent == 7,
-            "B953 event cursor is authoritative,not displayed day8E2D");
+            "event cursor (state 0xB953) is authoritative,not displayed day (state 0x8E2D)");
     require(h.state == before, "opponent lookup is read-only");
     bytes(h, 0x8DFD, {0, 1, 9, 4});
     match(classic_opponent(h, c), 9, 0, "odd league participant is away");
@@ -77,10 +93,12 @@ void league_cursor_and_ff() {
     free(result, "argumentFF is distinct from a calendar eventFF");
 }
 
+// WM group games (schedule from state 0x03B8 + 0x48 per kind, 0x24 per group, 6 bytes per round; 0x8F85 is the
+// WM round) and the knockout list (state 0x8EB1, cursor 0x03B7); the manager plays with the national team he owns.
 void world_groups_and_knockout() {
     auto h = fixture(); auto c = calendar(0x10);
     h.state.at(0x8F85) = 3;
-    // ASM192B..1940: group1 offset24h plus round3 offset12h gives03EE.
+    // group 1 (offset 0x24) plus round 3 (offset 0x12) gives 0x03EE.
     bytes(h, 0x03EE, {52, 53, 54, 55, 56, 57});
     owner(h, 55, 5);
     match(classic_opponent(h, c, 5), 54, 0, "WM group1 round3 uses owned national team,not club field4");
@@ -95,11 +113,13 @@ void world_groups_and_knockout() {
     free(classic_opponent(h, c, 5), "WM listFF terminates before later stale pairings");
 }
 
+// European cup groups (kind 2) and final round (kind 3): the first three rounds are stored, the return legs reuse
+// them with the venue flipped; 0x8F86 counts the rounds of the whole competition.
 void european_groups_and_final() {
     auto h = fixture(); auto c = calendar(0x20);
     owner(h, 72, 2);
     bytes(h, 0x03A4, {64, 65, 66, 67, 70, 71, 72, 73});
-    // ASM2BE9:kind2 CED8+90h,group1+24h,firstleg round2+0Ch ->0478.
+    // kind 2 schedule at 0x03B8 + 0x90, group 1 +0x24, first-leg round 2 +0x0C -> 0x0478.
     bytes(h, 0x0478, {70, 71, 72, 73});
     h.state.at(0x8F86) = 2;
     match(classic_opponent(h, c, 2), 73, 1, "Euro group1 first-leg round2,second pairing");
@@ -114,9 +134,11 @@ void european_groups_and_final() {
     h.state.at(0x8F86) = 11;
     match(classic_opponent(h, c, 0), 74, 1, "Euro final second-leg venue flips");
     c.events[37] = 0x30;
-    free(classic_opponent(h, c, 0), "18F8 special-event comparisons are exact,not independent flag tests");
+    free(classic_opponent(h, c, 0), "special-event comparisons are exact,not independent flag tests");
 }
 
+// Relegation round (stage 0x8F87, game of the stage 0x0259): which games of a stage are played from the menu and
+// on which side.
 void relegation_schedule_and_days() {
     auto h = fixture(); auto c = calendar(0x40);
     h.state.at(0x03B6) = 0;
@@ -138,9 +160,11 @@ void relegation_schedule_and_days() {
     match(classic_opponent(h, c, 0), 7, 1, "relegation first stage first day uses first-leg venue");
 }
 
+// Play-off pairings (state 0x8E91, cursor 0x03B6), the pending flag (0x077D) and the score columns whose value 100
+// marks a finished series.
 void playoff_pending_scores_and_cursor() {
     auto h = fixture(); auto c = calendar(0x40);
-    // Previous quarterfinals at0..7,live semifinals at8..11,and FF at12.
+    // Previous quarterfinals at 0..7, live semifinals at 8..11, and FF at 12.
     bytes(h, 0x8E91, {10, 11, 12, 13, 14, 15, 16, 17, 10, 12, 14, 16, 0xFF});
     h.state.at(0x03B6) = 8; owner(h, 14, 0);
     match(classic_opponent(h, c), 16, 1, "playoff cursor skips old quarterfinal for same owned team");
@@ -148,9 +172,9 @@ void playoff_pending_scores_and_cursor() {
     free(classic_opponent(h, c), "playoff game>0 requires pending byte");
     h.state.at(0x077D) = 1;
     match(classic_opponent(h, c), 16, 1, "pending flag enables current playoff fixture");
-    h.state.at(0x0239) = 100; //0205+42+10,CCDC+i in1B3B
+    h.state.at(0x0239) = 100; // play-off score table 0x0205 + 42 + participant 10
     free(classic_opponent(h, c), "first100 score column excludes finished tie");
-    h.state.at(0x0239) = 0; h.state.at(0x0247) = 100; //0205+56+10
+    h.state.at(0x0239) = 0; h.state.at(0x0247) = 100; // 0x0205 + 56 + participant 10
     free(classic_opponent(h, c), "second100 score column independently excludes finished tie");
     h.state.at(0x0247) = 0; h.state.at(0x0248) = 100;
     match(classic_opponent(h, c), 16, 1, "sentinel at adjacent participant is not the owned participant's guard");
@@ -161,6 +185,8 @@ void playoff_pending_scores_and_cursor() {
     free(classic_opponent(h, c), "FF at current cursor prevents fallback to an older tie");
 }
 
+// DEB cup: the round (0x8ED1) decides how many ties are scanned, the pending flag (0x077C) and the result marker
+// 100 exclude finished ties, and the owner byte of the team record decides whose match it is.
 void cup_pending_count_and_owner() {
     auto h = fixture(); auto c = calendar(0x08);
     h.state.at(0x8ED1) = 4; h.state.at(0x077C) = 1;
@@ -174,7 +200,7 @@ void cup_pending_count_and_owner() {
     h.state.at(0x035D) = 0;
     free(classic_opponent(h, c, 0), "cup matches teamRecord16 ownership,not manager's club field");
     h.state.at(0x8ED1) = 6;
-    free(classic_opponent(h, c, 3), "cup source03B1 table has zero ties after final");
+    free(classic_opponent(h, c, 3), "cup ties-per-round table has zero ties after final");
 }
 } // namespace
 

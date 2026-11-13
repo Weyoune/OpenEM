@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Borland random generator, scorer/assist choice and computer club statistics; see scorers.hpp.
+// EM_DEBUG_PICK / EM_DEBUG_SCORERS print traces to stderr.
 #include "game/scorers.hpp"
 
 #include <algorithm>
@@ -17,7 +19,7 @@ std::vector<const char*>* g_borland_scopes = nullptr;
 const char* g_draw_scope = "";
 
 int BorlandRandom::range(int lo, int hi) {
-    if (g_borland_log) { g_borland_log->push_back({lo, hi}); if (g_borland_scopes) g_borland_scopes->push_back(g_draw_scope); }  // differential tests: argument sequence of every draw
+    if (g_borland_log) { g_borland_log->push_back({lo, hi}); if (g_borland_scopes) g_borland_scopes->push_back(g_draw_scope); }  // test hook: argument sequence of every draw
     if (hi < lo) std::swap(lo, hi);
     return lo + rand() % (hi + 1 - lo);
 }
@@ -30,7 +32,7 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
         const int slot = rng.range(0, n - 1);
         const HokSquadPlayer& p = squad[size_t(slot)];
         if (p.player < 0 || size_t(p.player) >= players.size() || p.role == 0 || p.role >= 12) continue;
-        // ovl06_3191 (3256..329a): for a team of the pair list only a player of the line on the ice counts
+        // when the lines on the ice are tracked, only a player of the line on the ice counts
         if (on_ice && on_ice->current_line[(p.line >> 7) & 1] != (p.line & 0x7F) - 1) continue;
         const int position_value = players[size_t(p.player)].position;
         if (position_value == 0) continue;
@@ -55,7 +57,7 @@ int pick_player(const std::vector<HokSquadPlayer>& squad, const std::vector<HokP
 GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<HokPlayer>& players,
                        BorlandRandom& rng, int competition, bool shootout, bool goal, const HokTeam* on_ice) {
     GoalCredit c;
-    if (squad.size() < 4) return c;  // ovl14_2349 needs more than 3 players
+    if (squad.size() < 4) return c;  // the original needs more than 3 players
     c.scorer = pick_player(squad, players, 0, goal, rng, on_ice);
     if (c.scorer < 0) return c;
     for (int attempt = 0; attempt < 250; attempt++) {
@@ -63,8 +65,8 @@ GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<Hok
         if (c.assist != c.scorer) break;
     }
     if (c.assist == c.scorer) c.assist = -1;  // a depleted squad may have only one outfield player
-    if (!goal) return c;  // a chance without a goal only picks the players (ovl14_2349 with arg_2 = 0)
-    if (shootout) return c;  // ovl14_2349(param_3=1) still picks scorer/assist but suppresses goals
+    if (!goal) return c;  // a chance without a goal only picks the players
+    if (shootout) return c;  // a shoot-out still picks scorer/assist but books no goals
     HokSquadPlayer& s = squad[size_t(c.scorer)];
     int& goals = competition == 2 ? s.other_goals : competition == 1 ? s.cup_goals : s.league_goals;
     int& goal_byte = competition == 2 ? s.other_goals_byte : competition == 1 ? s.cup_goals_byte : s.league_goals_byte;
@@ -75,14 +77,17 @@ GoalCredit credit_goal(std::vector<HokSquadPlayer>& squad, const std::vector<Hok
 
 
 namespace {
+// Mutable pointer to the player's record in `state`.
 uint8_t* raw_of(Bytes& state, const HokPlayer& pl) { return state.data() + (pl.raw - state.data()); }
+// Adds `v` to a little-endian u16, wrapping at 65536.
 void add_u16(uint8_t* p, int v) {
     const int x = (p[0] | p[1] << 8) + v;
     p[0] = uint8_t(x);
     p[1] = uint8_t(x >> 8);
 }
 
-// 1000:2fb6: goals against and minutes of the goalkeepers.
+// Goals against and minutes of the goalkeepers (clubs below 64 only; up to three goalkeepers are
+// collected, the first two are booked). See credit_club_scorers in scorers.hpp.
 void credit_goalkeepers(std::vector<HokPlayer>& players, Bytes& state, int team, int goals_against, BorlandRandom& rng) {
     if (team > 63) return;
     std::vector<HokPlayer*> keepers;
@@ -118,7 +123,7 @@ void credit_club_scorers(std::vector<HokPlayer>& players, Bytes& state, int team
     }
     const int n = int(shooters.size());
     if (n <= 1) return;
-    int k = n > 9 ? 10 : n;  // DS:4831[n] - 1
+    int k = n > 9 ? 10 : n;  // from a small lookup table in the original
     if (k > 2) k--;
     for (int g = 0; g < goals; g++) {
         if (rng.range(0, 4) == 0) continue;

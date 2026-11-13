@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Tests for the classic UI's stadium screen. Part 1 renders seven stadium scenes (overview,
+// planned places, quote dialog, pending question, ...) from reference positions of human
+// manager 2 and compares them pixel by pixel with screens recorded from the original game.
+// Part 2 drives the screen with mouse/keyboard input through the same sequence as
+// stadium_game_tests (ticket price, declined bowling, timed refusal notice, accepted condition
+// upgrade) and requires the complete save state after each step to match the recorded one.
+// Arguments: the game data folder and the folder holding the reference saves and screens.
 #include "ui/classic_app.hpp"
 #include "game/checkpoint.hpp"
 #include <SDL.h>
 #include <cstdio>
 #include <stdexcept>
 using namespace em;using namespace em::ui;
+// Throws `s` as a test failure unless `v`.
 void require(bool v,const char* s){if(!v)throw std::runtime_error(s);}
+// Compares the 320x240 canvas with a reference screen stored as raw 24-bit RGB (row-major) and
+// fails with the number of differing pixels and the position of the first one.
 void native_rgb(const ClassicCanvas& canvas,const std::filesystem::path& path){
     const auto expected=read_file(path);const auto actual=canvas.argb();
     require(expected.size()==320*240*3,"native golden size");size_t count=0,first=0;
@@ -16,6 +26,7 @@ void native_rgb(const ClassicCanvas& canvas,const std::filesystem::path& path){
 int main(int argc,char** argv){try{
     if(argc!=3)throw std::runtime_error("stadium_input_tests DATA NATIVE");
     const std::filesystem::path data=argv[1],native=argv[2];
+    // A rendered scene: screen name, start position and mouse position (affects hover output).
     struct Scene{const char* name;const char* source;int x,y;};
     const Scene scenes[]{
         {"stadium","stadium-h2-entry.hok",134,219},
@@ -59,7 +70,7 @@ int main(int argc,char** argv){try{
     SDL_Delay(1500);app.tick();
     require(app.session().game().checkpoint_bytes()==declined,"blocked retry and timed notice expiry consume no RNG");
     app.motion(35,203);app.click(35,203,false);
-    app.motion(196,213);app.click(196,213,false); //unaffordable next step retains3
+    app.motion(196,213);app.click(196,213,false); //the unaffordable next step keeps target 3
     app.motion(259,213);app.click(259,213,false);
     require(matches("pending-condition"),"UI bounded target spinner and second offer match native pending state");
     app.motion(123,171);app.click(123,171,false);

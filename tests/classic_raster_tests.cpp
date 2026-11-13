@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Raster comparison of 43 classic UI screens with reference images of the original: each scene loads a save,
+// places the mouse pointer, renders a named screen (ClassicApplication::render_screen) and must equal the raw
+// 320 x 240 RGB image GOLDENS/<scene>-<save>.rgb in every pixel.
+//
+// Usage: classic_raster_tests DATA REFERENCE GOLDENS
+//   REFERENCE holds the saves START, S1, M0 and MONAT1 (.HOK); two scenes load further saves from a folder next
+//   to it. Exit code 1 if any scene differs, 2 on an error.
 #include "ui/classic_app.hpp"
 #include <SDL.h>
 #include <array>
@@ -12,6 +19,8 @@ int main(int argc,char**argv){
     try{
         if(argc!=4)throw std::runtime_error("classic_raster_tests DATA REFERENCE GOLDENS");
         const auto data=path_from_text(argv[1]),references=path_from_text(argv[2]),goldens=path_from_text(argv[3]);
+        // One scene: screen name for render_screen, pointer position, the save whose name forms the reference
+        // file name, and optionally another file (relative to REFERENCE) to load instead of <save>.HOK.
         struct Scene{const char* name;int mouse_x,mouse_y;const char* save="START";const char* source=nullptr;};
         constexpr std::array<Scene,43> scenes{{{"main",125,200},{"table",25,220},{"training",240,220},
                                             {"contracts",282,239},{"bank",25,220},{"totals",25,220},
@@ -46,7 +55,7 @@ int main(int argc,char**argv){
                 if((actual[pixel]&0xffffff)!=rgb){if(!differences)first=pixel;differences++;}
             }
             if(differences){std::fprintf(stderr,"%s: %zu native pixel differences, first at%zu,%zu\n",scene.name,differences,first%320,first/320);failures++;}
-            else std::printf("%s:76800/76800 pixels match native DOSBox capture\n",scene.name);
+            else std::printf("%s:76800/76800 pixels match the original\n",scene.name);
         }
         return failures?1:0;
     }catch(const std::exception& e){std::fprintf(stderr,"Classic raster: %s\n",e.what());return 2;}

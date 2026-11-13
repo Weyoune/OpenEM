@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Club finances (see finances.hpp): the constant tables from EM.EXE, the manager budget in the savegame,
+// monthly income and expenses, interest, home attendance and ticket income, the daily/monthly booking and the
+// weekly stadium wear and construction progress.
 #include "game/finances.hpp"
 
 #include <algorithm>
@@ -6,33 +9,37 @@
 namespace em {
 
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
+// File offset of the initialised data of EM.EXE (header size + start of the data segment), see schedule.cpp.
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
+// EM.EXE table offsets relative to kDgroupFile (see FinanceTables)
 constexpr size_t kLeagueBonus = 0x52C2, kStadiumCost = 0x0094, kPlaceCost = 0x00B8;
 constexpr size_t kCostFactor = 0x02BC, kLevel = 0x0ED8;
 constexpr size_t kClassFans = 0x4FD0, kFansLow = 0x4FE0, kFansHigh = 0x4FF2, kMoneyNum = 0x079D, kMoneyDen = 0x07A1;
 constexpr size_t kClassLimit1 = 0x07C1, kClassLimit2 = 0x07C2, kClassLimit3 = 0x06AD;
 
 // HOK state layout (see hok.hpp and finances.hpp)
-constexpr size_t kManagerBlock = 0x0DCD, kManagerSize = 0x1AF;
+constexpr size_t kManagerBlock = 0x0DCD, kManagerSize = 0x1AF;  // manager blocks; fields below are relative to a block
 constexpr size_t kTicketPrice = 0x0E4, kHomeGames = 0x0ED, kRecordGuest = 0x114, kMinGuest = 0x115;
 constexpr size_t kAttendanceTotal = 0x183, kAttendanceRecord = 0x187, kAttendanceMin = 0x18B;
 constexpr size_t kTeamIndex = 0x014, kLeague = 0x0EB, kStadium = 0x116, kPlaces = 0x133;
-constexpr size_t kBalance = 0x18F, kOpen97ee = 0x193, kIncome = 0x197, kDebts = 0x19B;
-constexpr int kBankParty = 4;
+// balance, weekly training recovery costs, last monthly income, debts table (i32 per party)
+constexpr size_t kBalance = 0x18F, kRecoveryCost = 0x193, kIncome = 0x197, kDebts = 0x19B;
+constexpr int kBankParty = 4;  // block 4 is the bank: debts entry 4 of a manager = his bank account
 constexpr size_t kSquad = 0x696D, kSquadRecord = 0x34, kSquadBlock = 0x618;
 constexpr size_t kPlayers = 0x4FC6, kPlayerRecord = 0x21;
-constexpr int kPoolManager = 4;
-constexpr size_t kAdverts = 0xACFC, kAdvertRecord = 10, kAdvertBlock = 0x6E;
-constexpr size_t kAccrued = 0;  // DS:02A0; first block written by ovl16_11bd
-constexpr size_t kOtherCosts = 0x06C1, kOtherCostsStride = 0x15;  // DS:A07E, three i32 amounts per manager
+constexpr int kPoolManager = 4;  // squad block 4: players without a human club
+constexpr size_t kAdverts = 0xACFC, kAdvertRecord = 10, kAdvertBlock = 0x6E;  // advertising contracts per manager
+constexpr size_t kAccrued = 0;  // i32 per manager: interest accrued this month; the first block of the state
+constexpr size_t kOtherCosts = 0x06C1, kOtherCostsStride = 0x15;  // three i32 amounts per manager
 
-long sle32(const Bytes& b, size_t o) { return long(int32_t(le32(b, o))); }
+long sle32(const Bytes& b, size_t o) { return long(int32_t(le32(b, o))); }  // signed little-endian i32
 
-void put32(Bytes& b, size_t o, long v) {
+void put32(Bytes& b, size_t o, long v) {  // stores the low 32 bits of v little endian (bounds-checked)
     for (int i = 0; i < 4; i++) b.at(o + size_t(i)) = uint8_t(uint32_t(v) >> (8 * i));
 }
 
-// ovl12_0d27(manager, 0): 29 slots (12 for the pool block 4), counting those with a player.
+// Number of occupied squad slots of manager block m, counted as the game counts them: 29 slots (12 for the pool
+// block 4), counting those with a player.
 int count_players(const Bytes& s, int m) {
     const int slots = m == kPoolManager ? 0x1D - 0x11 : 0x1D;
     int n = 0;
@@ -48,6 +55,7 @@ long slot_costs(const Bytes& s, int m, int i) {
 }
 }  // namespace
 
+// Throws FormatError when the first stadium cost or league bonus does not match V1.00.
 FinanceTables load_finance_tables(const Bytes& exe) {
     FinanceTables t;
     auto at = [&](size_t ds) { return long(int32_t(le32(exe, kDgroupFile + ds))); };
@@ -70,15 +78,17 @@ FinanceTables load_finance_tables(const Bytes& exe) {
     return t;
 }
 
+// The game level and the cost factor are saved with the game and override the EM.EXE defaults.
 FinanceTables load_finance_tables(const Bytes& exe, const HokFile& save) {
     FinanceTables tables = load_finance_tables(exe);
     if (save.state.size() <= 0xAEB4 || save.state[0xAEB4] > 5)
         throw FormatError("HOK: invalid saved game level");
-    tables.level = save.state[0xAEB4];  // DS:0ED8
-    tables.cost_factor = sle32(save.state, 0x06B0);  // DS:02BC
+    tables.level = save.state[0xAEB4];  // state 0xAEB4: game level 0..5
+    tables.cost_factor = sle32(save.state, 0x06B0);  // state 0x06B0: i32 cost factor
     return tables;
 }
 
+// Reads the budget of manager m (0..3, or 5 = the national coach) from the save state.
 ManagerBudget budget_from_save(const HokFile& h, int m) {
     if (m < 0 || m > 5 || m == 4) throw FormatError("HOK: invalid human manager index");  // 5: the national coach (WM gate)
     const Bytes& s = h.state;
@@ -91,7 +101,7 @@ ManagerBudget budget_from_save(const HokFile& h, int m) {
         b.team_strength = t.skill1[0] + t.skill1[1] + t.skill2[0] + t.skill2[1];
     }
     b.players = count_players(s, m);
-    // ovl08_1871 walks the first `players` slots, assuming the squad is packed
+    // the game's cost sum walks the first `players` slots, assuming the squad is packed
     for (int i = 0; i < b.players; i++) b.squad_costs += slot_costs(s, m, i);
     const int pool = count_players(s, kPoolManager);
     for (int i = 0; i < pool; i++) {
@@ -109,7 +119,7 @@ ManagerBudget budget_from_save(const HokFile& h, int m) {
     b.record_guest = s[blk + kRecordGuest];
     b.min_guest = s[blk + kMinGuest];
     b.balance = sle32(s, blk + kBalance);
-    b.open_97ee = sle32(s, blk + kOpen97ee);
+    b.open_97ee = sle32(s, blk + kRecoveryCost);
     b.stored_income = sle32(s, blk + kIncome);
     b.bank = sle32(s, blk + kDebts + 4 * kBankParty);
     b.accrued = sle32(s, kAccrued + size_t(m) * 4);
@@ -121,12 +131,14 @@ ManagerBudget budget_from_save(const HokFile& h, int m) {
     return b;
 }
 
+// Writes the budget fields back; the bank account is stored twice, as the manager's entry about the bank and,
+// negated, as the bank's entry about the manager.
 void store_budget(HokFile& h, const ManagerBudget& b, int m) {
     if (m < 0 || m >= 4) throw FormatError("HOK: invalid human manager index");
     Bytes& s = h.state;
     const size_t blk = kManagerBlock + size_t(m) * kManagerSize;
     put32(s, blk + kBalance, b.balance);
-    put32(s, blk + kOpen97ee, b.open_97ee);
+    put32(s, blk + kRecoveryCost, b.open_97ee);
     put32(s, blk + kIncome, b.stored_income);
     put32(s, blk + kDebts + 4 * kBankParty, b.bank);
     put32(s, kManagerBlock + kBankParty * kManagerSize + kDebts + 4 * size_t(m), -b.bank);
@@ -157,11 +169,13 @@ void store_budget(HokFile& h, const ManagerBudget& b, int m) {
 }
 
 // Single-player view: only the bank is a party. The bank's own entry about the manager is
-// -bank; ovl08 reads that one, the result is the same.
-long savings_interest(const ManagerBudget& b) { return b.bank > 0 ? b.bank / 100 : 0; }  // native *1/100, no overflowing *10
+// -bank; the original reads that one, the result is the same.
+// Savings: 1 % per month (computed as * 1 / 100 like the original, without an overflowing * 10).
+long savings_interest(const ManagerBudget& b) { return b.bank > 0 ? b.bank / 100 : 0; }
 
-long loan_interest(const ManagerBudget& b) { return b.bank < 0 ? -(b.bank * 4 / 100) : 0; }
+long loan_interest(const ManagerBudget& b) { return b.bank < 0 ? -(b.bank * 4 / 100) : 0; }  // loan: 4 % per month
 
+// Strength-based income (team strength * 15 * players / 3) plus advertising, with savings interest when `full`.
 long monthly_income(const ManagerBudget& b, bool full) {
     long income = long(b.team_strength) * 15 * b.players / 3;
     for (const AdvertContract& a : b.adverts) income += a.amount;
@@ -169,6 +183,7 @@ long monthly_income(const ManagerBudget& b, bool full) {
     return std::max(income, 0L);
 }
 
+// Expense formula of finances.hpp; never negative.
 long monthly_expenses(const FinanceTables& t, const ManagerBudget& b, bool full, bool with_interest) {
     const int league = std::clamp(b.league, 0, 2);
     long cost = 130000 - long(t.level) * 10000 - t.league_bonus[size_t(league)] * 20;
@@ -199,6 +214,8 @@ int attendance_strength(const HokTeam& team) {
     return sum / 6;
 }
 
+// Spectators of a home game and the ticket income booked to the balance; league games also update the
+// attendance statistics. The random draws and their order follow the original.
 long home_attendance(const FinanceTables& t, ManagerBudget& b, const AttendanceMatch& m, BorlandRandom& rng) {
     const long hs = m.home_strength + 17, as = m.away_strength + 17;
     const int hc = std::clamp(m.home_class, 0, 3), ac = std::clamp(m.away_class, 0, 3);
@@ -242,7 +259,7 @@ long home_attendance(const FinanceTables& t, ManagerBudget& b, const AttendanceM
     a = std::min(a, capacity);
 
     b.balance += long(b.ticket_price) * a * t.money_num / t.money_den;
-    // ovl14_2630: non-league games still sell tickets, but do not enter
+    // non-league games still sell tickets, but do not enter
     // the league-only totals, extrema, count or 22-byte attendance graph.
     if (m.league_statistics) {
         b.attendance_total += a;
@@ -259,6 +276,9 @@ long home_attendance(const FinanceTables& t, ManagerBudget& b, const AttendanceM
     return a;
 }
 
+// One day of bookkeeping: interest accrues daily (a month's interest / (month_days + 1)); on the 1st the advertising
+// contracts count down; on the last day income minus expenses plus the accrued interest is booked and the balance
+// clamped to +-kBalanceLimit.
 void finance_day(const FinanceTables& t, ManagerBudget& b, int day, int month_days) {
     long interest = savings_interest(b) - loan_interest(b);
     if (b.balance < 0) interest += b.balance / 10;
@@ -267,22 +287,25 @@ void finance_day(const FinanceTables& t, ManagerBudget& b, int day, int month_da
     if (day == 1)
         for (AdvertContract& a : b.adverts) {
             if (a.amount == 0 || a.months_left == 0) continue;
-            // ovl08_1d61 clears only the amount; metadata survives until reused.
+            // an expired contract has only its amount cleared; the other fields survive until the record is reused.
             if (--a.months_left == 0 && (a.flags & 0x7F) == 0) a.amount = 0;
         }
 
     if (day == month_days) {
-        b.stored_income = monthly_income(b, false);  // ovl08_16b7(0), excludes savings interest
+        b.stored_income = monthly_income(b, false);  // as the game stores it: excludes savings interest
         b.balance += b.stored_income - monthly_expenses(t, b, false, false) + b.accrued;
         b.balance = std::clamp(b.balance, -kBalanceLimit, kBalanceLimit);
         b.accrued = 0;
     }
 }
 
+// Weekly stadium step: possibly one random loss (wear of a building or places closed by the DEB), then the
+// construction countdowns (manager block +0x128.., one byte per item); a finished item takes its planned level
+// (+0x117 + 2 * item) or planned places (+0x135 + 4 * kind). Returns the number of finished constructions.
 int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int manager, BorlandRandom& rng,
                  const std::function<void(const std::string&, const std::string&)>& message) {
     if (manager < 0 || manager >= 4) throw FormatError("Stadium: invalid manager");
-    // ovr032:0000 texts (DS:0484 item names, DS:4F19 endings of "Ihre", DS:0D10.. two-line texts, DS:04A8 place kinds)
+    // the game's texts (item names, endings of "Ihre", two-line messages, place kinds) in its character set
     static const char* const kItem[9] = {"]berdachung", "Anzeigetafel", "K}hlanlage", "Sitzkomfort", "Zustand",
                                          "Verkehrsanb.", "Gastronomie", "Kino", "Bowlingbahn"};
     static const char* const kEnding[9] = {"r", "r", "r", "", "", "r", "r", "m", "r"};
@@ -290,13 +313,13 @@ int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int man
     auto report = [&](const std::string& a, const std::string& b2) {
         if (message) message(a, b2); else rng.range(0, 3);  // the date draw of the message
     };
-    auto thousands = [](long v) {  // sub_19CB2 with DS:235D = 0: digits grouped by '.'
+    auto thousands = [](long v) {  // the game's number formatting without decimals: digits grouped by '.'
         std::string s = std::to_string(v);
         for (int i = int(s.size()) - 3; i > 0; i -= 3) s.insert(size_t(i), ".");
         return s;
     };
     const size_t block = kManagerBlock + size_t(manager) * kManagerSize;
-    // ovl08_0000 returns after the first actual loss. Even an empty item
+    // the original stops after the first actual loss. Even an empty item
     // consumes the preceding probability and division draws.
     if (rng.range(0, t.level * 2 + 8) == 0) {
         for (int item = 0; item < 11; item++) {
@@ -337,7 +360,7 @@ int stadium_week(const FinanceTables& t, ManagerBudget& b, Bytes& state, int man
             state.at(planned) = state.at(planned + 1) = 0;
         }
         completed++;
-        rng.range(0, 3);  // the completion message picks one of four texts (REAL-CODE test): one draw per building
+        rng.range(0, 3);  // the completion message picks one of four texts: one draw per building
     }
     for (size_t i = 0; i < b.stadium.size(); i++) state.at(block + kStadium + i * 2) = uint8_t(b.stadium[i]);
     for (size_t i = 0; i < b.places.size(); i++) {

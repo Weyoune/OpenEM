@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Contract talks of the season change (ovr026 -> ovl11_41db, ui/classic_contracts.cpp) and the "Laden" path of the
-// start menu, compared with dosbox-automation captures of the original (work/exp/contract_20261110):
-// MID57.HOK (15.04.1995, Mannheimer ERC) played to the season change; for each picture the game state was read from
-// the running original (re/out/hok_layout.csv). The original writes the dialog's player into his record while the
-// dialog is open (+0x0B = 1, the proposal at +0x28, ovr026 near 5f7c:41db's caller); the list behind it was drawn
-// before, so the test puts that record back as the review left it (states/review.state) before drawing.
-// Colours: round(v * 255 / 63) of the capture converted to the DOSBox-X scaling (v << 2) | (v >> 4).
+// Contract talks of the season change (ui/classic_contracts.cpp) and the "Laden" path of the start menu, compared
+// with reference images of the original (REFERENCE/raster_goldens): MID57.HOK (15.04.1995, Mannheimer ERC) played
+// to the season change; for each picture the game state of the original at that moment is stored in
+// REFERENCE/states/<name>.state (the raw save state). The original writes the dialog's player into his record
+// while the dialog is open (+0x0B = 1, the proposal at +0x28); the list behind it was drawn before, so the test
+// puts that record back as the review left it (states/review.state) before drawing.
+// Colours of the reference images: the 6-bit VGA values v are scaled to 8 bits as (v << 2) | (v >> 4).
+//
+// Usage: classic_contract_season_tests DATA REFERENCE OUTPUT
+//   DATA      folder with the original game files
+//   REFERENCE folder with MID57.HOK, states/ and raster_goldens/
+//   OUTPUT    folder for the saves the test writes and for .bmp files of differing pictures
 #include <SDL.h>
 
 #include <chrono>
@@ -24,15 +29,19 @@ using namespace em;
 using namespace em::ui;
 
 namespace {
+// Squad rows of manager 0 start at state offset kSquad, kRecord bytes per row (+0x0B contract years, +0x0F
+// global player id, +0x18 flags, +0x28 salary/proposal u32, +0x2F and +0x30 insurance).
 constexpr size_t kSquad = 0x696D, kRecord = 52;
 
+// State offset of the squad row that holds `player_id` (manager 0, first 29 rows); throws if none does.
 size_t record_of(const Bytes& state, int player_id) {
     for (size_t slot = 0; slot < 29; slot++)
         if (state.at(kSquad + slot * kRecord + 0x0F) == player_id) return kSquad + slot * kRecord;
     throw std::runtime_error("player not in squad");
 }
 
-// The state of a capture with the dialog's record as the list shows it (see above).
+// The stored state `name` with the record of squad `slot` (the dialog's player) restored to the review's
+// values for contract years, flags, salary and insurance, as the list behind the dialog shows it (see above).
 Bytes list_state(const fs::path& dir, const std::string& name, int slot) {
     Bytes state = read_file(dir / "states" / (name + ".state"));
     const Bytes review = read_file(dir / "states" / "review.state");
@@ -48,7 +57,9 @@ Bytes list_state(const fs::path& dir, const std::string& name, int slot) {
     return state;
 }
 
+// Result of a picture comparison: number of differing pixels and their bounding box (x0, y0)..(x1, y1).
 struct Diff { size_t count = 0; int x0 = 320, y0 = 240, x1 = -1, y1 = -1; };
+// Compares the canvas with a raw 320 x 240 RGB reference image in every pixel.
 Diff compare(const ClassicCanvas& canvas, const Bytes& golden) {
     Diff d;
     const auto argb = canvas.argb();
@@ -76,7 +87,8 @@ int main(int argc, char** argv) {
             if (!ok) { std::cerr << "FAIL: " << what << "\n"; failures++; }
         };
         int file = 0;
-        // A game in the state of capture `name` with the dialog of `slot` open, the steps applied, the cursor at (cx, cy).
+        // A game in the stored state `name` with the dialog of `slot` open (daily mood `luck`), the steps applied,
+        // the cursor at (cx, cy), compared with the reference image `golden`; differences are written as .bmp.
         auto picture = [&](const std::string& golden, const std::string& name, int slot, int luck, int cx, int cy,
                            const std::function<void(ClassicApplication&)>& steps) {
             HokFile h = decode_hok(mid57);
@@ -101,7 +113,8 @@ int main(int argc, char** argv) {
         // --- the dialog's numbers against the original's record -------------------------------------------
         const Bytes c0 = read_file(dir / "states" / "c0.state");
         const Bytes years2 = read_file(dir / "states" / "years2.state");
-        // The daily mood DS:E1A4 is no part of a save: the one whose two-year demand is the original's (85..115).
+        // The daily mood of the contract talks (85..115) is no part of a save: the test searches the one whose
+        // two-year demand is the original's.
         int luck = -1;
         long fee = 0;
         {
@@ -117,13 +130,14 @@ int main(int argc, char** argv) {
             const ContractPlayer cp = contract_player(staged, 0, 0);
             const long proposal = long(int32_t(player_worth(session.contract_tables(), cp, Worth::Salary, unused) *
                                                (147 - int(staged.players.at(size_t(staged.squad_of(0)[0].player)).age)) / 100));
-            check(proposal == long(le32(c0, kSquad + 0x28)), "one-year proposal as the original's (ovl02_0000)");
-            // The two-year demand of the dialog: season_change_demand, with the mood of the day DS:E1A4 (no part of a
-            // save; 0x71 = 113 was read from the running original) and the age of squad slot 3 (the original's di = 3).
+            // The one-year proposal of the season change: the salary worth times (147 - age) / 100.
+            check(proposal == long(le32(c0, kSquad + 0x28)), "one-year proposal as the original's");
+            // The two-year demand of the dialog: season_change_demand, with the mood of the day (no part of a save;
+            // the original had 0x71 = 113 at that moment) and the age of squad slot 3, which the original uses here.
             for (int l = 85; l <= 115 && luck < 0; l++)
                 if (season_change_demand(session.contract_tables(), staged, 0, cp, 2, l, unused) == long(le32(years2, kSquad + 0x28))) luck = l;
             check(luck == 113, "two-year demand with the mood 113 read from the original (season_change_demand)");
-            // Franke's transfer fee when he leaves (ovl11_3d36(record, 0) / 2): 142.000 DM in the capture
+            // Franke's transfer fee when he leaves (half his market value): the original shows 142.000 DM
             const Bytes leave = list_state(dir, "leave1", 1);
             std::copy(leave.begin(), leave.end(), h.state.begin());
             const fs::path leave_save = output / "LEAVE.HOK";
@@ -170,9 +184,9 @@ int main(int argc, char** argv) {
         picture("season-refused-leave1", "refused-leave1", 12, luck, 120, 171, notice(false, "OBRESA\nkehrt Ihrem Verein\nden R\xC3\xBC" "cken..."));
         picture("season-top2", "top2", 12, luck, 120, 171, {});
 
-        // --- start menu of a new game: the header opens "Laden" (ovr027:0E87), a right click goes back -------------
+        // --- start menu of a new game: the header opens "Laden", a right click goes back ---------------------------
         {
-            // the game folder of the capture: the original's files, its HIGH folder and MID57.HOK
+            // the game folder of the reference: the original's files, its HIGH folder and MID57.HOK
             const fs::path game = output / "EM";
             fs::copy(data, game, fs::copy_options::recursive);
             fs::create_directories(game / "HIGH");
@@ -181,8 +195,8 @@ int main(int argc, char** argv) {
             check(app.screen() == ClassicScreen::NewManager, "a fresh start shows the start menu");
             app.motion(160, 120);
             app.draw();
-            // SPIEL-LEVEL (211..294, 81..90) is not compared: a fresh original shows the EXE default DS:0118 (level 3),
-            // OpenEM the level of BACKUP.HOK (5); the options of a new game are not this branch's (docs/CLASSIC_UI.md)
+            // SPIEL-LEVEL (211..294, 81..90) is not compared: a fresh original shows the default level stored in
+            // EM.EXE (level 3), OpenEM the level of BACKUP.HOK (5); the new-game options are tested elsewhere
             const auto differences = [&](const std::string& golden_name, bool skip_level) {
                 const Bytes golden = read_file(dir / "raster_goldens" / (golden_name + ".rgb"));
                 const auto argb = app.canvas().argb();

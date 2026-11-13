@@ -1,10 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic league fixtures page "Paarungen" (ui/classic_league_fixtures.cpp): title with round
+// and date, the six pairings of a round with table place and strength of both clubs, results of past rounds
+// (signed bytes as stored), highlight colours, click areas, and the working copy of the state the page uses to
+// preview a future round (pairings and date), which must be restored exactly when the page is left.
+//
+// Usage: classic_league_fixtures_tests DATA REFERENCE
+//   DATA      folder with EM.EXE (schedule tables and season calendar)
+//   REFERENCE folder with START.HOK and MONAT1.HOK; an optional reference of the working state is looked up next
+//             to it
 #include "ui/classic_league_fixtures.hpp"
 #include "ui/classic_team_schedule.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 using namespace em;using namespace em::ui;
+// Throws with message `s` when `b` is false.
 void require(bool b,const char* s){if(!b)throw std::runtime_error(s);}
 int main(int argc,char** argv){try{
     if(argc!=3)throw std::runtime_error("classic_league_fixtures_tests DATA REFERENCE");
@@ -14,6 +24,7 @@ int main(int argc,char** argv){try{
     const auto before=month.state;const auto v=classic_league_fixtures(month,tables,calendar,0);
     require(month.state==before,"pure view must preserve every source byte");
     require(v.round==10&&v.next_round==10&&v.native_title=="Bundesliga   10.Spieltag  11.10.","literal native MONAT1 title");
+    // Per row: home, away, home place, away place, home strength, away strength.
     constexpr std::array<std::array<int,6>,6> expected{{{0,6,3,7,72,66},{7,1,4,6,71,68},{10,3,1,2,78,76},{8,2,10,9,67,65},{9,5,12,5,63,68},{4,11,8,11,74,61}}};
     constexpr std::array<const char*,6> home_stats{"%3. Platz, St{rke 72","%4. Platz, St{rke 71","%1. Platz, St{rke 78","10. Platz, St{rke 67","12. Platz, St{rke 63","%8. Platz, St{rke 74"};
     constexpr std::array<const char*,6> away_stats{"%7. Platz, St{rke 66","%6. Platz, St{rke 68","%2. Platz, St{rke 76","%9. Platz, St{rke 65","%5. Platz, St{rke 68","11. Platz, St{rke 61"};

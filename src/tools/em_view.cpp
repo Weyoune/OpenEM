@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// em_view - show one KB image in an SDL window (scaled x3), Esc or close to quit.
+// em_view - developer viewer: shows one KB image in an SDL window (scaled x3); Esc or closing
+// the window quits.
 //
 //   em_view <file.vga> [pal.vga]
-// The palette is taken from the image (320x240 screens), from [pal.vga] or a grey ramp.
+// The palette is taken from the image itself (320x240 screens carry one after the pixel data,
+// at offset 6 + the u16 at offset 4), from [pal.vga] (a palette file or an image with palette)
+// or, failing both, a grey ramp.
 #include <SDL.h>
 
 #include <cstdio>

@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Stadium construction tables, quotes, discount and refusal gates; see stadium.hpp.
 #include "game/stadium.hpp"
 #include "game/scorers.hpp"
 #include <bit>
 
 namespace em {
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;
-constexpr size_t kManagerBlock = 0x0DCD, kManagerStride = 0x1AF;
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // file offset of the EM.EXE data segment
+constexpr size_t kManagerBlock = 0x0DCD, kManagerStride = 0x1AF;  // manager blocks in the state
+// Interpret a byte / word as signed, as the original's comparisons do.
 int signed_byte(int value) { return value < 128 ? value : value - 256; }
 int signed_word(uint16_t value) { return value < 32768 ? int(value) : int(value) - 65536; }
+// Throws FormatError unless `manager` is a human manager index 0..3.
 void manager_check(int manager) {
     if (manager < 0 || manager >= 4) throw FormatError("stadium: invalid human manager");
 }
@@ -47,14 +50,14 @@ StadiumTarget stadium_target(const HokFile& h, const StadiumTables& tables,
             const auto planned = le16(h.state, block + 0x135 + kind * 4);
             remaining = uint16_t(remaining - (planned ? planned : le16(h.state, block + 0x133 + kind * 4)));
         }
-        result.maximum = signed_word(remaining) / 500; // native CWD/IDIV, truncates toward0
+        result.maximum = signed_word(remaining) / 500; // signed division, truncates toward 0
         result.available = le16(h.state, block + 0x135 + (i - 9) * 4) == 0 && result.maximum != 0;
     }
     const bool initial = target == -1;
     result.target = initial ? int(uint8_t(result.base + 1)) : target;
     const int delta = signed_byte(result.target) - signed_byte(result.base);
-    // Initial quote1088 is the table price directly; only arrow changes use
-    // the signed-byte delta and target upper bound113A..1197.
+    // The initial quote is the table price directly; only arrow changes use
+    // the signed-byte delta and the target's upper bound.
     const uint32_t quote = uint32_t(tables.cost[i]) * uint32_t(initial ? 1 : delta);
     result.nominal_cost = std::bit_cast<int32_t>(quote);
     result.affordable = quote <= le32(h.state, block + 0x18F); // unsigned high/low CMP
@@ -67,8 +70,8 @@ StadiumTarget stadium_target(const HokFile& h, const StadiumTables& tables,
 
 int32_t stadium_discounted_cost(int32_t quote, int discount) {
     const uint32_t bits = uint32_t(quote);
-    const uint32_t product = bits * uint32_t(discount); //03CA discards high32 BEFORE division
-    return std::bit_cast<int32_t>(bits - product / 100u); //0483 is unsigned
+    const uint32_t product = bits * uint32_t(discount); // the high 32 bits are discarded BEFORE the division
+    return std::bit_cast<int32_t>(bits - product / 100u); // unsigned division
 }
 
 void stadium_daily_refusal_reset(std::array<std::array<uint8_t, 11>, 4>& gates,

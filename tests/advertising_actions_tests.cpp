@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Advertising ("Werbung") actions of the game core: entering the advertising page, accepting a sponsor offer,
+// renewing an expiring advertising contract in two steps (prepare, then confirm) and the ordering of the
+// contract list after an acceptance. Each step is compared byte for byte with reference saves the original
+// game wrote in the same situation, and checked for its effect on the two random streams and on reloads of
+// an OpenEM checkpoint.
+//
+// Usage: advertising_actions_tests DATA REFERENCE NATIVE
+//   DATA      folder with the user's EM.EXE
+//   REFERENCE folder with the reference saves MONAT1.HOK and ADRENEW.HOK
+//   NATIVE    folder with the saves the original wrote after entering advertising and after accepting the offer
 #include "game/game.hpp"
 #include "game/checkpoint.hpp"
 #include <cstdio>
 #include <stdexcept>
 using namespace em;
+// Throws with message `s` when `b` is false; the test stops at the first failed requirement.
 void require(bool b,const char* s){if(!b)throw std::runtime_error(s);}
 int main(int argc,char** argv){try{
     if(argc!=4)throw std::runtime_error("advertising_actions_tests DATA REFERENCE NATIVE");
@@ -34,6 +45,9 @@ int main(int argc,char** argv){try{
         require(decode_game_checkpoint(staged.checkpoint_bytes()).borland_random==random.borland_random,"confirmation does not repeat the sponsor's random decision");
         const auto resolved=staged.checkpoint_bytes();require(!staged.finish_advert_renewal(draft,accept)&&staged.checkpoint_bytes()==resolved,"prepared renewal cannot be resolved twice");
     }
+    // Sort order after an acceptance: seven contracts (state 0xACFC, 10 bytes each: +0 monthly amount u32,
+    // +4 sponsor, +5 months, +6 flags) with partly equal amounts, and one offer in the offer table (0xA52C).
+    // Accepting it makes the original resort the list; its pairwise swaps put equal amounts in reverse order.
     auto tie=decode_hok(read_file(refs/"MONAT1.HOK"));
     const auto put32=[&](size_t at,uint32_t n){for(size_t i=0;i<4;++i)tie.state.at(at+i)=uint8_t(n>>(i*8));};
     constexpr std::array<uint32_t,7> amounts{2,2,1,3,4,5,6};

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Transfer market decisions: seller and player acceptance, bidder choice, offers and the
+// purchase sponsor; see transfers.hpp.
 #include "game/transfers.hpp"
 
 #include <algorithm>
@@ -8,7 +10,7 @@ namespace em {
 
 bool seller_accepts(long price, long bid, BorlandRandom& rng) {
     price &= 0x7FFFFFFFL;
-    if (price == 0) { //391D still consumes both threshold draws for a positive bid
+    if (price == 0) { // the original still consumes both threshold draws for a positive bid
         (void)rng.range(75,85);(void)rng.range(110,130);return bid>0;
     }
     if (price * rng.range(75, 85) / 100 > bid) return false;
@@ -54,11 +56,11 @@ bool player_accepts(const ContractTables& t, const ContractPlayer& p, int years,
         if (p.salary < salary) return true;
         if (p.salary > salary) return false;
     }
-    if (p.years > years) {  // shorter contract (REAL-CODE test): above 120 % accepted, up to 105 % refused, both without a draw
+    if (p.years > years) {  // shorter contract: above 120 % accepted, up to 105 % refused, both without a draw
         if (p.salary * 120 / 100 < salary) return true;
         if (p.salary * 105 / 100 >= salary) return false;
     }
-    // A longer contract has no early refusal (REAL-CODE test): the original draws both factors and then compares.
+    // A longer contract has no early refusal: the original draws both factors and then compares.
     const long left = 100 - long(matchday) * 100 / std::max(matchdays, 1);
     const long u = (years - 1) * 100L + left;
     long want = player_worth(t, p, Worth::Salary, rng) * rng.range(85, 115) / 100;

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Training tables, default plan, recovery costs, weekly training and morale; see training.hpp.
 #include "game/training.hpp"
 
 #include <algorithm>
@@ -7,11 +8,13 @@
 namespace em {
 
 namespace {
-constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // see schedule.cpp
+constexpr size_t kDgroupFile = 0x1E00 + 0x14FD0;  // file offset of the EM.EXE data segment, see schedule.cpp
+// Offsets of the training tables within the data segment.
 constexpr size_t kEffect = 0x4861, kNorm = 0x48CD, kRecoveryNorm = 0x48E5, kFreeUnits = 0x48EB, kLevel = 0x0ED8;
-constexpr int kWednesday = 2, kSunday = 6;
+constexpr int kWednesday = 2, kSunday = 6;  // the match days of the week (day indices)
 
-// 146e:000a
+// The step function of the training formula (training.hpp): step(v, 0) for the areas,
+// step(v, 1) (`recovery`) for the exhaustion change.
 long step(long v, bool recovery, BorlandRandom& rng) {
     int sign = 1;
     v = recovery ? std::clamp(v, 100L, 300L) - 200 : std::clamp(v, 80L, 120L) - 100;
@@ -71,7 +74,7 @@ TrainingPlan default_training_plan(const TrainingTables& t) {
 void train_week(const TrainingTables& t, const TrainingPlan& plan, TrainingPlayer& p, BorlandRandom& rng) {
     const int pos = std::clamp(p.position, 0, 2);
     // +0x13: the fatigue penalty uses the unsigned byte, but the stored result is clamped with a signed-char
-    // comparison (REAL-CODE test): anything from 128 on counts as negative and ends at 50.
+    // comparison in the original: anything from 128 on counts as negative and ends at 50.
     const int exhaustion = p.exhaustion & 0xFF;
     long fresh = 0;
     long mood = -3 + (p.morale - 30) / 3;
@@ -135,7 +138,7 @@ void morale_week(TrainingPlayer& p, BorlandRandom& rng) {
     p.trend = (p.trend & 0xF0) + (weeks & 0xFF);
     p.trend &= 0xFF;
     if (weeks == 0) {
-        // 146e:16ec calls ovl11_307a instead of storing the movement:
+        // The original does not store the movement here but rolls a new player profile:
         // both morale and trend are replaced, in this four-draw order.
         p.morale = rng.range(35, 65);
         p.trend = rng.range(1, 13);

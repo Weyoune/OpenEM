@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Tests for the UI session layer (src/ui/session.cpp) and the HOK export of Game. Without
+// arguments only money() formatting is checked. With DATA REFERENCES WORK: the club identity
+// comes from the state, not the header preview; loading a manual-lineup save; the exact HOK
+// export of a fresh game; transactional actions that roll back on exceptions; refused loads;
+// 35 days through the session compared with a direct Game; save protection (no overwriting,
+// race-free creation, Unicode names); a refused purchase that still counts as an action; and a
+// season review whose contract questions can be cancelled and asked again identically.
+// Every run writes into its own fresh subfolder of WORK.
 #include "ui/session.hpp"
 #include "game/checkpoint.hpp"
 
@@ -12,7 +20,8 @@
 namespace fs = std::filesystem;
 using namespace em;
 using namespace em::ui;
-static int failures = 0;
+static int failures = 0;  // number of failed CHECKs; nonzero makes main() fail
+// Records a failure (file, line, expression) and continues.
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); failures++; } } while (0)
 
 int main(int argc, char** argv) {
@@ -31,8 +40,8 @@ int main(int argc, char** argv) {
         {
             HokFile duplicate=decode_hok(start);
             const int own=duplicate.state.at(0x0DCD+0x14);
-            // Header names are previews, not identity: native team records can
-            // share names, and the club preview is bounded at exactly19 bytes.
+            // Header names are previews, not identity: team records of the original can share
+            // names, and the club preview (header 0x25) is bounded at exactly 19 bytes.
             const size_t own_name=0x17E7+size_t(own)*61,other_name=0x17E7+149*61;
             std::copy_n(duplicate.state.begin()+own_name,22,duplicate.state.begin()+other_name);
             std::fill_n(duplicate.header.begin()+0x25,19,uint8_t('X'));
@@ -47,10 +56,15 @@ int main(int argc, char** argv) {
             const auto raw=decode_hok(manual_source);
             CHECK(raw.state.at(0x078A)==0&&raw.state.at(0x078B)==1);
             Game loaded_manual(exe,manual_source);
-            // Read-only native M0 reload RAM: DS0375/0376=01/01.
+            // When the original loads M0.HOK, the active lineup mode (0x078A) is restored from the
+            // saved one (0x078B), so both read 1 afterwards.
             CHECK(loaded_manual.save().state.at(0x078A)==1&&loaded_manual.save().state.at(0x078B)==1);
         }
-        // Native7348 save sequence, independent ASM-derived constants for seed1.
+        // HOK export of a fresh game with seed 1, against independently computed constants:
+        // save nonce (header 0xB4), filler 0xB8 and key0 0xB9, the random state after the
+        // export's draws, year 1993 at 0x0A, manager count 1 at 0x0E, matchday 1 at 0x0F,
+        // zeroed preview records 0x38..0xAF and the "EH0" marker at 0xB0. Repeated exports and a
+        // reloaded checkpoint give the same bytes.
         {
             Game native(exe,start,1);
             const Bytes checkpoint=native.checkpoint_bytes();
@@ -120,7 +134,8 @@ int main(int argc, char** argv) {
         CHECK(restored.game().checkpoint_bytes() == direct.checkpoint_bytes());
         CHECK(session.game().checkpoint_bytes() == direct.checkpoint_bytes());
 
-        // A refusal is a valid game action: retain its native cooldown and RNG consumption.
+        // A refusal is a valid game action: retain its cooldown and random-number consumption, as
+        // in the original.
         Session refusal(data); refusal.load(refs / "KAUFPR01.HOK", 6);
         const Bytes before_refusal = refusal.game().checkpoint_bytes();
         Game expected(exe, before_refusal);

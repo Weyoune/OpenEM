@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The classic manager set-up page: Manager -> Neuer (adding managers to a
+// running game) and the start menu of a new game (managers, game mode and
+// the four settings). Up to four rows of face, name and club on the left;
+// on the right either the settings or a board to pick a face or a club.
 #include "ui/classic_misc_newmanager.hpp"
 
 #include <algorithm>
@@ -8,30 +12,36 @@
 
 namespace em::ui {
 namespace {
-constexpr size_t kOptions = 0x28, kFaces = 0x01EE, kFileNumber = 0x06AE;  // DS:0118, DS:0178, DS:0256
+// Save-state offsets: the four game settings, the managers' faces (one byte each, 0xFF = none) and the highscore
+// file number (u16, 0 = no list).
+constexpr size_t kOptions = 0x28, kFaces = 0x01EE, kFileNumber = 0x06AE;
+// Manager records (0x1AF bytes, name at +0, team at +0x14) and team records (61 bytes).
 constexpr size_t kManagers = 0x0DCD, kManagerSize = 0x1AF, kTeams = 0x17E7, kTeamSize = 0x3D;
-constexpr std::array<int, 4> kOptionOffset{0, 6, 10, 13};  // DS:4B3E: first KB1 cell of each option
-constexpr auto kFont = ClassicFontId::Mini;                // native font 3
-constexpr uint8_t kKey = 0xC0;
+constexpr std::array<int, 4> kOptionOffset{0, 6, 10, 13};  // first KB/1 cell of each option's value pictures
+constexpr auto kFont = ClassicFontId::Mini;                // the game's font 3
+constexpr uint8_t kKey = 0xC0;                             // transparent colour
 constexpr int kReturn = 13, kBackspace = 8, kEscape = 27, kKeypadEnter = 0x40000058;  // SDL key codes
 
+// NUL-terminated string of at most n bytes at offset `at`.
 std::string cstring(const Bytes& b, size_t at, size_t n) {
     std::string s;
     for (size_t i = 0; i < n && b.at(at + i); i++) s.push_back(char(b.at(at + i)));
     return s;
 }
+// Picture id of a team's crest: KB/80 + (team record +0x34 & 63).
 int crest_asset(const HokFile& h, int team) {
     return 0x50 + (h.state.at(kTeams + size_t(team) * kTeamSize + 0x34) & 0x3F);
 }
 std::string team_name(const HokFile& h, int team) { return cstring(h.state, kTeams + size_t(team) * kTeamSize, 0x16); }
+// Top of a manager row (rows are 51 pixels apart).
 int row_top(int row) { return 41 + 51 * row; }
-// ovr027:00E1: the two lines above and below a face or crest cell.
+// The two lines above and below a face (column 1) or crest (column 2) cell, marking the cell being chosen.
 void mark(ClassicCanvas& c, int column, int row, uint8_t color) {
     const int x = (column - 1) * 0x84 + 7, y = row * 0x33 + 0x28;
     c.line(x, y, x + 0x23, y, color);
     c.line(x, y + 0x27, x + 0x23, y + 0x27, color);
 }
-// The board cell under the pointer (ovr027:0FAB), or -1.
+// The board cell (column 0..2, row 0..3) under the pointer, or {-1, -1}.
 std::pair<int, int> board_cell(ClassicNewManager::Panel panel, int x, int y) {
     if (panel == ClassicNewManager::Panel::Options || x <= 0xBC || y <= 0x28 || y >= 0xCA) return {-1, -1};
     int col, row;
@@ -41,10 +51,11 @@ std::pair<int, int> board_cell(ClassicNewManager::Panel panel, int x, int y) {
 }
 }  // namespace
 
+// Manager -> Neuer: the rows of the running game's managers are filled in and fixed; the settings are shown as stored.
 void ClassicNewManager::open(const HokFile& h) {
     *this = ClassicNewManager{};
     const Bytes& s = h.state;
-    const int managers = std::clamp(int(s.at(0x0DC6)), 1, 4);  // DS:0386
+    const int managers = std::clamp(int(s.at(0x0DC6)), 1, 4);  // number of human managers in the save state
     for (int m = 0; m < managers; m++) {
         auto& r = rows_[size_t(m)];
         r.face = s.at(kFaces + size_t(m)) == 0xFF ? -1 : s.at(kFaces + size_t(m));
@@ -56,13 +67,16 @@ void ClassicNewManager::open(const HokFile& h) {
     highscore_ = (s.at(kFileNumber) | s.at(kFileNumber + 1)) != 0;
 }
 
+// The start menu of a new game: empty rows, default settings, settings editable.
 void ClassicNewManager::open_start(const HokFile&) {
     *this = ClassicNewManager{};
-    options_ = NewGameOptions{};  // a new program run starts with the EM.EXE values dseg:0118, var_57 = 3
-    highscore_ = new_game_highscore_file(options_) != 0;  // DS:0256 = 141 for these values (H.141)
+    options_ = NewGameOptions{};  // a new program run starts with the game's built-in default settings (mode 3)
+    highscore_ = new_game_highscore_file(options_) != 0;  // these defaults use highscore file H.141
     start_mode_ = true;
 }
 
+// Draws the page on KB/150: the rows, the name field while a name is typed, the cell marks, and on the right the
+// settings panel or the face / club board with the cell under the mouse outlined (the club board also names the club).
 void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my) const {
     c.background(150);
     for (int r = 0; r < 4; r++) {
@@ -78,7 +92,7 @@ void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my)
             c.text_native(kFont, 47, 56 + 51 * r, team_name(h, row.team), 7, -1, 133);
         }
     }
-    if (editing_ && row_ >= 0) {  // ovr027:130B: the name field (sub_19CFB, 19 letters in 80 pixels)
+    if (editing_ && row_ >= 0) {  // the name field (up to 19 letters in 80 pixels)
         c.rect(0x2F, 0x2A + 51 * row_, 0x85, 0x31 + 51 * row_, 0);
         c.rect(0x30, 0x2B + 51 * row_, 0x84, 0x30 + 51 * row_, 6);
         c.text_native(kFont, 0x32, 0x2F + 51 * row_, draft_, 7);
@@ -87,7 +101,7 @@ void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my)
     if (mark_.first > 0) mark(c, mark_.first, mark_.second, 0x18);
     if (panel_ == Panel::Options) {
         c.blit(1, 0xC2, 0xC2, 0x71, highscore_ ? 0x26 : 0, 0x36, 0x26, true, kKey);  // notepad / nail
-        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D * (options_.mode & 1), 0x39, 0x0D);         // league/cup mode (var_57 bit 0)
+        c.blit(1, 0xC1, 0x2F, 0x71, 0x4C + 0x0D * (options_.mode & 1), 0x39, 0x0D);         // league/cup mode (mode bit 0)
         c.blit(1, 0x103, 0x2F, 0x71, 0x66 + 0x0D * ((options_.mode & 2) != 0), 0x39, 0x0D);  // WM mode (bit 1)
         for (int i = 0; i < 4; i++)
             c.blit(1, 0xC3, 0x51 + 0x1C * i, 0, 10 * (options_.values[size_t(i)] + kOptionOffset[size_t(i)]), 0x71, 10, true, kKey);
@@ -118,6 +132,7 @@ void ClassicNewManager::draw(ClassicCanvas& c, const HokFile& h, int mx, int my)
     }
 }
 
+// Returns to the settings panel; the old mark is erased (drawn over in colour 8).
 void ClassicNewManager::close_panel() {
     if (mark_.first > 0) erased_.insert(mark_);
     mark_ = {-1, -1};
@@ -126,12 +141,16 @@ void ClassicNewManager::close_panel() {
     pressed_arrow_ = 0;
 }
 
+// Accepts the typed name for the current row.
 void ClassicNewManager::finish_name() {
-    if (draft_.size() < 2) return;  // ovr027:13BC: at least two letters, the field stays open
+    if (draft_.size() < 2) return;  // at least two letters, otherwise the field stays open
     rows_[size_t(row_)].name = draft_;
     editing_ = false;
 }
 
+// Clicks on the page: the face or club cell of a row opens the matching board (right click removes a new row's
+// manager), a board cell assigns a face (then the name is typed) or club, the club board's arrows page through the
+// clubs, the settings change in start mode, and "Los jetzt!" leaves when every new row is complete.
 ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y, bool right) {
     pressed_arrow_ = 0;
     if (editing_) {
@@ -140,12 +159,12 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
     }
     const bool manager_field = y > 0x26 && y < 0xEB && (x < 0x2D || (x > 0x88 && x < 0xB2));
     if (manager_field) {
-        // "Nur WM" (mode 2) of a new game knows one manager: a click on any row edits the first one (DOSBox 13.11.2026:
-        // the face, name and club picked from row 2 went into row 1)
+        // "Nur WM" (mode 2) of a new game knows one manager: a click on any row edits the first one (in the original
+        // the face, name and club picked from row 2 go into row 1)
         const bool wm_only = start_mode_ && options_.mode == 2 && !std::getenv("EM_OLD_WMROW");
         const int row = wm_only ? 0 : std::clamp((y - 0x26) / 0x33, 0, 3), column = x > 0x2D ? 2 : 1;
         if (rows_[size_t(row)].existing) return Result::None;  // the running game's managers stay
-        if (right) {  // ovr027:0AE4: remove the new manager of this row
+        if (right) {  // remove the new manager of this row
             rows_[size_t(row)] = Row{};
             for (int col = 1; col <= 2; col++) erased_.insert({col, row});
             if (mark_.first > 0) erased_.insert(mark_);
@@ -164,7 +183,7 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
     if (right) return Result::None;
     if (panel_ == Panel::Clubs && x > 0x135 && y > 0x28 && y < 0xCA && y != 0x78) {  // scroll arrows
         page_ = (page_ + (y > 0x78) - (y < 0x78) + 4) % 4;  // the pressed arrow shows only while held
-        if (mark_.first > 0) erased_.insert(mark_);  // ovr027:0E71 overdraws the mark, the row stays active
+        if (mark_.first > 0) erased_.insert(mark_);  // the game overdraws the mark, the row stays active
         mark_ = {-1, -1};
         hover_ = {-1, -1};
         return Result::None;
@@ -173,7 +192,7 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
         const auto cell = board_cell(panel_, x, y);
         if (cell.first >= 0 && row_ >= 0) {
             const int index = cell.second * 3 + cell.first + (panel_ == Panel::Clubs ? page_ * 12 : 0);
-            for (const auto& other : rows_)  // ovr027:121E: taken faces and clubs cannot be chosen
+            for (const auto& other : rows_)  // taken faces and clubs cannot be chosen
                 if ((panel_ == Panel::Faces ? other.face : other.team) == index) return Result::None;
             auto& r = rows_[size_t(row_)];
             if (panel_ == Panel::Faces) {
@@ -186,17 +205,17 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
             close_panel();
             return Result::None;
         }
-        if (y <= 0xF0 && y > 0x2C && x > 0x2D && x < 0x88) close_panel();  // ovr027:0F35
+        if (y <= 0xF0 && y > 0x2C && x > 0x2D && x < 0x88) close_panel();  // a click on the names column closes the board
         return Result::None;
     }
-    if (start_mode_) {  // ovr027:06AA: only a new game (var_64 = 0) changes the settings
+    if (start_mode_) {  // only a new game (no managers yet) changes the settings
         if (x > 0xBE && y > 0x2D && y < 0x3D) {  // mode buttons
             int named = 0;
             for (const auto& r : rows_) named += !r.name.empty();
             if (toggle_new_game_mode(options_, x > 0xFD ? 1 : 0, named)) highscore_ = new_game_highscore_file(options_) != 0;
             return Result::None;
         }
-        for (int i = 0; i < 4 && x > 0x134; i++) {  // the arrows of the four settings (ovr027:07AF)
+        for (int i = 0; i < 4 && x > 0x134; i++) {  // the up/down arrows of the four settings
             const int top = 0x1C * i;
             if (y <= top + 0x4D || y >= top + 0x5F) continue;
             step_new_game_option(options_, i, (y > top + 0x56) - (y < top + 0x56));
@@ -207,15 +226,16 @@ ClassicNewManager::Result ClassicNewManager::click(const HokFile&, int x, int y,
     if (x > 0xFD && y > 0xC1 && x < 0x135 && y < 0xE9) {  // Los jetzt!
         for (const auto& r : rows_)
             if (!r.existing && ((r.face >= 0) != (r.team >= 0))) return Result::None;  // incomplete row
-        if (start_mode_ && options_.mode == 0) return Result::None;  // ovr027:15AF: var_57 != 0
+        if (start_mode_ && options_.mode == 0) return Result::None;  // a new game needs a mode other than 0
         for (const auto& r : rows_)
             if (!r.existing && r.face >= 0) return Result::LeaveWithManager;
-        if (start_mode_) return Result::None;  // ovr027:15AF: a new game needs a manager (var_57 != 0)
+        if (start_mode_) return Result::None;  // a new game needs a manager
         return Result::Leave;
     }
     return Result::None;
 }
 
+// Keys while a name is typed: Enter accepts, Backspace deletes, Escape clears.
 void ClassicNewManager::key(int key) {
     if (!editing_) return;
     if (key == kReturn || key == kKeypadEnter) finish_name();
@@ -223,9 +243,11 @@ void ClassicNewManager::key(int key) {
     else if (key == kEscape) draft_.clear();
 }
 
+// Typed characters: the game's name field accepts the byte range 'A'..'z' (letters plus the few signs between them)
+// and the space, up to 19 characters.
 void ClassicNewManager::text(std::string_view text) {
     if (!editing_) return;
-    for (unsigned char ch : text)  // sub_19CFB with letters: 'A'..'z' and the space
+    for (unsigned char ch : text)
         if (draft_.size() < 19 && ((ch >= 'A' && ch <= 'z') || ch == ' ')) draft_.push_back(char(ch));
 }
 }  // namespace em::ui

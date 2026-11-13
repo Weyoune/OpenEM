@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Taktik page drawing (see classic_tactics.hpp).
 #include "ui/classic_tactics.hpp"
 #include <array>
 #include <string>
@@ -8,15 +9,18 @@
 namespace em::ui {
 namespace {
 constexpr auto mini = ClassicFontId::Mini;
+// Texts of the mode controls: 0..1 line-up, 2..7 line change mode, 8..10 effort/offence mode.
 constexpr std::array<std::string_view, 11> modes{
     "AUTOM.", "MANUELL", "Automatisch", "Spiel nur mit 2 Reihen",
     "Energiest{rkster Block", "Nach Gegnerreihe", "Minuten-Vorgabe (s.u.)",
     "Voll manuell", "AUTOM.", "SEMI", "MANUELL"};
+// The six game situations of the effort/offence tables.
 constexpr std::array<std::string_view, 6> situations{
     "Grundwert", "hohe F}hrung", "knappe F}hrung", "Unentschieden",
     "knapper R}ckstand", "hoher R}ckstand"};
 
-// Native1902:05E3 delegates to5CB4:0CD1 after sampling the old inner pixel.
+// Sunken field frame with fill 4; the corner pixels take the colour found at (left+5, top+5) before
+// drawing, as the original samples the old inner pixel first.
 void plain_frame(ClassicCanvas& c, int left, int top, int right, int bottom) {
     const auto edge = c.pixels().at(left + 5, top + 5);
     const int x = left + 2, y = top + 3;
@@ -32,6 +36,7 @@ void plain_frame(ClassicCanvas& c, int left, int top, int right, int bottom) {
     c.line(x - 1, bottom - 2, right - 3, bottom - 2, 29);
 }
 
+// A two-digit value field with its up/down arrows; disabled values are drawn in colour 3.
 void number_field(ClassicCanvas& c, int x, int y, int value, bool enabled) {
     plain_frame(c, x, y, x + 23, y + 14);
     c.blit(4, x + 25, y, 20, 0, 10, 8);
@@ -48,6 +53,8 @@ void draw_classic_tactics(ClassicCanvas& c, const HokFile& h, int preset, int ma
     const size_t m = size_t(manager);
     const size_t block = 0x0DCD + m * 0x1AF;
     const size_t team = 0x17E7 + size_t(h.state.at(block + 0x14)) * 61;
+    // Selected mode of each control (save state, one entry per manager): line-up (0x078A, u16 per manager,
+    // stored inverted), line change (0x01F9), effort (0x01FF), offence (0x01F3).
     const std::array<int, 4> selected{
         1 - h.state.at(0x078A + 2 * m), h.state.at(0x01F9 + m),
         h.state.at(0x01FF + m), h.state.at(0x01F3 + m)};
@@ -77,12 +84,16 @@ void draw_classic_tactics(ClassicCanvas& c, const HokFile& h, int preset, int ma
                       modes[size_t(start[size_t(i)] + selected[size_t(i)])], 30, -1,
                       x + 3 + width[size_t(i)]);
     }
+    // Minute quotas of lines 1..4 for defence and attack (0x028B, 8 bytes per manager), editable only in the
+    // line change mode "Minuten-Vorgabe".
     for (int row = 0; row < 4; ++row)
         for (int kind = 0; kind < 2; ++kind)
             number_field(c, 13 + 76 * kind, 145 + 16 * row,
                          h.state.at(0x028B + m * 8 + size_t(kind * 4 + row)), selected[1] == 4);
     for (int row = 0; row < 6; ++row) {
-        // Entry replaces current effort26 with saved base2D before drawing.
+        // Effort per situation (team +0x27..+0x2B, "Grundwert" from the saved base value at +0x2D, which the
+        // original copies over the current value +0x26 when the page is entered) and offence (+0x35..+0x3A);
+        // editable only in the SEMI mode of the respective control.
         const int effort = h.state.at(team + (row == 0 ? 0x2D : size_t(0x26 + row)));
         const int offence = h.state.at(team + size_t(0x35 + row));
         number_field(c, 152, 102 + 16 * row, effort, selected[2] == 1);

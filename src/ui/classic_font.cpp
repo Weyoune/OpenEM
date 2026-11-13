@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Loads the bitmap fonts embedded in the user's EM.EXE and draws text with
+// them exactly as the game does (no kerning, no extra spacing, glyph pixels
+// only on a transparent background unless opaque drawing is requested).
 #include "ui/classic_font.hpp"
 
 #include <algorithm>
@@ -6,13 +9,24 @@
 
 namespace em::ui {
 namespace {
+// File offset in EM.EXE of the data block of the game's graphics routines
+// (fonts, character table, mouse cursor): the 0x1E00-byte MZ header plus
+// 0xBBF0. The offsets below are relative to it.
 constexpr size_t kResidentFileBase = 0x1e00 + 0xbbf0;
+// Table of four u16 offsets, one font header per ClassicFontId. A header is
+// u16 ?, u16 height, u16 descender, then (except for font 0) 96 u16 offsets
+// of the glyphs for characters 32..127. A glyph is one width byte followed
+// by height rows of (width+7)/8 bytes, most significant bit leftmost.
 constexpr size_t kFontTable = 0x6cd;
+// Character substitution table: a count byte, then (from, to) byte pairs
+// that map an input character to one of the 96 glyphs.
 constexpr size_t kMapping = 0x6ba;
 }
 
+// Parses fonts and character mapping from EM.EXE. Throws FormatError when
+// the executable does not have the expected layout (MZ header of 0x1E00
+// bytes) or contains implausible font data.
 ClassicFont::ClassicFont(const Bytes& exe) {
-    // Source layout and drawing algorithm: EM.EXE 1bbf:2214, 28f6, 2a31.
     if (exe.size() < kResidentFileBase + 0x2121 ||
         le16(exe, 0) != 0x5a4d || le16(exe, 8) * 16 != 0x1e00)
         throw FormatError("classic font: incompatible EM.EXE layout");
@@ -61,6 +75,8 @@ const ClassicFont::Face& ClassicFont::face(ClassicFontId id, bool require_bitmap
 bool ClassicFont::available(ClassicFontId id) const { return face(id, false).available; }
 ClassicFontMetrics ClassicFont::metrics(ClassicFontId id) const { return face(id, false).metrics; }
 
+// Converts UTF-8 to the game's 8-bit encoding (code page 437 umlauts and ß).
+// ASCII passes through unchanged.
 std::string ClassicFont::utf8_to_native(std::string_view text) {
     std::string out;
     for (size_t i = 0; i < text.size();) {
@@ -80,8 +96,8 @@ std::string ClassicFont::utf8_to_native(std::string_view text) {
             }
             if (native) { out.push_back(char(native)); ++i; continue; }
         }
-        // Unsupported code points occupy one original space, matching 2214's
-        // unsupported-byte behavior; consume their UTF-8 continuation bytes.
+        // Unsupported code points occupy one space, as the game's text routine
+        // does for bytes it cannot map; their UTF-8 continuation bytes are skipped.
         while (i < text.size() && (uint8_t(text[i]) & 0xc0) == 0x80) ++i;
         out.push_back(' ');
     }
@@ -118,7 +134,7 @@ int ClassicFont::draw_native(Image& image, ClassicFontId id, int x, int baseline
                 const auto px = pen + gx;
                 if (px < 0 || px >= image.width) continue;
                 const uint8_t pixel = g.pixels[size_t(gy) * g.width + gx] ? foreground : background;
-                // Native transparent blit 3893 skips palette index zero.
+                // The game's transparent blit also skips palette index zero.
                 if (opaque || (g.pixels[size_t(gy) * g.width + gx] && pixel != 0))
                     image.pixels.at(size_t(py) * image.width + size_t(px)) = pixel;
             }

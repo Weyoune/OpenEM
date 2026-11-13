@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// The "fever curve" in the main-menu header: league position of the own
+// club (and optionally of the next opponent) over the rounds played so far,
+// with rank labels and the matchday caption.
 #include "ui/classic_graph.hpp"
 
 #include <array>
@@ -7,23 +10,26 @@
 
 namespace em::ui {
 namespace {
-constexpr size_t kPackedHistory = 0x3bd9; // native DS:828b; byte per two rounds
-constexpr size_t kTableStride = 80;
-constexpr size_t kManagers = 0x0dcd;
-constexpr size_t kManagerStride = 0x1af;
-constexpr int kRegularRounds = 44; // original DS:07b6[0..2] = {44,44,44}
+constexpr size_t kPackedHistory = 0x3bd9; // save-state position history: one byte per two rounds (low nibble first)
+constexpr size_t kTableStride = 80;       // bytes per team in the statistics block
+constexpr size_t kManagers = 0x0dcd;      // manager records in the save state
+constexpr size_t kManagerStride = 0x1af;  // bytes per manager record
+constexpr int kRegularRounds = 44;        // rounds of the regular season in each of the three leagues
 
-// ovl13_0000 classifies only national teams 52..63. In particular both
-// sentinels 254/255 and European club IDs return zero in the original.
+// Only national teams 52..63 count as national here. In particular both
+// sentinels 254/255 and European club IDs are not national, as in the game.
 bool national_team(int team) { return team >= 52 && team < 64; }
 
+// The game stores matchday counters as signed chars.
 int native_matchday(int value) {
     return int(static_cast<int8_t>(static_cast<uint8_t>(value)));
 }
 
+// League (0..2) of the given club for the label placement.
 int own_division(const HokFile& h, int team) {
-    // DS:9746 uses the active manager's stored league. Recover that manager
-    // from the explicit own-team argument rather than assuming manager zero.
+    // The game uses the active manager's stored league (manager record +0xEB).
+    // Recover that manager from the explicit own-team argument (+0x14)
+    // rather than assuming manager zero.
     for (size_t manager = 0; manager < 6; ++manager) {
         const size_t record = kManagers + manager * kManagerStride;
         if (record + 0xeb >= h.state.size()) break;
@@ -31,10 +37,12 @@ int own_division(const HokFile& h, int team) {
             return h.state[record + 0xeb];
     }
     // A decoded ordinary club always has a matching manager; this also lets
-    // a minimal synthetic snapshot describe its league by native club range.
+    // a minimal synthetic snapshot describe its league by its club index range.
     return team < 36 ? team / 12 : 0;
 }
 
+// 0-based league position of team after round (0-based); throws if the
+// history lies outside the save state.
 int position(const HokFile& h, int team, int round) {
     const size_t offset = kPackedHistory + size_t(team) * kTableStride + size_t(round / 2);
     if (offset >= h.state.size()) throw FormatError("classic graph: truncated ranking history");
@@ -44,26 +52,28 @@ int position(const HokFile& h, int team, int round) {
 
 void centered(ClassicCanvas& canvas, int left, int right, int baseline,
               std::string_view text, uint8_t color) {
-    // Native 1902:0885 halves each term separately. Combining the two integer
-    // divisions can shift an odd-width label one pixel left.
+    // The game halves each term separately. Combining the two integer
+    // divisions would shift an odd-width label one pixel.
     const int x = left + (right - left) / 2 - canvas.font().measure(ClassicFontId::Mini, text) / 2;
     canvas.text(ClassicFontId::Mini, x, baseline, text, color);
 }
 }
 
+// Curve geometry: x = 5 + round*step with step = (8500/count)/100 (1 is
+// raised to 2), y = 47 + 2*position. Own curve colour 24, opponent 7.
 void draw_classic_ranking_graph(ClassicCanvas& canvas, const HokFile& h,
                                 int ownTeam, int opponent, bool leagueEvent) {
     if (ownTeam < 0 || ownTeam >= 150 || national_team(ownTeam)) return;
-    // Accept the customary -1 optional-opponent spelling as native FFh too.
+    // Accept the customary -1 for "no opponent" as the game's 0xFF too.
     opponent = int(static_cast<uint8_t>(opponent));
     if (national_team(opponent)) return;
 
-    const int next = native_matchday(h.matchday[0]); // source uses league zero unconditionally
+    const int next = native_matchday(h.matchday[0]); // the game uses league zero's counter unconditionally
     const int count = next - 1;
     const bool opponent_curve = opponent < 52;
     if (count > 0) {
         // Check the required range before drawing; do not synthesize history
-        // from current rankings or silently limit the original loop to44.
+        // from current rankings or silently limit the game's loop to 44.
         (void)position(h, ownTeam, count - 1);
         if (opponent_curve) (void)position(h, opponent, count - 1);
     }
@@ -101,8 +111,9 @@ void draw_classic_ranking_graph(ClassicCanvas& canvas, const HokFile& h,
         rank[1] = other_last + 1;
         label_y[1] = 49 + 2 * other_last;
 
-        // Exact16b1..1741: ranks stay fixed while one label's baseline moves.
-        // Top-four own rank separates downward; other own ranks upward.
+        // Labels closer than 7 pixels are pushed apart exactly as the game
+        // does: the ranks stay fixed while one label's baseline moves. With a
+        // top-four own rank the labels separate downward, otherwise upward.
         if (std::abs(label_y[0] - label_y[1]) < 7) {
             const int direction = rank[0] < 5 ? 1 : -1;
             while (std::abs(label_y[0] - label_y[1]) < 7) {
@@ -124,8 +135,9 @@ void draw_classic_ranking_graph(ClassicCanvas& canvas, const HokFile& h,
         canvas.text(ClassicFontId::Mini, x, y, std::to_string(rank[team]) + ".", team == 0 ? 24 : 7);
     }
 
-    //185f compares regular limit >= NEXT round: the caption is shown during
-    // the regular season, and suppressed after it. No clearing/fill occurs.
+    // The game compares the regular-season limit with the NEXT round: the
+    // caption is shown during the regular season and suppressed after it.
+    // Nothing is cleared or filled behind it.
     if (leagueEvent && next <= kRegularRounds)
         centered(canvas, 6, 110, 39, std::to_string(next) + ".Spieltag", 7);
 }

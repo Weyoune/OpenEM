@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Savegame preview header decoder and modal (see classic_preview.hpp).
 #include "ui/classic_preview.hpp"
 
 #include <array>
@@ -7,18 +8,22 @@
 
 namespace em::ui {
 namespace {
-constexpr size_t kPreviewBytes = 0xb0;
+constexpr size_t kPreviewBytes = 0xb0;  // size of the preview header
+// Manager records: four of 40 bytes from 0x10; names are 19-byte fields.
 constexpr size_t kRecordStart = 0x10, kRecordBytes = 40, kNameBytes = 19;
-// DS09EC has five entries; club managers normally use the first three.
+// The game's league name table has five entries ("L{nderteams" is ISO646 for Länderteams); club managers
+// normally use the first three.
 constexpr std::array<const char*, 5> kLeagues{
     "Bundesliga", "Zweite Liga", "Oberliga", "", "L{nderteams"};
 
+// The name field at offset at, up to the first NUL or 19 bytes.
 std::string native_name(const Bytes& bytes, size_t at) {
     size_t length = 0;
     while (length < kNameBytes && bytes[at + length]) ++length;
     return std::string(reinterpret_cast<const char*>(bytes.data() + at), length);
 }
 
+// Rejects a wrong version, more than four managers, an unknown league or an over-long name.
 void validate(const ClassicPreview& preview) {
     if (preview.version != "KRON_0.99" || preview.managers.size() > 4)
         throw FormatError("classic preview: invalid version/manager count");

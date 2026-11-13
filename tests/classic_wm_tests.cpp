@@ -1,4 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// View model of the classic world championship pages (ui/classic_wm.cpp): pages 11 and 12 show the standings of
+// the two groups of six nations, pages 8 and 9 their fixtures per round, page 10 the knockout round with all ties
+// played so far. Checked are the saved table order and raw values, flags and borders, click areas, the preview
+// date and the working date written for it, and the pages of real saves.
+//
+// Usage: classic_wm_tests [DATA [REFERENCE]] — with DATA (EM.EXE and graphics) and REFERENCE (START.HOK and,
+// when present, WMCHECK.HOK and WMPHASE.HOK) the real saves are checked as well.
+//
+// State fields used: 0x03B8 the group schedules (0x24 per group, 6 bytes per round), 0x04D8 the group results
+// (same layout), 0x05F8 the table order (6 per group), 0x02BB/0x02EB/0x0628 the table values, 0x8F85 the WM
+// phase, 0x8EB1 the knockout pairings, 0x8F60 their results, 0x03B7 the knockout cursor.
 #include "ui/classic_wm.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -7,15 +18,19 @@
 using namespace em;
 using namespace em::ui;
 namespace {
+// Throws with `message` when `value` is false.
 void require(bool value,const char* message) {if(!value) throw std::runtime_error(message);}
+// Writes `value` little-endian as 4 bytes at state offset `at`.
 void put32(HokFile& h,size_t at,uint32_t value) {
     for(size_t i=0;i<4;++i) h.state.at(at+i)=uint8_t(value>>(8*i));
 }
+// A state on 10.09.1993 with nations 52..57 and 58..63 in the two groups, the flags of START (team record +0x34
+// holds the flag picture minus 80), five rounds of schedule and no knockout pairings.
 HokFile fixture() {
     HokFile h; h.state.assign(47761,0);
     put32(h,0x8e21,10); put32(h,0x8e25,8); put32(h,0x8e29,1993);
     put32(h,0x8e2d,1); put32(h,0x8e31,1993); h.date={10,9,1993,1};
-    //Independent original START first-round nations and assets, data.json.
+    // The flag pictures of the twelve WM nations as START holds them.
     constexpr std::array<int,12> badges{134,125,127,142,130,122,138,126,139,131,141,128};
     for(int team=0;team<64;++team) {
         const auto text="NATION"+std::to_string(team);
@@ -32,9 +47,11 @@ HokFile fixture() {
     std::fill_n(h.state.begin()+0x8eb1,32,255);
     return h;
 }
+// A calendar with one WM day (event 0x10) on day 217 and the end of season on day 233.
 SeasonCalendar calendar() {
     SeasonCalendar c; c.events.assign(234,0); c.events[217]=0x10; c.events[233]=0xff; return c;
 }
+// Standings pages: rows, flags, number widths, click areas and raw table values.
 void table_fields_and_hits() {
     auto h=fixture(); auto c=calendar(); const auto before=h.state;
     const auto v=classic_wm_view(h,c);
@@ -72,6 +89,7 @@ void table_fields_and_hits() {
             raw.table[0].native_stats=="255:-241 200:150" && raw.table[0].color==7,
             "saved permutation, unsigned stats, uncapped phase minuspoints and no owner highlight");
 }
+// Fixture pages: the round shown, raw scores, flag borders of owned nations, click areas and navigation.
 void fixture_fields_and_hits() {
     auto h=fixture(); h.state.at(0x8f85)=6;
     constexpr std::array<uint8_t,6> last{56,52,53,54,55,57};
@@ -108,6 +126,8 @@ void fixture_fields_and_hits() {
             wide.fixtures[0].native_scores[0]=="%0" && wide.buttons[2].native=="Gruppe %2",
             "first fixture paint exposes caller width and manager5 trophy omission metadata");
 }
+// Knockout page: placeholder and preview date, the working date, the complete history of ties with headings,
+// result decoding and click areas.
 void knockout_history_and_date() {
     auto h=fixture(); const auto c=calendar(); const auto original=h.state;
     auto v=classic_wm_view(h,c,10);
@@ -155,7 +175,7 @@ void knockout_history_and_date() {
             "WM KO scan counts total history, not only current phase block");
     constexpr std::array<int,7> headings{48,83,104,125,139,153,167};
     for(size_t i=0;i<headings.size();++i) require(v.headings[i].baseline==headings[i],
-            "independent seven placement-heading ASM coordinate vector");
+            "the original's seven placement-heading coordinates");
     constexpr std::array<int,12> rows{55,62,69,76,90,97,111,118,132,146,160,174};
     for(size_t i=0;i<rows.size();++i) require(v.knockout[i].baseline==rows[i],
             "KO flattened tie ordering preserves all twelve historical rows");
@@ -167,14 +187,17 @@ void knockout_history_and_date() {
             classic_wm_hit(v,99,49).action==ClassicWmAction::None,
             "KO six-pixel hits split99/100 and force national club-info mode2 for both sides");
 }
+// Expected standings: per rank {team, index in group, points, minus points, goals for, goals against, flag}.
 using Rows=std::array<std::array<int,7>,6>;
+// Requires the six table rows of `v` to equal `expected`.
 void table_vector(const ClassicWmView& v,const Rows& expected) {
     for(size_t i=0;i<6;++i) {
         const auto& r=v.table[i];
         require(std::array<int,7>{r.team,r.index,r.points,r.minus_points,r.goals_for,r.goals_against,r.badge}==expected[i],
-                "original HOK differs from independent wm_table/data.json row vector");
+                "original HOK differs from the original's WM table");
     }
 }
+// Standings, fixtures and knockout of START and, when present, WMCHECK (end of the groups) and WMPHASE (semifinals).
 void original_files(const std::filesystem::path& data,const std::filesystem::path& refs) {
     const auto c=load_season_calendar(read_file(data/"EM.EXE"));
     const auto h=decode_hok(read_file(refs/"START.HOK")); const auto before=h.state;

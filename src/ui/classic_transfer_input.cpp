@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
+// Input handling of the transfer page: listing and recalling own players, offers on pool players, player
+// details and the Talent button.
 #include "ui/classic_app.hpp"
 
 namespace em::ui {
+// Click on the transfer page. Right click: player details of the row under the pointer, otherwise leave the
+// page. Left click on an own player puts him on the transfer list (with the original's refusals), on an own
+// list player answers an open offer or recalls him, on another pool player opens the purchase (x <= 250) or
+// loan offer.
 void ClassicApplication::click_transfer(int x,int y,bool right){
     const auto& h=snapshot();
     const int own=(y-29)/6,pool=(y-36)/16;
@@ -17,10 +23,11 @@ void ClassicApplication::click_transfer(int x,int y,bool right){
     if(y<14){action([](Game& game){game.finish_transfer_menu();return ActionResult{};});screen_=ClassicScreen::Main;return;}
     if(own_row){
         const size_t at=squad_block(m)+size_t(own)*52;
-        // ovr035:0DD8: a player who retires at the end of the season is refused before every other check.
+        // A player who retires at the end of the season is refused before every other check.
         if(h.state.at(at+0x18)&0x80){notice("Dieser Spieler hört\nam Saisonende auf.");return;}
         if(h.state.at(at+9)&0x40){open_sale_offer(0,own,transfer_native_si_);return;}
-        // ovr035:0FDD..10F6: three own list players first, then a player not owned by the manager (loan).
+        // Checked in the original's order: three own list players first, then a player not owned by the
+        // manager (loan).
         const int own_id=h.state.at(at+15);
         if(own_id&&h.state.at(0x4FC6+size_t(own_id-1)*33+0x1A)!=m){
             int listed=0;
