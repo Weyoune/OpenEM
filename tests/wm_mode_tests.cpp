@@ -211,6 +211,28 @@ int main(int argc, char** argv) {
             app.click(295, 55, false);  // the flag
             check(app.advancing(), "the WM starts with 29 nominees");
         }
+        // the "WM Vorbereitung" page against the original (em_realcode_boot capture of the WM-only game on 13.04.1994, Russia
+        // selected; WMPREP_original.hok = the original's state at that moment): all pixels but the original's mouse pointer
+        {
+            ClassicApplication app(data, output / "wmprep", national / "WMPREP_original.hok");
+            app.click(120, 100, false);  // Mannschaft
+            app.click(238, 220, false);  // Training -> WM Vorbereitung
+            app.click(128, 92, false);   // Russia
+            app.draw();
+            const Bytes expected = read_file(national / "WMPREP_original.rgb");
+            require(expected.size() == 320 * 240 * 3, "reference size");
+            const auto actual = app.canvas().argb();
+            size_t differences = 0;
+            for (size_t pixel = 0; pixel < actual.size(); pixel++) {
+                const int x = int(pixel % 320), y = int(pixel / 320);
+                if ((x >= 236 && x <= 243 && y >= 226) || (x >= 126 && x <= 140 && y >= 90 && y <= 106)) continue;  // the two pointers
+                int delta = 0;  // the capture scales the DAC as DOSBox does; allow that rounding
+                for (int c = 0; c < 3; c++) delta += std::abs(int((actual[pixel] >> (16 - 8 * c)) & 0xFF) - int(expected[pixel * 3 + size_t(c)]));
+                differences += delta > 12;
+            }
+            check(app.screen() == ClassicScreen::Friendlies && differences == 0,
+                  "friendlies page equals the original (" + std::to_string(differences) + " pixels differ)");
+        }
         if (failures) { std::cerr << failures << " failure(s)\n"; return 1; }
         std::cout << "wm_mode: ok\n";
         return 0;

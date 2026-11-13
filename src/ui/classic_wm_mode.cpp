@@ -20,6 +20,7 @@ struct ClassicWmModeState {
     int first = 1;            // ovl07_29ac: first listed player id (si), pages of 15
     int selected = -1;        // ovl07_1f27: chosen opponent (var_F, nation index 0..11) or -1
     bool away = false;        // var_6: "Heim" / "Auswärts"
+    bool played = false;      // after a friendly the panel keeps opponent, price and account, without the line overview
 };
 
 namespace {
@@ -188,13 +189,21 @@ void ClassicApplication::draw_friendlies() {
     for (int i = 0; i < 8; i++) {
         const int l = 0xC1, t = 0x1C + 0x14 * i;
         wm_panel(canvas_, l, t, l + 0x69, t + 0x12);
-        if (size_t(i) >= records.size()) continue;
+        if (size_t(i) >= records.size()) {  // an empty field shows the separator alone (REAL-CODE screen)
+            canvas_.text(mini, l + 0x40, t + 8, "-", 7);
+            continue;
+        }
+        // ovl07_1d30: inside the four frame lines (x0 = l + 3, y0 = t + 3) the home name centred in x0+1..x0+0x3B at y0+5,
+        // "-" at x0+0x3D, the away name centred on x0+0x39 at y0+0x0B, the score behind the "-"; a team with a manager
+        // (+0x16) in colour 0x11 (REAL-CODE screen of 13.11.2026)
         const auto& r = records[size_t(i)];
-        const uint8_t hc = r.home == nation ? 0x11 : 7, ac = r.away == nation ? 0x11 : 7;
-        canvas_.text(mini, l, t + 7, team_name(h, r.home), hc, -1, l + 0x3A);
-        canvas_.text(mini, l + 0x3C, t + 7, "-", 7);
-        canvas_.text(mini, l + 0x38 - 0x30, t + 0x0D, team_name(h, r.away), ac, -1, l + 0x3A);
-        canvas_.text(mini, l + 0x4C, t + 7, std::to_string(r.home_goals) + ":" + std::to_string(r.away_goals), 7);
+        const auto colour = [&](int team) { return uint8_t(h.teams[size_t(team)].raw[0x16] ? 0x11 : 7); };
+        canvas_.text(mini, l + 4, t + 8, team_name(h, r.home), colour(r.home), -1, l + 0x3E);
+        canvas_.text(mini, l + 0x40, t + 8, "-", 7);
+        canvas_.text(mini, l + 0x3C, t + 0x0E, team_name(h, r.away), colour(r.away), -1, l + 0x3C);
+        char score[16];
+        std::snprintf(score, sizeof score, "%2d:%2d", r.home_goals, r.away_goals);
+        canvas_.text(mini, l + 0x51, t + 8, score, 7);
     }
     wm_panel(canvas_, 0x15, 0x9D, 0xBF, 0xBB);
     if (st.selected < 0) {  // var_E: the "Heim" / "Auswärts" field
@@ -207,12 +216,13 @@ void ClassicApplication::draw_friendlies() {
     canvas_.rect(0x18, 0xA0, 0x18 + 0xA4, 0xA0 + 0x18, 1);
     constexpr const char* labels[3] = {"Gegner", "Kosten", "Kontostand"};  // as in the original (REAL-CODE screen of 13.11.2026)
     for (int i = 0; i < 3; i++) {
-        canvas_.text(mini, 0x18 + 3, 0xA0 + 7 + 7 * i, labels[i], 7);
-        canvas_.text(mini, 0x18 + 0x33, 0xA0 + 7 + 7 * i, ":", 7);
+        canvas_.text(mini, 0x18 + 3, 0xA0 + 7 + 7 * i, labels[i], 0);  // black like the original (REAL-CODE screen)
+        canvas_.text(mini, 0x18 + 0x33, 0xA0 + 7 + 7 * i, ":", 0);
     }
-    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 7, team_name(h, opponent), 7);
-    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 0x0E, money(friendly_price(h, opponent, !st.away)), 7);
-    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 0x15, money(national_account(h)), 7);
+    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 7, team_name(h, opponent), 0);
+    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 0x0E, std::to_string(friendly_price(h, opponent, !st.away) / 3) + " DM", 0);  // without thousands dots
+    canvas_.text(mini, 0x18 + 0x40, 0xA0 + 0x15, std::to_string(national_account(h) / 3) + " DM", 0);
+    if (st.played) return;  // REAL-CODE screen after the friendly: no line overview
     for (int side = 0; side < 2; side++) {
         const int team = side == 0 ? nation : opponent;
         const int x = 0x1F + 0x86 * side, y0 = 0xC2;
@@ -235,7 +245,7 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
     if (!wm_mode_) wm_mode_ = std::make_shared<ClassicWmModeState>();
     auto& st = *wm_mode_;
     if (right) {  // ovr031:2976
-        if (st.selected >= 0) { st.selected = -1; return; }
+        if (st.selected >= 0) { st.selected = -1; st.played = false; return; }
         screen_ = ClassicScreen::Main;
         return;
     }
@@ -249,6 +259,7 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
     if (cell == 20) {  // ovr031:290C
         st.away = !st.away;
         st.selected = -1;
+        st.played = false;
         return;
     }
     if (cell < 0) return;
@@ -256,6 +267,7 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
     if (kNations + cell == h.state.at(0x068C)) return;  // ovr031:2433: not against the own nation
     if (st.selected != cell) {  // first click: price and strengths (ovl07_1af6 runs the national auto line-up first)
         st.selected = cell;
+        st.played = false;
         action([](Game& g) { return ActionResult{{}, g.preview_friendly()}; });
         return;
     }
@@ -267,7 +279,8 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
         outcome = g.play_friendly(opponent, home);
         return ActionResult{{}, outcome.played};
     });
-    st.selected = -1;
+    if (outcome.played) st.played = true;  // the selection stays (the panel shows the new account)
+    else st.selected = -1;
     // the original returns to the page; the score stands in the list on the right (no notice)
     if (!outcome.refusal.empty()) notice(outcome.refusal);
 }
