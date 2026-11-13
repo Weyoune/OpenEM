@@ -672,6 +672,10 @@ if(TARGET em_realcode)
     # the second WM (1995) up to 21.04.: "auto" squad again at the appointment, a national player hurt in the first game
     add_test(NAME realcode_wm_only_1995 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_1995_day224_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_only_1995 PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;WMAUTOAT=16;GSTATE=783127;FORCEDAYS=24;DAYDIFF_CURSORS=0,0,0;DAYDIFF_IGNORE=6ae,6af")
+    # two whole years: the WM 1995 to its end, the season change 1995/96 (financial license of the coach's club) and the WM 1996
+    # appointment
+    add_test(NAME realcode_wm_only_two_years COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_1996_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_only_two_years PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;WMAUTOAT=16;GSTATE=783127;FORCEDAYS=32;DAYDIFF_CURSORS=0,0,0;DAYDIFF_IGNORE=6ae,6af")
     # club-mode new game: the generator world plus September 10 up to the first menu (Game::enter_first_menu) against the
     # original's state in the menu "Vor dem ersten Spieltag" (share market, finances, image, menu pass)
     add_test(NAME realcode_new_game_start COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/newgame_4880.bin" 3934523008)

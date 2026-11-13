@@ -74,7 +74,7 @@ void insert_financial_relegation(std::array<int, 4>& teams, const std::array<int
         throw FormatError("Season: invalid financial relegation case");
     std::array<bool, 4> seen{};
     for (int slot : ranking) {
-        if (slot < 0 || slot >= 4 || seen[size_t(slot)])
+        if (slot < 0 || slot >= 4)  // the original does not check for doubled entries (an unsorted order is all 0)
             throw FormatError("Season: invalid relegation ranking");
         seen[size_t(slot)] = true;
     }

@@ -3314,6 +3314,9 @@ void Game::play_wm_day() {
         int minutes = 60, phantom = -1;
         const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
                                               &minutes, false, knockout ? size_t(-1) : 0, &phantom, 1, true);
+        // the overtime minutes leave DS:A70E off manager 5 as well (REAL-CODE WM-only game: the routine of manager 0 after the
+        // 1994 final day with overtime, none after the 1995 one without)
+        if (minutes > 60 && !std::getenv("EM_OLD_WMOTCLUB")) national_hurt_today_ = true;
         squad.on_minute = nullptr;
         squad.on_chance = nullptr;
         squad.on_shot = nullptr;
@@ -3916,7 +3919,11 @@ void Game::new_season() {
                                    division >= 0 && division < 2 ? withdrawals[size_t(division)] : 0)) continue;
         const size_t group = size_t(division);
         auto& work = license_work[group];
-        const auto order = relegation_[group].order();
+        auto order = relegation_[group].order();
+        // "Nur WM": no relegation round was played; the stored, never sorted order bytes (state 0x0604 + group * 6) count (REAL-CODE WM-only
+        // game 1995/96: all 0, the withdrawn club goes to slot 0)
+        if (wm_only() && !std::getenv("EM_OLD_WMONLYLICENSE"))
+            for (size_t i = 0; i < 4; i++) order[i] = save_.state.at(kGroupOrder + 12 + group * 6 + i);
         insert_financial_relegation(work, order, division, mgr_[size_t(m)].team, withdrawals[group]);
         withdrawals[group]++;
         for (size_t slot = 0; slot < work.size(); slot++) {
@@ -3954,9 +3961,9 @@ void Game::new_season() {
         const League& ol = leagues_[2];
         std::array<int, kHokLeagueSize> by_place{};
         for (int s = 0; s < kHokLeagueSize; s++) by_place[size_t(ol.rows[size_t(s)].position)] = ol.first_team + s;
-        // "Nur WM": no Oberliga table was played; the order list DS:5CCB (state 0x8EDC + 24) decides (REAL-CODE WM-only game)
+        // "Nur WM": no Oberliga table was played; the order list DS:5CCB (League::ranking, state 0x8EDC + 24) decides (REAL-CODE WM-only game)
         if (wm_only() && !std::getenv("EM_OLD_WMONLYOBERLIGA"))
-            for (int s = 0; s < kHokLeagueSize; s++) by_place[size_t(s)] = save_.state.at(0x8EDC + 2 * kHokLeagueSize + size_t(s));
+            for (int s = 0; s < kHokLeagueSize; s++) by_place[size_t(s)] = ol.first_team + ol.ranking[size_t(s)];
         int previous = -1;
         for (int k = 0; k < 2; k++) {
             const int down = by_place[size_t(kHokLeagueSize - 1 - k)];
@@ -4870,7 +4877,8 @@ g_draw_scope = "cup/euro/playoff/wm"; if (std::getenv("EM_DEBUG_DAYFLOW")) std::
     if (event == kEventWorldChampionship) play_wm_day();
     // the line-up screen of a national injury leaves DS:A70E at manager 0, so the manager routine 146e:0c89 of the WM branch
     // is no longer kept off the club: injuries, offers and training of manager 0 run at once (REAL-CODE WM-only game, WM 1995)
-    if (national_hurt_today_ && !std::getenv("EM_OLD_WMHURTCLUB")) {
+    // (only on the days of the WM branch routine: day % 7 == 0 or (day + 3) % 7 == 0 of the following day)
+    if (national_hurt_today_ && (day_ % 7 == 0 || (day_ + 3) % 7 == 0) && !std::getenv("EM_OLD_WMHURTCLUB")) {
         squad_injuries(day_ % 7 == 0, false, 0, 0);
         make_offers();
         train_squad();
@@ -4901,7 +4909,7 @@ g_draw_scope = "match-injuries";
     // The branch calls 146e:0c89 once with DS:A70E = 5 (not in a manager loop); which squads it reaches with N > 1 is open,
     // the call stays with manager 0 (docs/MEHRSPIELER_PLAN.md step 7).
     // WM-only mode: no club days, so no club processing on the free WM dates either (REAL-CODE WM-only game, 20.04.)
-    if (world_phase && !(wm_only() && wm_round_ < 8 && !std::getenv("EM_OLD_WMONLYCLUB")) && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
+    if (world_phase && !(wm_only() && (wm_round_ < 8 || !std::getenv("EM_OLD_WMONLYGUARD")) && !std::getenv("EM_OLD_WMONLYCLUB")) && (national_coach_ < 0 ? event == kEventWorldChampionship : event == 0) && (day_ % 7 == 0 || (day_ + 3) % 7 == 0)) {
         if (national_coach_ >= 0) weekly_team_drift();
         // today's healing was already prepared; on day % 7 == 0 the routine heals the week once more (REAL-CODE Köln period 146:
         // an injury of 3 weeks on 13.04. is over by 28.04., the training-injury roll of 28.04. includes the player)
