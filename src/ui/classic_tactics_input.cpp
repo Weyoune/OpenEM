@@ -5,7 +5,7 @@ namespace em::ui {
 namespace { bool hit(int x,int y,int l,int t,int r,int b){return x>=l&&x<=r&&y>=t&&y<=b;} }
 
 void ClassicApplication::open_tactics(){
-    tactics_plan_=load_tactics(snapshot());tactics_view_.reset();screen_=ClassicScreen::Tactics;
+    tactics_plan_=load_tactics(snapshot(),squad_manager());tactics_view_.reset();screen_=ClassicScreen::Tactics;  // national coach: block 5
 }
 void ClassicApplication::finish_tactics(ClassicScreen target){
     if(tactics_plan_){

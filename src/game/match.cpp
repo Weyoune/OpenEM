@@ -967,7 +967,11 @@ struct MatchRun::Impl {
                     working[s].line = (*outer)[s].line;
                     changed = true;
                 }
-            if (changed) apply_effort(side == 0 ? h : a, 0, 0, &working, m->effort_control, 2);
+            // the effort follows the situation of the running score (REAL-CODE WM-only game: goalie change at 3:1 in a
+            // friendly keeps 60 = base + lead; with 0:0 the level situation gave 80)
+            const int own = std::getenv("EM_OLD_LINEUPSCORE") ? 0 : (side == 0 ? score.home : score.away);
+            const int other = std::getenv("EM_OLD_LINEUPSCORE") ? 0 : (side == 0 ? score.away : score.home);
+            if (changed) apply_effort(side == 0 ? h : a, own, other, &working, m->effort_control, 2);
         }
     }
     // MatchRun::take_tactics: the tactics screen of ovl14_24bc (both buttons on the board) changed the manager's controls

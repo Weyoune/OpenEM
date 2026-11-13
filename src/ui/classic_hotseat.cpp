@@ -13,6 +13,8 @@
 namespace em::ui {
 
 int ClassicApplication::active_manager() const { return session_.loaded() ? session_.active_manager() : 0; }
+// the squad of the line-up page and its player pages: the national squad (block 5) for the national coach
+int ClassicApplication::squad_manager() const { return session_.loaded() ? session_.game().lineup_manager() : 0; }
 
 std::string ClassicApplication::manager_name(int manager) {
     const Bytes& s = snapshot().state;

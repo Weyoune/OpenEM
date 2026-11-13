@@ -25,7 +25,7 @@ namespace {
 constexpr auto mini=ClassicFontId::Mini,flow=ClassicFontId::Flow,bold=ClassicFontId::NewBold;
 std::string padded(int value,int width){std::string result=std::to_string(value);if(int(result.size())<width)result.insert(0,size_t(width-int(result.size())),'%');return result;}
 }
-void ClassicApplication::draw_lineup(){draw_classic_lineup(canvas_,snapshot(),active_manager(),selected_line_,lineup_cells_?&*lineup_cells_:nullptr,lineup_cells_?&lineup_six_:nullptr);}
+void ClassicApplication::draw_lineup(){draw_classic_lineup(canvas_,snapshot(),squad_manager(),selected_line_,lineup_cells_?&*lineup_cells_:nullptr,lineup_cells_?&lineup_six_:nullptr);}
 void ClassicApplication::open_strengths(int league){
     action([](Game& game){game.enter_strengths();return ActionResult{};});
     strengths_league_=league;strengths_mode_=0;begin_page_working(ClassicScreen::Strengths);
@@ -139,8 +139,8 @@ void ClassicApplication::finish_page(){
 }
 void ClassicApplication::draw_tactics(){
     if(!tactics_plan_)open_tactics();
-    if(!tactics_view_)tactics_view_=std::make_unique<HokFile>(preview_tactics(snapshot(),*tactics_plan_));
-    draw_classic_tactics(canvas_,*tactics_view_,tactics_plan_->preset,active_manager());
+    if(!tactics_view_)tactics_view_=std::make_unique<HokFile>(preview_tactics(snapshot(),*tactics_plan_,squad_manager()));
+    draw_classic_tactics(canvas_,*tactics_view_,tactics_plan_->preset,squad_manager());
 }
 
 void ClassicApplication::bevel(int x1,int y1,int x2,int y2,int edge,int fill){

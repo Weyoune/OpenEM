@@ -259,7 +259,15 @@ ActionResult Session::apply_observed(const std::function<ActionResult(Game&)>& a
         Game* staged = next.get();
         next->set_match_observer([this, staged](int minute, const std::vector<LiveMatch>& matches) { match_observer_(*staged, minute, matches); });
     }
-    ActionResult result = action(*next);
+    ActionResult result;
+    {
+        struct LiveScope {  // changes from the minute loop (board centre: line-up, tactics) belong to the running game
+            Game*& slot;
+            ~LiveScope() { slot = nullptr; }
+        } live_scope{live_game_};
+        if (match_observer_) live_game_ = next.get();
+        result = action(*next);
+    }
     next->set_match_observer({});
     commit(std::move(next), before);
     if (!result.message.empty()) add_news(result.message);

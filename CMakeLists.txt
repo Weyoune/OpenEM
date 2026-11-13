@@ -662,6 +662,24 @@ if(TARGET em_realcode)
     # friendlies wrote (state 15.04.1994)
     add_test(NAME realcode_wm_friendly_day218 COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_friendly_day218_4880.bin" 3934523008)
     set_tests_properties(realcode_wm_friendly_day218 PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;FRIENDLY=58:1,61:0;GSTATE=783127;FORCEDAYS=2;DAYDIFF_IGNORE=6ae,6af")
+    # live board orders during the friendly (clicks of the coach on his board in the original): effort bar (88), offence bar (7),
+    # lamp of defence line 3; the original takes a click at the start of the next minute, the classic UI writes it into the
+    # running game after the minute's frame (here minute 29); state and both draw sequences equal (DRAWSTRICT)
+    set(EM_LIVE "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/live")
+    foreach(live "effort;29:57:88;friendly_effort_4880.bin" "offence;29:57:-1:7;../wm_friendly_4880.bin" "line;29:57:-1:-1:2;friendly_line_4880.bin")
+        list(GET live 0 name)
+        list(GET live 1 order)
+        list(GET live 2 state)
+        add_test(NAME realcode_wm_friendly_live_${name} COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${EM_LIVE}/${state}" 3934523008)
+        set_tests_properties(realcode_wm_friendly_live_${name} PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;FRIENDLY=58:1;LIVEORDER=${order};DRAWLOG=${EM_LIVE}/friendly_${name}_draws.txt;DRAWSTRICT=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    endforeach()
+    # goalie change from the board centre (line-up page during the friendly, minute 29): APPEL out, SELIGER in; the effort
+    # follows the running score, the record of the nation is valued anew, APPEL keeps his appearance
+    add_test(NAME realcode_wm_friendly_live_goalie COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${EM_LIVE}/friendly_goalie_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_friendly_live_goalie PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;FRIENDLY=58:1;LIVELINEUP=29:1:0:5;DRAWLOG=${EM_LIVE}/friendly_goalie_draws.txt;DRAWSTRICT=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
+    # the national coach's tactics page in the menu (effort and offence AUTOM -> SEMI), then the friendly
+    add_test(NAME realcode_wm_friendly_tactics COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${EM_LIVE}/friendly_tactics_4880.bin" 3934523008)
+    set_tests_properties(realcode_wm_friendly_tactics PROPERTIES ENVIRONMENT "GENSTART=1;WMAUTO=1;TACTICSEDIT=2:1,3:1;FRIENDLY=58:1;DRAWLOG=${EM_LIVE}/friendly_tactics_draws.txt;DRAWSTRICT=1;GSTATE=783127;FORCEDAYS=0;DAYDIFF_IGNORE=6ae,6af")
     # the same game over six WM days (live national round, gate, head-to-head, national table rows) against the original's
     # state at the step start of 19.04.1994 (REAL-CODE 12.11.2026; national squad picked automatically)
     add_test(NAME realcode_wm_only_days COMMAND em_realcode_daydiff "${EM_DATA}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_start_4880.HOK" "${CMAKE_CURRENT_SOURCE_DIR}/tests/data/world/wm_day222_4880.bin" 3934523008)

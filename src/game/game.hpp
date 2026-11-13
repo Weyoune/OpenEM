@@ -216,6 +216,7 @@ public:
     // ovl07_1f27: opening the friendlies page (national coach before the WM) sets every nominee's exhaustion to 70.
     bool enter_friendlies();
     bool preview_friendly();  // first click on a flag: line overview (auto line-up of the national squad)
+    int lineup_manager() const;  // the squad of the line-up page: 5 (national squad) for the national coach
     struct FriendlyOutcome {
         bool played = false;
         std::string refusal;  // native notice text when the game was refused
@@ -547,6 +548,9 @@ private:
     // Legacy OEMv1 retains its historical2/3 import policy in GameCheckpoint.
     std::array<std::array<uint8_t,2>,6> line_counts_{};
     LineRotation national_rotation_;
+    std::vector<HokSquadPlayer>* live_national_ = nullptr;  // the working national squad of a running national match (live line-up)
+    std::array<bool, 29> national_played_{};  // slots taken off by a live line-up change (their appearance stays booked)
+    HumanSquad* live_national_human_ = nullptr;  // the national HumanSquad of a running national match (live tactics)
     PenaltyTimers national_timers_;  // DS:D096 row of the national coach (not saved; zero after loading)
     std::array<GroupTable, 2> euro_groups_{};
     GroupTable euro_final_{};

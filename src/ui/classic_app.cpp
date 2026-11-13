@@ -151,7 +151,8 @@ void ClassicApplication::live_minute(const std::vector<LiveMatch>& matches){
         const Game& game=session_.game();
         for(const LiveMatch& m:matches)for(int side=0;side<2;side++){
             const int team=side==0?m.home:m.away;
-            if(team==game.human_team()&&team>=0&&size_t(team)<game.save().teams.size())const_cast<MatchRun&>(*m.run).take_tactics(side,game.save().teams[size_t(team)]);
+            const bool own=team==game.human_team()||(game.lineup_manager()==5&&team==game.national_team());  // national coach: his nation
+            if(own&&team>=0&&size_t(team)<game.save().teams.size())const_cast<MatchRun&>(*m.run).take_tactics(side,game.save().teams[size_t(team)]);
         }
     }
     if(live_idle_){
@@ -336,6 +337,26 @@ void ClassicApplication::tick(){
         }
     }catch(const std::exception& e){notice(e.what());}
 }
+bool ClassicApplication::play_observed(const std::function<ActionResult(Game&)>& fn){
+    pending_match_frames_.clear();
+    pending_human_match_=true;pending_league_day_=false;pending_event_=kEventWorldChampionship;
+    live_skip_=false;live_fast_=false;live_base_=0;live_out_=0;live_orders_.clear();live_centre_until_.reset();live_tactics_=false;
+    live_day_=pump_!=nullptr;
+    if(live_day_){match_frames_.clear();live_scenes_=session_.game().settings().flags[9];}
+    if(live_day_)g_scene_replay=[this](const SceneCall& c,const GoalScene& s,int play){return live_scene(c,s,play);};
+    ActionResult result;
+    try{result=session_.apply_observed(fn);}catch(const std::exception& e){live_day_=false;g_scene_replay=nullptr;pending_match_frames_.clear();notice(e.what());return false;}
+    g_scene_replay=nullptr;
+    const bool live=live_day_||live_skip_;live_day_=false;
+    invalidate();
+    if(result.accepted){
+        if(!live)begin_match_view();
+        else if(live_skip_)match_frames_.clear();
+        else if(!match_frames_.empty())match_frame_until_=classic_ticks()+1000;
+    }
+    pending_match_frames_.clear();live_skip_=false;
+    return result.accepted;
+}
 void ClassicApplication::request_exit(){
     if(stadium_build_||native_notice_until_||sale_quote_)return; //native modal phases must finish
     advancing_=false;
@@ -432,7 +453,7 @@ void ClassicApplication::finish_timed_native_notice(){
     native_notice_return_main_=false;update_stadium_hover();
 }
 void ClassicApplication::open_player(int slot,int manager){
-    if(manager<0)manager=active_manager();  // hot seat: the squad of the manager at the menu
+    if(manager<0)manager=squad_manager();  // hot seat: the squad of the manager at the menu (national coach: block 5)
     try{
         const auto squad=hok_squad(snapshot(),manager);
         if(slot<0||size_t(slot)>=squad.size())return;

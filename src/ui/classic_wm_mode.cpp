@@ -263,22 +263,10 @@ void ClassicApplication::click_friendlies(int x, int y, bool right) {
     const bool home = !st.away;
     Game::FriendlyOutcome outcome;
     // ovl05_0e35 plays the game through ovl06_161d with the minute display of a WM game (ovl06_081d sets up the screen)
-    pending_match_frames_.clear();
-    pending_human_match_ = true;
-    pending_league_day_ = false;
-    pending_event_ = kEventWorldChampionship;
-    try {
-        session_.apply_observed([&](Game& g) {
-            outcome = g.play_friendly(opponent, home);
-            return ActionResult{{}, outcome.played};
-        });
-        invalidate();
-    } catch (const std::exception& e) {
-        notice(e.what());
-        return;
-    }
-    if (outcome.played) begin_match_view();
-    pending_match_frames_.clear();
+    play_observed([&](Game& g) {
+        outcome = g.play_friendly(opponent, home);
+        return ActionResult{{}, outcome.played};
+    });
     st.selected = -1;
     // the original returns to the page; the score stands in the list on the right (no notice)
     if (!outcome.refusal.empty()) notice(outcome.refusal);

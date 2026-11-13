@@ -73,6 +73,8 @@ private:
     void action(const std::function<ActionResult(Game&)>& fn);
     void route_submenu(int item);
     void start_advance();
+    // a national friendly with its minute display (as a day: with the pump the minutes run live and take board clicks)
+    bool play_observed(const std::function<ActionResult(Game&)>& fn);
     void autosave();
     void open_files(bool saving);
     void refresh_files();
@@ -162,6 +164,7 @@ private:
     void open_player(int slot,int manager=-1);  // -1: the active manager
     // Hot seat (classic_hotseat.cpp): the manager at the menu, his name, and the hand-over of the menu
     int active_manager() const;
+    int squad_manager() const;
     std::string manager_name(int manager);
     bool hand_over_menu();
     // A question to one manager at the same seat (FUN_00146858 with his index: his name as the title, -1 = "An Alle:"),

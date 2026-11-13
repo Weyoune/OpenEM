@@ -187,6 +187,10 @@ bool Game::enter_friendlies() {
     return true;
 }
 
+int Game::lineup_manager() const {
+    return national_coach_ >= 0 && national_coach_ == active_manager_ ? 5 : active_manager_;
+}
+
 // ovl07_1af6, the line overview of a selected opponent (first click on a flag): for the own nation it runs the automatic
 // line-up ovl09_26dc of the national squad first (REAL-CODE WM-only game, friendly page on 13.04.1994)
 bool Game::preview_friendly() {

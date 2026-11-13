@@ -1725,6 +1725,24 @@ StockResult Game::trade_shares(size_t company,uint32_t quantity,bool sell) {
 
 ManualLineupResult Game::change_lineup(size_t slot,int selected_line,ManualLineupAction action,const bool* six_override,
                                      const std::array<std::array<int,6>,5>* cells_override,bool in_match){
+    // the national coach sets up the national squad (manager block 5), also from the board during a national match
+    // (REAL-CODE WM-only game: goalie change in a friendly)
+    if(lineup_manager()==5&&!std::getenv("EM_OLD_NATLINEUPPAGE")){
+        if(live_national_)  // who was on the ice keeps his appearance (REAL-CODE: the goalie taken off in minute 29 is booked)
+            for(size_t s=0;s<live_national_->size()&&s<national_played_.size();s++)
+                if((*live_national_)[s].role!=0&&(*live_national_)[s].line!=0)national_played_[s]=true;
+        const auto result=manual_lineup(save_,5,slot,selected_line,action,six_override,cells_override,in_match);
+        if(result.changed&&live_national_){  // the running match takes role and line before its next minute (take_lineup)
+            const auto fresh=hok_squad(save_,5);
+            for(size_t s=0;s<fresh.size()&&s<live_national_->size();s++){
+                (*live_national_)[s].role=fresh[s].role;
+                (*live_national_)[s].line=fresh[s].line;
+            }
+        }
+        // the record of the nation is valued with the new line-up (REAL-CODE: 87 84 87 90 50 51 after the goalie change)
+        if(result.changed&&!std::getenv("EM_OLD_NATLINEUPREFRESH"))refresh_national_team();
+        return result;
+    }
     const int a=active_manager_;
     if(national_coach_>=0||mgr_[a].team>=kFirstNationalTeam)throw FormatError("Aufstellung ist in dieser Phase nicht verfügbar.");
     const auto result=manual_lineup(save_,a,slot,selected_line,action,six_override,cells_override,in_match);
@@ -1735,6 +1753,14 @@ ManualLineupResult Game::change_lineup(size_t slot,int selected_line,ManualLineu
 }
 
 bool Game::set_tactics(const TacticsPlan& plan){
+    if(lineup_manager()==5&&!std::getenv("EM_OLD_NATTACTICS")){  // the national coach: tactics of manager block 5 and the nation
+        commit_tactics(save_,plan,5);
+        if(live_national_human_){  // a running national match takes the controls with MatchRun::take_tactics
+            configure_human_tactics(*live_national_human_,save_,5);
+            live_national_human_->penalty_effort_adjustment=penalty_effort_adjustment(save_,national_team());
+        }
+        return true;
+    }
     const int a=active_manager_;
     if(national_coach_>=0||mgr_[a].team>=kFirstNationalTeam)return false;
     commit_tactics(save_,plan,a);
@@ -3101,11 +3127,13 @@ void Game::book_national_match(int own_goals, const MatchStats& stats, int side,
         if (sp.player < 0) continue;
         const size_t at = block + slot * kSquadRecord;
         save_.state.at(at + 0x1A) &= 0x7F;
-        if (sp.role == 0 || sp.line == 0) continue;
+        const bool played = slot < national_played_.size() && national_played_[slot] && !std::getenv("EM_OLD_NATPLAYED");
+        if ((sp.role == 0 || sp.line == 0) && !played) continue;
         save_.state.at(at + 8)++;
         increment16(at + 0x20);
         save_.state.at(at + 0x1A) |= 0x80;
     }
+    national_played_.fill(false);
 }
 
 void Game::credit_national_chance(bool penalty, bool goal, const HokTeam* on_ice, const std::vector<HokSquadPlayer>* working) {
@@ -3234,6 +3262,17 @@ std::vector<Tie> Game::national_live_round(const std::vector<HokPairing>& draw, 
     };
     const HumanSide side{nation, &squad, &live_stats};
     int minutes = 60, phantom = -1;
+    struct LiveNational {  // a live line-up of the coach writes into this working squad (change_lineup)
+        std::vector<HokSquadPlayer>*& slot;
+        ~LiveNational() { slot = nullptr; }
+    } live_national{live_national_};
+    struct LiveNationalHuman {
+        HumanSquad*& slot;
+        ~LiveNationalHuman() { slot = nullptr; }
+    } live_national_human{live_national_human_};
+    live_national_human_ = &squad;
+    live_national_ = &national;
+    national_played_.fill(false);
     const auto ties = play_cup_round_live(save_.teams, draw, rng_, side, &brng_, match_observer_ ? &match_observer_ : nullptr,
                                           &minutes, false, knockout ? size_t(-1) : 0, &phantom, level, true);
     // the overtime minutes leave DS:A70E off manager 5 as well (REAL-CODE WM-only game: the routine of manager 0 after the
