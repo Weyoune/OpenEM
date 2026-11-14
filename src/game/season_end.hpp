@@ -32,6 +32,7 @@
 #include "formats/binary.hpp"
 #include "formats/hok.hpp"
 #include "game/match.hpp"
+#include "game/rules.hpp"
 #include "game/scorers.hpp"
 
 namespace em {
@@ -108,8 +109,9 @@ NewPlayer new_player(BorlandRandom& rng);
 //   skill 1 of both kinds += rand(trend - 1, trend + 1); skill 2 likewise (the rand(0, 2) chance is
 //   drawn but ignored in this mode); both kept in the bounds of the club's class (first division
 //   69..94, second 39..73, Oberliga 15..43, read from EM.EXE)
-//   form of both kinds = rand(45, 55); the loop runs over three bytes, so the first energy byte
-//   (+0x1E) is overwritten with rand(45, 55) as well (original quirk)
+//   form of both kinds = rand(45, 55); in version 1.00 the loop runs over three bytes, so the
+//   energy of the first defence line (+0x1E) is overwritten with rand(45, 55) as well (original
+//   quirk, one more draw per team); version 1.30 re-rolls the two form values only (reroll_form)
 // This matches the club values of the original from the last day of a season to the first of the next.
 struct RatingBounds {
     std::array<std::array<int, 2>, 3> bounds{};  // [class] = {low, high}
@@ -119,6 +121,11 @@ struct RatingBounds {
 RatingBounds load_rating_bounds(const Bytes& exe);
 // mode 3: new season (class bounds, the skill 2 step always happens); mode 1: the twice-weekly drift of the daily loop:
 // r = rand(0, 2), trend = rand(0, 2r + 2) - 2, bounds 1..99, skill 2 changes only if rand(0, 2) == 0.
-void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode = 3);
+void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode = 3,
+                 const GameRules& rules = GameRules{});
+// The last step of the rating, which every team of the routine gets (the national teams only this
+// step): form of both kinds = rand(45, 55), and in version 1.00 also the energy of the first defence
+// line (+0x1E) = rand(45, 55).
+void reroll_form(HokTeam& team, GameRandom& rng, const GameRules& rules);
 
 }  // namespace em

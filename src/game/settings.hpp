@@ -8,6 +8,7 @@
 //   state 0xB94F: game speed word, 0..70 in steps of 10 (the page shows speed / 9 + 1 of eight penguins).
 //   state 0xAEB5: end year word (>= 2000 = never), state 0xAEB4: start level (shown as 6 - level).
 #include <array>
+#include <string>
 #include "formats/hok.hpp"
 
 namespace em {
@@ -19,6 +20,7 @@ struct GameSettings {
     int speed = 0;                       // 0..70
     int end_year = 0;                    // last season year, >= 2000 = no end
     int level = 0;                       // stored level (5 - start menu choice)
+    std::string version = "V1.00";       // version text of EM.EXE ("V1.00" or "V1.30", see GameRules); set by Game::settings
 };
 
 constexpr int kSettingWidgets = 15;  // 14 flags + scrolling of the current manager

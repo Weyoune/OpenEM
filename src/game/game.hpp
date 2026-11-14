@@ -205,6 +205,9 @@ public:
     const ManagerBudget& budget() const { return mgr_[size_t(active_manager_)].budget; }
     int image() const { return mgr_[size_t(active_manager_)].image; }
     int game_level() const { return finance_.level; }  // 0 professional .. 5 beginner
+    // The rule set of the EM.EXE the game runs with (version 1.00 or 1.30, see game/rules.hpp);
+    // rules().label() is the version text of the settings page.
+    const GameRules& rules() const { return rules_; }
     int human_team() const { return mgr_[size_t(active_manager_)].team; }
     int managers() const { return managers_; }
     int active_manager() const { return active_manager_; }
@@ -513,6 +516,7 @@ private:
 
     HokFile save_;
     uint64_t exe_fingerprint_ = 0;
+    GameRules rules_;  // version 1.00 or 1.30 of EM.EXE (game/rules.hpp)
     ScheduleTables schedule_;
     SeasonCalendar calendar_;
     FinanceTables finance_;

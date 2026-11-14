@@ -214,6 +214,18 @@ int attendance_strength(const HokTeam& team) {
     return sum / 6;
 }
 
+int attendance_kind(GateCompetition competition, const GameRules& rules) {
+    switch (competition) {
+    case GateCompetition::Cup:
+    case GateCompetition::Playoffs: return 1;
+    case GateCompetition::EuroGroup: return 2;
+    case GateCompetition::EuroFinal: return rules.v130() ? 2 : 0;
+    case GateCompetition::League:
+    case GateCompetition::WorldChampionship: return 0;
+    }
+    return 0;
+}
+
 // Spectators of a home game and the ticket income booked to the balance; league games also update the
 // attendance statistics. The random draws and their order follow the original.
 long home_attendance(const FinanceTables& t, ManagerBudget& b, const AttendanceMatch& m, BorlandRandom& rng) {

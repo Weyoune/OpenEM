@@ -24,12 +24,19 @@ int buyer_mean(const Bytes& s,int buyer,int16_t leftover_offset){
     const size_t at=0x17e7+size_t(shifted);
     return (int(s.at(at+24))+s.at(at+26))/2;
 }
+// Version 1.30: the mean of the buyer's own four skill values, (skill 1 of defence and attack at
+// +24/+25 plus skill 2 at +26/+27) / 4.
+int own_buyer_mean(const Bytes& s,int buyer){
+    const size_t at=0x17e7+size_t(buyer)*61;
+    return (int(s.at(at+24))+s.at(at+25)+s.at(at+26)+s.at(at+27))/4;
+}
 // Strengthens the buying team with the sold player: delta = clamp((strength - mean + 10) / 3, 1, 10),
 // then for a random kind (0 = defence, 1 = attack) skill 1 (+24) and skill 2 (+26) of the team record
-// each rise by rand(delta - 1, delta + 1), wrapping at 256. `mean` is the value from buyer_mean.
+// each rise by rand(delta - 1, delta + 1), wrapping at 256. `mean` is the value from buyer_mean
+// (1.00) or own_buyer_mean (1.30).
 void adjust_buyer(Bytes& s,int buyer,int strength,int mean,BorlandRandom& rng){
     const size_t team=0x17e7+size_t(buyer)*61;
-    // The original reads the same offset pair twice (for the mean) before the kind is drawn at random.
+    // Version 1.00 reads the same offset pair twice (for the mean) before the kind is drawn at random.
     const int delta=std::clamp((strength-mean+10)/3,1,10);
     const size_t kind=size_t(native_sale_range(rng,0,1));
     s.at(team+24+kind)=uint8_t(s.at(team+24+kind)+native_sale_range(rng,delta-1,delta+1));
@@ -80,11 +87,14 @@ bool current_native_sale(const HokFile& h,const SaleQuote& q){
         (q.row[9]&(q.block==4?0x80:0x40))&&h.state.at(0x4fa5+size_t(q.id)*33+26)==q.manager&&
         std::equal(q.row.begin(),q.row.end(),h.state.begin()+std::ptrdiff_t(at));
 }
-bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool sell,int* actual_buyer){
+bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool sell,int* actual_buyer,const GameRules& rules){
     if(!current_native_sale(h,q))return false;
     const size_t at=row_at(q.block,q.slot),global=0x4fa5+size_t(q.id)*33;
+    // Version 1.00: the mean is read before anything changes, so a lookup outside the team records
+    // fails without a state change. Version 1.30 reads the actual buyer's record when the boost is
+    // applied; the team records do not change in between.
     int mean=0;
-    if(sell){
+    if(sell&&!rules.v130()){
         const int buyer=q.block==4?q.bidder:h.state.at(row_at(q.block,q.slot+1)+22);
         if(q.block==4||buyer<64)mean=buyer_mean(h.state,buyer,q.native_si);
     }
@@ -100,11 +110,11 @@ bool finish_native_sale(HokFile& h,BorlandRandom& rng,const SaleQuote& q,bool se
         // come from the row that now occupies the slot.
         buyer=h.state.at(at+22);h.state.at(global+29)=uint8_t(buyer);
         const int strength=(int(h.state.at(at+16))+h.state.at(at+17)+h.state.at(at+18))/3;
-        if(buyer<64)adjust_buyer(h.state,buyer,strength,mean,rng);
+        if(buyer<64)adjust_buyer(h.state,buyer,strength,rules.v130()?own_buyer_mean(h.state,buyer):mean,rng);
     }else{
         h.state.at(global+29)=uint8_t(buyer);
         const int strength=(int(h.state.at(at+16))+h.state.at(at+17)+h.state.at(at+18))/3;
-        adjust_buyer(h.state,buyer,strength,mean,rng);
+        adjust_buyer(h.state,buyer,strength,rules.v130()?own_buyer_mean(h.state,buyer):mean,rng);
         put32(h.state,cash,i32(le32(h.state,cash)+uint32_t(q.amounts.net)));
         native_remove_storage_row(h,4,q.slot,10);
     }

@@ -157,6 +157,7 @@ void store_cup_participants(HokFile& save, const std::vector<HokPairing>& draw, 
 Game::Game(const Bytes& exe,const Bytes& save,uint32_t seed,const Game* previous)
     : save_(decode_hok(game_save_hok(exe, save))),
       exe_fingerprint_(game_data_fingerprint(exe)),
+      rules_(detect_game_rules(exe)),
       schedule_(load_schedule_tables(exe)),
       calendar_(load_season_calendar(exe)),
       finance_(load_finance_tables(exe, save_)),
@@ -513,7 +514,7 @@ int Game::team_rank(int team) const {
 
 // Books the gate of a home game of `manager`'s club against `guest`: computes the attendance (one draw from the Borland
 // stream inside home_attendance), remembers it for the match screen, and for a league game (league_statistics) stores
-// the attendance in thousands in the manager's per-home-game list (+0xFE + game index). `kind` is 0 league, 1 cup, ...;
+// the attendance in thousands in the manager's per-home-game list (+0xFE + game index). `kind` is the competition bonus (attendance_kind);
 // the classes and ranks of both clubs feed the attendance formula.
 void Game::home_game(int guest, int kind, int home_class, int guest_class, int home_rank, int guest_rank,
                      bool league_statistics, int manager) {
@@ -659,7 +660,7 @@ void Game::play_league_day() {
                 bool gate_booked = false;
                 if (hi == mg.team) {
                     g_draw_scope = "gate";
-                    home_game(ai, 0, team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true, m);
+                    home_game(ai, attendance_kind(GateCompetition::League, rules_), team_class(finance_, hi), team_class(finance_, ai), team_rank(hi), team_rank(ai), true, m);
                     gate_booked = true;
                 }
                 manager_day(gate_booked, m);
@@ -913,7 +914,7 @@ void Game::play_cup_day() {
             if (mg.squad.minimum_players > 0 && selected_match_players(mg.squad) < mg.squad.minimum_players) continue;
             if (live && p.home == mg.team) {  // the gate of a home game is booked before the matches, as in the league
                 g_draw_scope = "gate";
-                home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
+                home_game(p.away, attendance_kind(GateCompetition::Cup, rules_), team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
                 gate_before[size_t(m)] = true;
             }
             manager_day(gate_before[size_t(m)], m);
@@ -1010,7 +1011,7 @@ void Game::play_cup_day() {
             log_.push_back(line);
             if (std::getenv("EM_DEBUG_CUP")) std::fprintf(stderr, "%s marker %d\n", line, t.result.decision_marker);
             if (!forfeited && own_side == 0 && !gate_before[size_t(m)])
-                home_game(t.away, 1, team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
+                home_game(t.away, attendance_kind(GateCompetition::Cup, rules_), team_class(finance_, t.home), team_class(finance_, t.away), team_rank(t.home),
                           team_rank(t.away), false, m);
         }
     }
@@ -1675,7 +1676,7 @@ bool Game::finish_sale_offer(const SaleQuote& quote,bool sell){
     const size_t cash=manager_block(a)+0x18f;
     if(sell)for(size_t byte=0;byte<4;++byte)save_.state.at(cash+byte)=uint8_t(uint32_t(mgr_[a].budget.balance)>>(8*byte));
     int buyer=-1;
-    if(!finish_native_sale(save_,brng_,quote,sell,&buyer))return false;
+    if(!finish_native_sale(save_,brng_,quote,sell,&buyer,rules_))return false;
     if(sell){
         HokPlayer* player=player_by_exe_index(quote.id);
         if(!player)throw FormatError("Sale: missing global player");
@@ -2082,11 +2083,9 @@ void Game::weekly_team_drift() {
     g_draw_scope = "team-drift";
     for (int t = 0; t < 64; t++) {
         if (t < kFirstNationalTeam) {
-            rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_, 1);
+            rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_, 1, rules_);
         } else {
-            save_.teams[size_t(t)].form[0] = int(rng_.range(45, 55));
-            save_.teams[size_t(t)].form[1] = int(rng_.range(45, 55));
-            save_.teams[size_t(t)].energy[0][0] = int(rng_.range(45, 55));
+            reroll_form(save_.teams[size_t(t)], rng_, rules_);
         }
     }
 }
@@ -2361,8 +2360,8 @@ void Game::play_euro_day() {
             std::snprintf(line, sizeof line, "European cup: %s - %s %d:%d", save_.teams[size_t(home)].name.c_str(),
                           save_.teams[size_t(away)].name.c_str(), res.home, res.away);
             log_.push_back(line);
-            if (!forfeited && own_side == 0)  // gate kind 2 in the groups, 3 in the final round
-                home_game(away, r < 6 ? 2 : 3, team_class(finance_, home), team_class(finance_, away), team_rank(home), 5, false, m);
+            if (!forfeited && own_side == 0)  // group phase rounds 0-5, final round 6-11
+                home_game(away, attendance_kind(r < 6 ? GateCompetition::EuroGroup : GateCompetition::EuroFinal, rules_), team_class(finance_, home), team_class(finance_, away), team_rank(home), 5, false, m);
         }
     };
     if (r < 6) {
@@ -2675,9 +2674,9 @@ void Game::play_playoff_day(bool setup_only) {
                 if (p.home == mg.team) {
                     g_draw_scope = "gate";
                     if (pi >= knockout_pairs && !std::getenv("EM_OLD_RELGATE"))
-                        home_game(p.away, 1, team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
+                        home_game(p.away, attendance_kind(GateCompetition::Playoffs, rules_), team_class(finance_, p.home), team_class(finance_, p.away), team_rank(p.home), team_rank(p.away), false, m);
                     else
-                        home_game(p.away, 1, 0, 0, position(p.home), position(p.away), false, m);
+                        home_game(p.away, attendance_kind(GateCompetition::Playoffs, rules_), 0, 0, position(p.home), position(p.away), false, m);
                     gate_before[size_t(m)] = true;
                 }
                 manager_day(gate_before[size_t(m)], m);
@@ -2752,7 +2751,7 @@ void Game::play_playoff_day(bool setup_only) {
             std::snprintf(line, sizeof line, "play-offs: %s - %s %d:%d (series %d:%d)", save_.teams[size_t(home)].name.c_str(),
                           save_.teams[size_t(away)].name.c_str(), r.home, r.away, s.wins_higher, s.wins_lower);
             log_.push_back(line);
-            if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, 1, 0, 0, position(home), position(away), false, m);
+            if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, attendance_kind(GateCompetition::Playoffs, rules_), 0, 0, position(home), position(away), false, m);
             if (live_round && !forfeited) {
                 // the overtime breaks of the live loop rest the managed pair after its own game too, as on a cup day
                 // (see play_cup_day; e.g. a game decided in minute 61 gets +19 for both clubs and the squad)
@@ -2833,7 +2832,7 @@ void Game::play_playoff_day(bool setup_only) {
                     std::snprintf(line, sizeof line, "relegation round %d: %s - %s %d:%d", round + 1,
                                   save_.teams[size_t(home)].name.c_str(), save_.teams[size_t(away)].name.c_str(), r.home, r.away);
                     log_.push_back(line);
-                    if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, 1, team_class(finance_, home), team_class(finance_, away), 5, 5, false, m);
+                    if (!forfeited && own_side == 0 && !gate_before[size_t(m)]) home_game(away, attendance_kind(GateCompetition::Playoffs, rules_), team_class(finance_, home), team_class(finance_, away), 5, 5, false, m);
                 }
             }
             t.finish_round();
@@ -3391,7 +3390,7 @@ std::vector<Tie> Game::national_live_round(const std::vector<HokPairing>& draw, 
             // as the club gate: the position byte of the team's table row (+0x2A of the 64 rows; national teams 52..63)
             am.home_rank = save_.state.at(0x3BAC + size_t(p.home) * 0x50 + 0x2A);
             am.away_rank = save_.state.at(0x3BAC + size_t(p.away) * 0x50 + 0x2A);
-            am.kind = 3;
+            am.kind = attendance_kind(GateCompetition::WorldChampionship, rules_);
             am.league_statistics = false;
             if (std::getenv("EM_DEBUG_GATE"))
                 std::fprintf(stderr, "national gate vs %d: places %d/%d price %d stadium %d %d %d\n", p.away, budget.places[0], budget.places[1],
@@ -4319,18 +4318,15 @@ void Game::new_season() {
     // the regional swaps directly)
     for (int t = 0; t < kFirstNationalTeam; t++) {
         const HokTeam before = save_.teams[size_t(t)];
-        rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_);
+        rerate_team(save_.teams[size_t(t)], team_class(finance_, t), rating_, rng_, 3, rules_);
         if (std::getenv("EM_DEBUG_RERATE")) {
             const HokTeam& x = save_.teams[size_t(t)];
             std::fprintf(stderr, "rerate %d%s class %d: %d %d %d %d -> %d %d %d %d\n", t, t == mgr_[0].team ? " (human)" : "", team_class(finance_, t),
                          before.skill1[0], before.skill1[1], before.skill2[0], before.skill2[1], x.skill1[0], x.skill1[1], x.skill2[0], x.skill2[1]);
         }
     }
-    for (int t = kFirstNationalTeam; t < 64; t++) {  // the national teams only re-roll their form (as in the weekly drift)
-        save_.teams[size_t(t)].form[0] = int(rng_.range(45, 55));
-        save_.teams[size_t(t)].form[1] = int(rng_.range(45, 55));
-        save_.teams[size_t(t)].energy[0][0] = int(rng_.range(45, 55));
-    }
+    for (int t = kFirstNationalTeam; t < 64; t++)  // the national teams only re-roll their form (as in the weekly drift)
+        reroll_form(save_.teams[size_t(t)], rng_, rules_);
     // the clubs of each division change places at random (55 swaps per division,
     // which reshuffles the schedule), the national teams 20 times (the national teams first)
     for (int i = 0; i < 20; i++) {

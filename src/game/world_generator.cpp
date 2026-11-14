@@ -22,6 +22,7 @@
 #include "game/scorers.hpp"
 #include "game/lineup.hpp"
 #include "game/redistribution.hpp"
+#include "game/rules.hpp"
 #include "game/schedule.hpp"
 #include "game/sponsors.hpp"
 #include "game/team_refresh.hpp"
@@ -169,11 +170,12 @@ struct World {
     Bytes players = Bytes(size_t(kPlayerIds) * kPlayerRec, 0);  // player records, index = ID
     const Bytes& db;                                             // KB\23.vga
     ContractTables contracts;
+    GameRules rules;  // version 1.00 or 1.30 of EM.EXE
     BorlandRandom brng;
     GameRandom grng{0};  // the game's generator starts at 0 with the program and is never seeded
     std::vector<std::string> log;  // step markers and draw counts
 
-    World(const Bytes& exe, const Bytes& d) : db(d), contracts(load_contract_tables(exe)) {
+    World(const Bytes& exe, const Bytes& d) : db(d), contracts(load_contract_tables(exe)), rules(detect_game_rules(exe)) {
         std::copy_n(exe.begin() + long(kDgroupFile), kDgroupInit, ds.begin());
     }
     uint8_t& d(size_t o) { return ds.at(o); }            // byte of the data image
@@ -495,7 +497,7 @@ struct World {
     // ---- club values of the season start (game generator) -----------------------------------
     // Every club before the nations gets a trend rand(0, 2s + 6) - 6 with s = rand(0, 6) and
     // moves both skill pairs by trend +-1, clamped to the bounds of its rating class; all teams up
-    // to the last nation get fresh form values rand(45, 55).
+    // to the last nation get fresh form values rand(45, 55) (see rerate_team in season_end.hpp).
     void rerate_clubs() {
         const int first = int(int8_t(d(dsFirstNation)));
         for (int t = 0; t < first + 12; t++) {
@@ -513,7 +515,9 @@ struct World {
                     r[0x1A + k] = uint8_t(std::clamp(v, lo, hi));
                 }
             }
-            for (size_t k = 0; k < 3; k++) r[0x1C + k] = uint8_t(g(45, 55));  // the third step is +0x1E
+            // version 1.00 runs the loop over three bytes: the third step overwrites the energy of the first
+            // defence line (+0x1E); version 1.30 re-rolls the two form values only
+            for (size_t k = 0; k < (rules.v130() ? 2u : 3u); k++) r[0x1C + k] = uint8_t(g(45, 55));
         }
     }
 };

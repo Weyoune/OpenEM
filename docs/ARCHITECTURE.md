@@ -66,6 +66,16 @@ OpenEM bildet auch die Eigenheiten des Originals nach, soweit sie das Spielgesch
 Werte, die erst am nächsten Tag aktualisiert werden, oder Zähler, die mehrere Zwecke teilen. Die Kommentare an der
 jeweiligen Stelle erklären, was das Original dort tut und warum OpenEM es genauso macht.
 
+### Version 1.00 und 1.30
+
+OpenEM bildet Version 1.00 nach. Der Patch auf 1.30 tauscht nur `EM.EXE` aus und ändert wenige Regeln:
+den Stärkezuwachs eines Computervereins, der einem Manager einen Spieler abkauft (`sale_quote.cpp`), die
+Neubewertung der Teams, die in 1.00 nebenbei die Kraft der ersten Abwehrreihe überschreibt und dafür eine
+Zufallszahl mehr zieht (`season_end.*`, `world_generator.cpp`), und den Zuschauerbonus der EuroCup-Endrunde
+(`finances.*`, `attendance_kind`). `game/rules.hpp` erkennt die Version einmal am Versionstext der EXE
+(`detect_game_rules`); `Game` hält das Ergebnis (`Game::rules()`) und reicht es an diese Regeln weiter. Ohne
+1.30-EXE bleibt alles bei 1.00.
+
 ## Oberfläche (`src/ui`)
 
 - `session.*` ist die Schnittstelle zwischen Oberfläche und Spiel: Laden und Speichern (`save_io.cpp`), die

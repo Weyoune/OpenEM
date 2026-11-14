@@ -117,7 +117,13 @@ RatingBounds load_rating_bounds(const Bytes& exe) {
     return b;
 }
 
-void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode) {
+void reroll_form(HokTeam& team, GameRandom& rng, const GameRules& rules) {
+    team.form[0] = int(rng.range(45, 55));
+    team.form[1] = int(rng.range(45, 55));
+    if (!rules.v130()) team.energy[0][0] = int(rng.range(45, 55));  // the third loop step writes +0x1E
+}
+
+void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRandom& rng, int mode, const GameRules& rules) {
     const auto& lim = b.bounds[size_t(std::clamp(team_class, 0, 2))];
     const int lo = mode == 3 ? lim[0] : 1, hi = mode == 3 ? lim[1] : 99;
     const int step = mode == 3 ? 3 : 1;  // the original passes 1 or 3
@@ -132,9 +138,7 @@ void rerate_team(HokTeam& team, int team_class, const RatingBounds& b, GameRando
         if (change) v += int(rng.range(trend - 1, trend + 1));
         team.skill2[k] = std::clamp(v, lo, hi);
     }
-    team.form[0] = int(rng.range(45, 55));
-    team.form[1] = int(rng.range(45, 55));
-    team.energy[0][0] = int(rng.range(45, 55));  // the third loop step writes +0x1E
+    reroll_form(team, rng, rules);
 }
 
 }  // namespace em

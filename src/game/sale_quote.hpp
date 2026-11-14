@@ -6,6 +6,7 @@
 // All money values are in the internal unit (DM x 3) and computed with the original's 32-bit
 // wrap-around arithmetic.
 #include "game/contracts.hpp"
+#include "game/rules.hpp"
 
 namespace em {
 // The money of a sale offer: gross price, severance paid out of it (listed players only), net = gross - severance.
@@ -14,10 +15,11 @@ struct SaleAmounts { int32_t gross=0,severance=0,net=0; };
 struct SaleQuote {
     int block=0,slot=0,id=0,bidder=0,years=0;  // squad block/slot of the player, player ID, bidding team (row +0x16), contract years
     int manager=0;  // the selling manager; block is his club block (== manager) or the transfer list 4
-    // A leftover value the original carries over from the transfer screen's input handling (the
+    // A leftover value version 1.00 carries over from the transfer screen's input handling (the
     // UI passes the last click coordinate) into the buyer lookup: the buyer's mean strength is
     // read at byte offset (buyer * 61 + native_si) into the team records, which is not
     // necessarily the buyer's own record. Kept so the exact bytes the original reads are used.
+    // Version 1.30 does not use it (see GameRules).
     int16_t native_si=0;
     SaleAmounts amounts;
     std::array<uint8_t,52> row{};  // copy of the squad row when the offer was made
@@ -45,6 +47,8 @@ bool current_native_sale(const HokFile&,const SaleQuote&);
 // team to the buyer and his owner to 6 (free), and strengthens the buying team (for a club row
 // only teams below 64; see adjust_buyer in sale_quote.cpp). For a club row the original takes the buyer from the row that
 // moved up into the slot after the removal, a quirk that is preserved; `actual_buyer` receives the
-// team that got the player. Returns false if the quote is stale.
-bool finish_native_sale(HokFile&,BorlandRandom&,const SaleQuote&,bool sell,int* actual_buyer=nullptr);
+// team that got the player. `rules` selects where the buyer's mean strength comes from (1.00:
+// through SaleQuote::native_si, 1.30: the buyer's own record). Returns false if the quote is stale.
+bool finish_native_sale(HokFile&,BorlandRandom&,const SaleQuote&,bool sell,int* actual_buyer=nullptr,
+                        const GameRules& rules=GameRules{});
 } // namespace em

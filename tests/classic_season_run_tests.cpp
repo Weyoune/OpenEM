@@ -3,7 +3,8 @@
 // (tests/scripts/classic_season_run.txt, ui/classic_script.hpp): a whole season with cup, play-offs and the
 // season change, saving and loading in between, into the next season. Prints the run's log and the list of UI gaps.
 //
-// Usage: classic_season_run_tests DATA SCRIPT OUTPUT — EM_SEASON_RUN_TRACE set prints every step while it runs.
+// Usage: classic_season_run_tests DATA SCRIPT OUTPUT [SAVE] — without SAVE the run starts at the start menu of a new
+// game, with SAVE from that savegame. EM_SEASON_RUN_TRACE set prints every step while it runs.
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -17,14 +18,14 @@ using namespace em::ui;
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 4) throw std::runtime_error("classic_season_run_tests DATA SCRIPT OUTPUT");
+        if (argc != 4 && argc != 5) throw std::runtime_error("classic_season_run_tests DATA SCRIPT OUTPUT [SAVE]");
         const fs::path data = path_from_text(argv[1]), script_path = path_from_text(argv[2]);
         const fs::path output = fs::absolute(path_from_text(argv[3])) / std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         fs::create_directories(output);
         std::ifstream script(script_path);
         if (!script) throw std::runtime_error("Skript fehlt: " + path_text(script_path));
         const auto started = std::chrono::steady_clock::now();
-        ClassicApplication app(data, output, {});  // no save: the start menu of a new game
+        ClassicApplication app(data, output, argc == 5 ? path_from_text(argv[4]) : fs::path());  // no save: the start menu
         const bool verbose = std::getenv("EM_SEASON_RUN_TRACE") != nullptr;
         const ClassicRestart restart = [&](const std::string& file) {
             return std::make_unique<ClassicApplication>(data, output, file.empty() ? fs::path() : data / path_from_text(file));

@@ -583,7 +583,9 @@ void ClassicApplication::click(int x,int y,bool right){
         if(contract_editor_&&contract_editor_->season)click_contract_editor(x,y,right);
         return;
     }
-    if(advancing_)return;
+    // While days are advanced the main menu takes no clicks; a screen opened from the running match (line-up,
+    // tactics, Einstellungen: live_screen_) does, otherwise its changes and its exit would be lost.
+    if(advancing_&&!live_screen_)return;
     if(career_click(x,y,right))return;
     if(screen_==ClassicScreen::Advertising){click_advertising(x,y,right);return;}
     if(screen_==ClassicScreen::Stadium){click_stadium(x,y,right);return;}

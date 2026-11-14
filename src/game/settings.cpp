@@ -47,7 +47,11 @@ void set_game_speed(HokFile& h, int speed) {
     h.state.at(kSpeed + 1) = uint8_t(speed >> 8);
 }
 
-GameSettings Game::settings() const { return read_settings(save_); }
+GameSettings Game::settings() const {
+    GameSettings s = read_settings(save_);
+    s.version = rules_.label();
+    return s;
+}
 int Game::toggle_setting(int widget, int manager) { return em::toggle_setting(save_, widget, manager); }
 void Game::set_game_speed(int speed) { em::set_game_speed(save_, speed); }
 

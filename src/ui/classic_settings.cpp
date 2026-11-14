@@ -49,7 +49,7 @@ void draw_classic_settings(ClassicCanvas& c, const GameSettings& s, int manager)
     }
     speed_row(c, s.speed);
     // Version line: end year of the game ("Nie." from 2000 on) and the level shown as 6 - level.
-    std::string version = "V1.00 - Ende: ";
+    std::string version = s.version + " - Ende: ";  // "V1.00" or "V1.30", from EM.EXE
     version += s.end_year < 2000 ? std::to_string(s.end_year) : " Nie.";
     version += " (Level " + std::to_string(6 - s.level) + ")";
     c.text(kSmall, 62, 10, version, 1);

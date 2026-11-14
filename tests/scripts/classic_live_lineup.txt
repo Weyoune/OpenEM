@@ -1,0 +1,22 @@
+# Changes during a running match (classic_season_run_tests with the start save MONAT1.HOK): the minutes are shown
+# live as in the window; a click on the middle of the own board (Kölner EC, left) opens the line-up, a change is
+# made there, a right click leaves it and the match goes on. Earlier the line-up took no clicks while the day was
+# advanced: neither the change nor the exit worked, and the match never continued.
+live
+click 290 50
+wait 3000
+expect modal=match
+click 115 20
+wait 800
+expect screen=Lineup
+# the second goalkeeper into the team, then a forward of line 1 out
+click 60 60
+wait 300
+click 60 100
+wait 300
+expect screen=Lineup
+rclick 300 5
+wait 800
+expect screen=Main
+expect modal=match
+echo Aufstellung im Spiel geändert und verlassen

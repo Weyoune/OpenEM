@@ -9,6 +9,7 @@
 #include <fstream>
 #include <istream>
 #include <ostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -53,28 +54,63 @@ public:
     // not announced with `known-gap`.
     ClassicScriptReport run(std::istream& script) {
         ClockScope clock;
-        std::string line;
+        script_ = &script;
         try {
             settle_frame();
-            while (std::getline(script, line)) {
-                line_++;
-                if (!line.empty() && line.back() == '\r') line.pop_back();
-                const auto first = line.find_first_not_of(" \t");
-                if (first == std::string::npos || line[first] == '#') continue;
-                command(line.substr(first));
+            while (next_line())
                 if (app().finished()) { log("Das Programm wurde beendet."); break; }
-            }
         } catch (const ScriptError& e) {
             fail(e.what());
         } catch (const std::exception& e) {
             fail(std::string("Absturz: ") + e.what() + " (" + describe() + ")");
         }
+        if (aborted_) fail(*aborted_);  // a hang inside a running day (pump), unwound there
         for (const auto& gap : unknown_gaps_) fail("Unbekannte Lücke: " + gap);
         report_.ok = report_.failures.empty();
         return std::move(report_);
     }
 
 private:
+    // Reads and executes the next script line (blank lines and '#' comments are skipped). False at the end.
+    bool next_line() {
+        std::string line;
+        while (script_ && std::getline(*script_, line)) {
+            line_++;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const auto first = line.find_first_not_of(" \t");
+            if (first == std::string::npos || line[first] == '#') continue;
+            command(line.substr(first));
+            return true;
+        }
+        script_ = nullptr;
+        return false;
+    }
+    // The frontend pump after "live": called by the match minutes while a day is played, as the window's frame loop
+    // is. At each call the next script line runs (so clicks reach the running match); nested calls and calls after
+    // the end of the script only let the virtual clock run. A UI that stops moving for 10 virtual minutes after the
+    // end of the script ends the run: the running day is unwound with a ScriptError, which run() reports.
+    void pump() {
+        if (in_pump_) { settle_frame(); return; }
+        if (aborted_) throw ScriptError(*aborted_);
+        in_pump_ = true;
+        struct Reset { bool& flag; ~Reset() { flag = false; } } reset{in_pump_};
+        const std::string before = live_key();
+        if (!script_ || !next_line()) settle_frame();
+        if (live_key() != before || script_) stalled_since_ = script_now;
+        else if (script_now - stalled_since_ > 600000) {
+            aborted_ = "Die Oberfläche hängt im laufenden Spieltag (" + describe() + ")";
+            throw ScriptError(*aborted_);
+        }
+    }
+
+    // progress_key plus a hash of the picture: inside a running day the date and screen stay the same while the
+    // minutes move on, so the drawn frame tells whether the UI still moves.
+    std::string live_key() {
+        uint64_t h = 1469598103934665603ull;
+        for (const uint32_t px : app().canvas().argb()) h = (h ^ px) * 1099511628211ull;
+        return progress_key() + "|" + std::to_string(h);
+    }
+
     // --- reading the screen --------------------------------------------------------------------------------
     // Short description of the current screen, modal, category and text for log lines.
     std::string describe() {
@@ -326,6 +362,10 @@ private:
             settle_frame();
             log("Neustart" + (rest.empty() ? std::string() : " mit " + rest) + " (" + describe() + ")");
         } else if (word == "echo") log(rest + " (" + describe() + ")");
+        else if (word == "live") {  // matches are shown live as in the window; following lines run during the minutes
+            stalled_since_ = script_now;
+            app().set_pump([this] { pump(); });
+        }
         else throw ScriptError("Unbekannter Befehl: " + line);
     }
 
@@ -339,6 +379,10 @@ private:
     std::string last_seen_;
     long last_day_ = -1;
     int line_ = 0, contracts_no_ = 0, contract_count_ = 0, back_tries_ = 0;
+    std::istream* script_ = nullptr;  // the script being run (null at its end)
+    bool in_pump_ = false;            // a script line is running inside the pump
+    uint64_t stalled_since_ = 0;      // virtual time of the last visible change inside a running day
+    std::optional<std::string> aborted_;  // set when the running day was unwound because the UI hung
 };
 
 }  // namespace

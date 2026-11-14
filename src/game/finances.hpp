@@ -84,6 +84,7 @@
 
 #include "formats/binary.hpp"
 #include "formats/hok.hpp"
+#include "game/rules.hpp"
 #include "game/scorers.hpp"
 
 namespace em {
@@ -168,9 +169,18 @@ struct AttendanceMatch {
     int home_strength = 0, away_strength = 0;  // attendance_strength()
     int home_rank = 5, away_rank = 5;          // 0-based table position (> 11 counts as 5)
     int guest = -1;                            // team index of the guest
-    int kind = 0;  // 0 league; 1 / 2 other competitions (depending on the competition mode), capped at 3
+    int kind = 0;  // competition bonus A * (100 + 20 * kind) / 100, see attendance_kind; capped at 3
     bool league_statistics = true;  // the original books attendance records only for league games
 };
+
+// The competition of a home game, as far as the attendance is concerned.
+enum class GateCompetition { League, Cup, Playoffs, EuroGroup, EuroFinal, WorldChampionship };
+// The competition bonus kind of a home game. The original derives it from its competition mode:
+// kind = 1 for the DEB cup and the play-offs (relegation included), 2 for the European cup, 0 for
+// everything else. Version 1.00 only tests the mode of the European cup group phase, so the final
+// round and the national team's games (WM and friendlies) get 0; version 1.30 also gives the European
+// cup final round 2.
+int attendance_kind(GateCompetition competition, const GameRules& rules);
 
 // Class of a team: 0 first division (and European clubs), 1 second division, 2 Oberliga and
 // national teams.
