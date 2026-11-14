@@ -1,0 +1,70 @@
+# Builds OpenEM and the editor on Linux (x86_64), macOS (Apple Silicon) and Windows, runs the tests that need no
+# original game data, and packs a release archive per platform. On a version tag (v*) the archives are attached to
+# the GitHub release of that tag.
+name: build
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: linux-x86_64
+          - os: macos-14
+            name: macos-arm64
+          - os: windows-2022
+            name: win64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies (SDL2 video and audio back ends)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxinerama-dev \
+            libxfixes-dev libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev libdbus-1-dev libudev-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        working-directory: build
+        run: cpack -C Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenEM-${{ matrix.name }}
+          path: |
+            build/OpenEM-*.zip
+            build/OpenEM-*.tar.gz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(build/OpenEM-*.zip build/OpenEM-*.tar.gz)
+          gh release upload "${GITHUB_REF_NAME}" "${files[@]}" --clobber
