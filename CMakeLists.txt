@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.24)
 project(OpenEM VERSION 1.0.0 LANGUAGES CXX C)
 # The release of this build ("1.0.0-beta.3", "1.0.0"): package name and the version text of the program, which shows
 # it as "1.0 Beta 3" / "1.0" (settings page).
-set(OPENEM_RELEASE "1.0.0-beta.3")
+set(OPENEM_RELEASE "1.0.0-beta.4")
 string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.0$" "\\1.\\2" OPENEM_RELEASE_TEXT "${OPENEM_RELEASE}")
 string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.0-beta\\.([0-9]+)$" "\\1.\\2 Beta \\3" OPENEM_RELEASE_TEXT "${OPENEM_RELEASE_TEXT}")
 add_compile_definitions(OPENEM_VERSION="${PROJECT_VERSION}")
