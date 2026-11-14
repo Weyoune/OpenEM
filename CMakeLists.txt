@@ -6,6 +6,11 @@
 #   ctest --test-dir build -C Release
 cmake_minimum_required(VERSION 3.24)
 project(OpenEM VERSION 1.0.0 LANGUAGES CXX C)
+# The release of this build ("1.0.0-beta.3", "1.0.0"): package name and the version text of the program, which shows
+# it as "1.0 Beta 3" / "1.0" (settings page).
+set(OPENEM_RELEASE "1.0.0-beta.3")
+string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.0$" "\\1.\\2" OPENEM_RELEASE_TEXT "${OPENEM_RELEASE}")
+string(REGEX REPLACE "^([0-9]+)\\.([0-9]+)\\.0-beta\\.([0-9]+)$" "\\1.\\2 Beta \\3" OPENEM_RELEASE_TEXT "${OPENEM_RELEASE_TEXT}")
 add_compile_definitions(OPENEM_VERSION="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -155,6 +160,7 @@ add_library(em_classic STATIC
     src/ui/classic_misc_newmanager.cpp
     src/ui/classic_messages.cpp)
 target_link_libraries(em_classic PUBLIC em_game)
+target_compile_definitions(em_classic PRIVATE OPENEM_RELEASE_TEXT="${OPENEM_RELEASE_TEXT}")  # settings page
 # Statistiken pages (Frueher, Verein, Spieler, Fairplay, WM)
 target_sources(em_classic PRIVATE src/ui/classic_stats_players.cpp src/ui/classic_stats_history.cpp src/ui/classic_stats_club.cpp src/ui/classic_stats_wm.cpp src/ui/classic_stats_fairplay.cpp)
 # Match display (scoreboards, minute panel)
@@ -410,6 +416,14 @@ if(IS_DIRECTORY "${EM_DATA}")
     endif()
 endif()
 
+# Pixel comparisons with captures of the original draw the few deliberately changed places (save page path and
+# names, settings header, cup draw remnant) as the original does (classic_original_look in classic_canvas.hpp).
+foreach(test classic_settings classic_misc classic_career classic_contract_season)
+    if(TEST ${test})
+        set_tests_properties(${test} PROPERTIES ENVIRONMENT "EM_ORIGINAL_LOOK=1")
+    endif()
+endforeach()
+
 # Differential tests against the original program (private checkout only, see OPENEM_PRIVATE_DIR).
 option(EM_REALCODE "Build the differential tests of the private checkout" OFF)
 if(EM_REALCODE AND EXISTS "${OPENEM_PRIVATE_DIR}/cmake/realcode.cmake")
@@ -505,7 +519,7 @@ install(FILES README.md LICENSE THIRD_PARTY.md DESTINATION .)
 # Release archive: cpack -C Release (in the build folder) packs the install layout above
 set(CPACK_PACKAGE_NAME "OpenEM")
 set(CPACK_PACKAGE_VENDOR "OpenEM")
-set(CPACK_PACKAGE_VERSION "1.0.0-beta.3")
+set(CPACK_PACKAGE_VERSION "${OPENEM_RELEASE}")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Nachbau des Eishockey Managers (1993); benötigt die Originaldaten")
 # ZIP on Windows, tar.gz elsewhere; the archive name carries the platform (win64, linux-x86_64, macos-arm64)
 if(WIN32)

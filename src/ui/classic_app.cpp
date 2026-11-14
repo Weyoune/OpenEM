@@ -469,9 +469,10 @@ void ClassicApplication::refresh_files(){
     for(fs::directory_iterator it(file_directory_,ec),end;!ec&&it!=end;it.increment(ec)){
         const bool directory=it->is_directory(ec);if(ec)break;
         const std::string name=path_text(it->path().filename()),ext=upper(path_text(it->path().extension()));
-        files_.push_back({it->path(),upper(name),directory,ext==".HOK"||ext==".OEM"});
+        files_.push_back({it->path(),classic_original_look()?upper(name):name,directory,ext==".HOK"||ext==".OEM"});  // as spelt on disk
     }
-    std::stable_sort(files_.begin(),files_.end(),[](const FileEntry&a,const FileEntry&b){if(a.directory!=b.directory)return a.directory>b.directory;return a.name<b.name;});
+    // folders first, then by name ignoring upper and lower case
+    std::stable_sort(files_.begin(),files_.end(),[](const FileEntry&a,const FileEntry&b){if(a.directory!=b.directory)return a.directory>b.directory;return upper(a.name)<upper(b.name);});
     if(file_page_>=files_.size()&&file_page_)file_page_=0;
 }
 // Executes the file name field: enters a folder, or saves/loads the file (".HOK" is

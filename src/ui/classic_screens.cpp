@@ -29,16 +29,8 @@ namespace {
 constexpr auto mini=ClassicFontId::Mini,flow=ClassicFontId::Flow,bold=ClassicFontId::NewBold;
 // Decimal text left-padded to width with the blank digit '%'.
 std::string padded(int value,int width){std::string result=std::to_string(value);if(int(result.size())<width)result.insert(0,size_t(width-int(result.size())),'%');return result;}
-// UTF-8 text in capitals, as the game's file page shows names: ASCII letters and the Latin-1 letters à..þ (two-byte
-// sequences C3 A0..C3 BE, except the division sign) become their capitals; everything else stays as it is.
-std::string display_upper(std::string s){
-    for(size_t i=0;i<s.size();i++){
-        const unsigned char c=static_cast<unsigned char>(s[i]);
-        if(c<0x80)s[i]=char(std::toupper(c));
-        else if(c==0xC3&&i+1<s.size()){const unsigned char d=static_cast<unsigned char>(s[i+1]);if(d>=0xA0&&d<=0xBE&&d!=0xB7)s[i+1]=char(d-0x20);i++;}
-    }
-    return s;
-}
+// ASCII letters in capitals (the original look of the file page).
+std::string ascii_caps(std::string s){for(char& c:s)if(c>='a'&&c<='z')c=char(c-32);return s;}
 // Length of the UTF-8 sequence that starts with byte c (1 for stray continuation bytes).
 size_t utf8_length(unsigned char c){return c>=0xF0?4:c>=0xE0?3:c>=0xC0?2:1;}
 // The longest prefix of text (whole UTF-8 characters) that fits into width pixels in font id, with ".." appended
@@ -327,11 +319,14 @@ void ClassicApplication::draw_files(){
     canvas_.blit(4,150,169,20,0,9,8);canvas_.blit(4,174,169,20,9,9,8);
     canvas_.rect(88,187,290,193,4);canvas_.rect(88,197,290,203,4);
     // label and path as one string; a long path keeps its end (the current folder) visible
-    const std::string folder=virtual_file_path(file_directory_);
+    // The real folder of the computer (C: and D: are only the two buttons for the game and the save folder).
+    const std::string folder=classic_original_look()?virtual_file_path(file_directory_)
+                                                    :path_text(file_directory_.lexically_normal().make_preferred());
     if(is_ascii(folder)&&canvas_.font().measure_native(mini,"VERZEICHNIS: "+folder)<=255)canvas_.text_native(mini,35,192,"VERZEICHNIS: "+folder,1);
     else{const int label=canvas_.font().measure(mini,"VERZEICHNIS: ");canvas_.text(mini,35,192,"VERZEICHNIS: "+fit_tail(canvas_.font(),mini,folder,255-label),1);}
-    // label, then the typed name in capitals; a long name scrolls so that its end and the cursor stay visible
-    const std::string typed=fit_tail(canvas_.font(),mini,display_upper(filename_),198);
+    // label, then the typed name as typed (upper and lower case); a long name scrolls so that its end and the cursor
+    // stay visible
+    const std::string typed=fit_tail(canvas_.font(),mini,classic_original_look()?ascii_caps(filename_):filename_,198);
     canvas_.text(mini,35,202,"FILENAME      :",1);canvas_.text(mini,88,202,typed,1);
     if(filename_focus_){const int x=88+canvas_.font().measure(mini,typed);canvas_.rect(x,198,x+2,202,1);}
     constexpr const char* buttons[]={"A:","B:","C:","D:","E:","F:","G:","LÖSCHEN"};

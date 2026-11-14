@@ -48,12 +48,25 @@ void draw_classic_settings(ClassicCanvas& c, const GameSettings& s, int manager)
         for (int n = 0; n < 5; n++) c.rect(xs[n], ys[n], xs[n], ys[n], uint8_t(colors[n]));
     }
     speed_row(c, s.speed);
-    // Version line: end year of the game ("Nie." from 2000 on) and the level shown as 6 - level.
-    std::string version = s.version + " - Ende: ";  // "V1.00" or "V1.30", from EM.EXE
-    version += s.end_year < 2000 ? std::to_string(s.end_year) : " Nie.";
-    version += " (Level " + std::to_string(6 - s.level) + ")";
-    c.text(kSmall, 62, 10, version, 1);
-    c.text(kSmall, 62, 16, "RAM: " + std::to_string(kClassicSettingsFreeMemory) + " Bytes frei.", 2);
+    // Header: OpenEM with its release and the version of the original's EM.EXE it plays with (where the original shows
+    // its own version), below the end year of the game ("Nie." from 2000 on) and the level shown as 6 - level (where
+    // the original shows the free memory).
+#ifndef OPENEM_RELEASE_TEXT
+#define OPENEM_RELEASE_TEXT "1.0"
+#endif
+    if (classic_original_look()) {  // the original's header: its version, end year, level and the free memory
+        std::string version = s.version + " - Ende: ";
+        version += s.end_year < 2000 ? std::to_string(s.end_year) : " Nie.";
+        version += " (Level " + std::to_string(6 - s.level) + ")";
+        c.text(kSmall, 62, 10, version, 1);
+        c.text(kSmall, 62, 16, "RAM: " + std::to_string(kClassicSettingsFreeMemory) + " Bytes frei.", 2);
+        return;
+    }
+    c.text(kSmall, 62, 10, std::string("OpenEM ") + OPENEM_RELEASE_TEXT + " (EM " + s.version + ")", 1);
+    std::string game = "Ende: ";
+    game += s.end_year < 2000 ? std::to_string(s.end_year) : "Nie.";
+    game += " (Level " + std::to_string(6 - s.level) + ")";
+    c.text(kSmall, 62, 16, game, 2);
 }
 
 ClassicSettingsHit classic_settings_hit(int x, int y) {

@@ -152,8 +152,9 @@ void ClassicApplication::draw_cup_live() {
             for (int col = 0; col < 0x78; col++) cv.pixels().at(x + col, y + row) = below[i++];
     }
     // At a new game the original leaves a remnant where its question dialog stood: within rows 107..183 the left bars
-    // appear 3 pixels wider, i.e. x 157..159 keep the bar-slot texture beside the uncovered places. Reproduced here.
-    if (!c.in_day && !std::getenv("EM_OLD_LIVESTRIP")) {
+    // appear 3 pixels wider, i.e. x 157..159 keep the bar-slot texture beside the uncovered places. A display error of
+    // the original that only looks broken, so OpenEM leaves it out (shown with classic_original_look).
+    if (!c.in_day && classic_original_look()) {
         // the colours of a bar slot (8-bit RGB): top edge 60 80 90, body 30 50 60, bottom edge 20 30 50
         auto index_of = [&](uint8_t r, uint8_t g, uint8_t b) {
             const auto& pal = canvas_.palette().rgb;

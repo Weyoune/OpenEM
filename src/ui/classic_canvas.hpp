@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "ui/classic_font.hpp"
+#include <cstdlib>
 #include <map>
 #include <optional>
 
@@ -11,6 +12,13 @@
 // framed panels and bitmap text). Screens render into it and the frontend
 // converts the result to ARGB or a BMP.
 namespace em::ui {
+
+// OpenEM differs from the original's screens in a few places on purpose: the save page shows the real folder and
+// file names as spelt (the original: DOS drive paths in capitals), the settings page shows OpenEM's release (the
+// original: its version and the free memory), and the cup draw leaves out a display remnant of the original. With the
+// environment variable EM_ORIGINAL_LOOK set, these places are drawn exactly as the original does, for the pixel
+// comparisons with captures of the original.
+inline bool classic_original_look() { return std::getenv("EM_ORIGINAL_LOOK") != nullptr; }
 
 class ClassicCanvas {
 public:
