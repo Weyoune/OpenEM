@@ -7,6 +7,7 @@
 // cymbal, hi-hat with the noise generator). Timing of the envelope rates uses the data-sheet times; it is not a
 // cycle-exact emulation, which the music does not need.
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace em {

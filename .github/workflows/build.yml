@@ -43,7 +43,12 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
       - name: Build
+        if: runner.os == 'Windows'
         run: cmake --build build --config Release --parallel
+
+      - name: Build (keep going after errors, so one run shows all of them)
+        if: runner.os != 'Windows'
+        run: cmake --build build --config Release --parallel -- -k
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
