@@ -495,7 +495,7 @@ install(FILES README.md LICENSE THIRD_PARTY.md DESTINATION .)
 # Release archive: cpack -C Release (in the build folder) packs the install layout above
 set(CPACK_PACKAGE_NAME "OpenEM")
 set(CPACK_PACKAGE_VENDOR "OpenEM")
-set(CPACK_PACKAGE_VERSION "1.0.0-beta.1")
+set(CPACK_PACKAGE_VERSION "1.0.0-beta.2")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Nachbau des Eishockey Managers (1993); benötigt die Originaldaten")
 # ZIP on Windows, tar.gz elsewhere; the archive name carries the platform (win64, linux-x86_64, macos-arm64)
 if(WIN32)
