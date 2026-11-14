@@ -31,7 +31,7 @@ constexpr std::array<std::array<std::string_view,5>,10> information{{
 // Surface kind of a contract slot: 0 for the boards 0..6, 1..4 for slots 7..10.
 int kind(int slot) {return slot<7?0:slot-6;}
 // State offset of the running contract of `slot` for `manager`.
-size_t contract_at(int manager,int slot) {return 0xacfc+size_t(manager)*0x6e+size_t(slot)*10;}
+size_t contract_at(int manager,int slot) {return 0xacfc + size_t(manager) * 0x6e + size_t(slot) * 10;}
 // Decodes the 10-byte advertising record at state offset `at`.
 ClassicAdvertisingRecord record(const HokFile& h,size_t at) {
     return {int32_t(le32(h.state,at)),h.state.at(at+4),h.state.at(at+5),h.state.at(at+6),

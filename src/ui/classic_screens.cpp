@@ -246,7 +246,7 @@ void ClassicApplication::draw_main_header(const SeasonReview* review){
     constexpr int icons[]={0,0,0,0,1,2,3,5,1};const int icon=event==kEventSectionEnd?4:icons[std::clamp(event_type,0,8)];
     canvas_.blit(3,111,35,78+14*icon,231,14,11);
     if(other>=0&&other<52)canvas_.blit(3,126,35,66-12*away,231,12,11);
-    const int face=h.state.at(0x01EE+size_t(active_manager()))%12;  // face table: one byte per manager
+    const int face=h.state.at(0x01EE + size_t(active_manager()))%12;  // face table: one byte per manager
     canvas_.blit(0,233,34,41*(face%3)+1,41*(face/3)+1,38,38);
     const int crest=80+(h.teams.at(size_t(own)).raw[0x34]&63);canvas_.blit(crest,275,34,0,0,38,38);
     bevel(234,35,274,75,255,0);bevel(276,35,316,75,255,0);
