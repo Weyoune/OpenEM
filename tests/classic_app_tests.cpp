@@ -59,7 +59,7 @@ int main(int argc,char** argv){
         require(app.session().dirty(),"training change marks save dirty");
         app.click(200,160,false);app.draw();const auto save_footer=app.canvas().argb();app.click(80,220,false);
         require(app.screen()==ClassicScreen::Files,"native save route");
-        app.click(100,200,false);app.text_input("INPUT");app.key(SDLK_RETURN);
+        app.click(100,200,false);app.text_input("INPUT.OEM");app.key(SDLK_RETURN);
         require(app.screen()==ClassicScreen::Main,"Enter accepts filename");
         const fs::path saved=output/"INPUT.OEM";
         require(fs::exists(saved),"new checkpoint created");
@@ -70,9 +70,23 @@ int main(int argc,char** argv){
         app.click(20,220,false);app.click(240,212,false);app.click(100,200,false);app.text_input("INPUT.OEM");app.key(SDLK_RETURN);app.draw();
         require(app.screen()==ClassicScreen::Main&&app.canvas().argb()==save_footer,"native live load retains the selected category/footer without a new menu invocation");
         const Bytes bytes=read_file(saved);
-        app.click(200,160,false);app.click(80,220,false);app.click(100,200,false);app.text_input("INPUT");app.key(SDLK_RETURN);
+        app.click(200,160,false);app.click(80,220,false);app.click(100,200,false);app.text_input("INPUT.OEM");app.key(SDLK_RETURN);
         require(app.screen()==ClassicScreen::Files&&read_file(saved)==bytes,"existing save remains intact");
         app.draw(); // failed-save notice must also render safely
+        {
+            // A name without extension is saved in the original's format (.HOK, loadable by the DOS game); long names
+            // with spaces and umlauts work, and the page draws them without overflowing.
+            ClassicApplication hok(data,output,references/"START.HOK");
+            hok.click(200,160,false);hok.click(80,220,false);hok.click(100,200,false);
+            hok.text_input("Saison 1994 Köln nach dem Pokalfinale");hok.draw();hok.key(SDLK_RETURN);
+            const fs::path long_name=output/path_from_text("Saison 1994 Köln nach dem Pokalfinale.HOK");
+            require(hok.screen()==ClassicScreen::Main&&fs::exists(long_name),"long name saved as .HOK");
+            const Bytes native=read_file(long_name);
+            verify_hok_checksums(native);
+            require(native.size()==read_file(references/"START.HOK").size()&&!hok.session().dirty(),"HOK save is a full save in the original's size");
+            ClassicApplication reloaded(data,output,long_name);
+            require(reloaded.session().loaded(),"OpenEM loads its own .HOK save");
+        }
         ClassicApplication contract(data,output,references/"START.HOK");
         const auto original=contract.session().game().checkpoint_bytes();
         contract.click(120,110,false);contract.click(130,220,false);contract.click(40,31,false);

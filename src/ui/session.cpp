@@ -202,7 +202,7 @@ void Session::start_from(const Bytes& bytes, uint32_t seed) {
 void Session::save(const std::filesystem::path& file) {
     if (contract_question_) throw FormatError("Zuerst die Vertragsentscheidung abschließen oder abbrechen.");
     const auto ext = extension(file);
-    if (ext != ".hok" && ext != ".oem") throw FormatError("Als .oem speichern oder als .hok exportieren.");
+    if (ext != ".hok" && ext != ".oem") throw FormatError("Bitte als .hok (auch für das Original) oder .oem speichern.");
     const auto& current = game();
     if (ext == ".oem") write_new_save(file, current.checkpoint_bytes());
     else {
@@ -212,10 +212,12 @@ void Session::save(const std::filesystem::path& file) {
         write_new_save(file, bytes);
         commit(std::move(next), before); // failed publication leaves RNG/header unchanged
     }
-    // A native export deliberately does not promise exact continuation.
-    if (ext == ".oem") { dirty_ = false; loaded_path_ = file; }
-    add_news(ext == ".oem" ? "Spielstand gespeichert: " + path_text(file.filename())
-                           : "HOK für das Original exportiert: " + path_text(file.filename()));
+    // Both formats are full saves: .hok is the original's format (the original game loads it; like the original,
+    // it carries no random state, so play continues from fresh draws after loading), .oem additionally keeps the
+    // random state for an exact continuation.
+    dirty_ = false;
+    loaded_path_ = file;
+    add_news("Spielstand gespeichert: " + path_text(file.filename()));
 }
 
 void Session::add_news(std::string text) {

@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 35; i++) { direct.advance_day(); direct.clear_log(); CHECK(session.advance_day()); }
         CHECK(session.dirty() && session.game().checkpoint_bytes() == direct.checkpoint_bytes());
         session.save(unique / "native.hok");
-        CHECK(session.dirty() && read_file(unique / "native.hok") == direct.native_save_bytes());
+        CHECK(read_file(unique / "native.hok") == direct.native_save_bytes() && !session.dirty());  // .hok is a full save
         const auto after_export = session.game().checkpoint_bytes();
         rejected = false;
         try { session.save(unique / "native.hok"); } catch (const std::exception&) { rejected = true; }

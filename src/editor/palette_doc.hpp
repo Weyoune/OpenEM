@@ -17,7 +17,7 @@ class PaletteDoc {
 public:
     static constexpr int kColors = 255;  // colour 255 is not stored
     // `data` is the game directory; the files are read from its KB subdirectory.
-    explicit PaletteDoc(const std::filesystem::path& data) : kb_(data / "KB") {}
+    explicit PaletteDoc(const std::filesystem::path& data) : kb_(resolve_case(data / "KB")) {}
 
     // Loads KB\<number>.vga (21 or 247). Fails (false, message in status()) when the file is missing or not a
     // palette file.

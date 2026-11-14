@@ -7,7 +7,43 @@
 
 namespace em {
 
-Bytes read_file(const std::filesystem::path& path) {
+namespace {
+// ASCII-only case folding of a file name (the game's names are ASCII).
+std::string fold(std::string s) {
+    for (char& c : s)
+        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    return s;
+}
+}  // namespace
+
+std::filesystem::path resolve_case(const std::filesystem::path& path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (path.empty() || fs::exists(path, ec)) return path;
+    // walk from the root (or the current folder for relative paths) and look up every missing component
+    fs::path resolved = path.root_path();
+    for (const fs::path& part : path.relative_path()) {
+        fs::path next = resolved / part;
+        if (!fs::exists(next, ec)) {
+            const fs::path folder = resolved.empty() ? fs::path(".") : resolved;
+            const std::string wanted = fold(part.string());
+            bool found = false;
+            for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+                if (fold(it->path().filename().string()) == wanted) {
+                    next = resolved / it->path().filename();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return path;
+        }
+        resolved = next;
+    }
+    return resolved;
+}
+
+Bytes read_file(const std::filesystem::path& given) {
+    const std::filesystem::path path = resolve_case(given);
     std::ifstream in(path, std::ios::binary);
     if (!in) throw FormatError("cannot open " + path.string());
     return Bytes(std::istreambuf_iterator<char>(in), {});

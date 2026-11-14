@@ -62,14 +62,14 @@ Bytes raw_from_sheet(const Image& img, int cell, int cols, int count) {
 }
 }  // namespace
 
-PixelEditor::PixelEditor(const fs::path& data) : kb_(data / "KB") {
+PixelEditor::PixelEditor(const fs::path& data) : kb_(resolve_case(data / "KB")) {
     global_pal_ = decode_palette(read_file(kb_ / "21.vga"));
     pal_ = global_pal_;
     std::error_code ec0;
-    if (fs::exists(kb_ / "247.vga", ec0)) tore_pal_ = decode_palette(read_file(kb_ / "247.vga"));
+    if (fs::exists(resolve_case(kb_ / "247.vga"), ec0)) tore_pal_ = decode_palette(read_file(kb_ / "247.vga"));
     else tore_pal_ = global_pal_;
     for (int n = 0; n < 256; n++) {
-        const fs::path p = kb_ / (std::to_string(n) + ".vga");
+        const fs::path p = resolve_case(kb_ / (std::to_string(n) + ".vga"));
         std::error_code ec;
         if (!fs::exists(p, ec)) continue;
         try {
@@ -100,7 +100,7 @@ std::vector<int> PixelEditor::palette_choices() const {
     std::vector<int> out;
     for (int n : {21, 247, 5, 14, 16, 151, 195, 197}) {
         std::error_code ec;
-        if (fs::exists(kb_ / (std::to_string(n) + ".vga"), ec)) out.push_back(n);
+        if (fs::exists(resolve_case(kb_ / (std::to_string(n) + ".vga")), ec)) out.push_back(n);
     }
     return out;
 }
@@ -133,13 +133,13 @@ void PixelEditor::close() {
 }
 
 bool PixelEditor::load(int number) {
-    const fs::path p = kb_ / (std::to_string(number) + ".vga");
+    const fs::path p = resolve_case(kb_ / (std::to_string(number) + ".vga"));
     try {
         Bytes d = read_file(p);
         // palettes may have been edited since start-up
         global_pal_ = decode_palette(read_file(kb_ / "21.vga"));
         std::error_code ec;
-        if (fs::exists(kb_ / "247.vga", ec)) tore_pal_ = decode_palette(read_file(kb_ / "247.vga"));
+        if (fs::exists(resolve_case(kb_ / "247.vga"), ec)) tore_pal_ = decode_palette(read_file(kb_ / "247.vga"));
         std::string what;
         Kind kind = Kind::Image;
         int cell = 0, cols = 0, count = 0;
@@ -200,7 +200,7 @@ bool PixelEditor::save() {
         if (kind_ == Kind::Image) out = encode_vga(img_, has_embedded_ ? &pal_ : nullptr);
         else if (kind_ == Kind::Panel) out = encode_tor_panel(img_);
         else out = pack_kb_block(raw_from_sheet(img_, cell_, cols_, count_));
-        const fs::path p = kb_ / (std::to_string(current_) + ".vga");
+        const fs::path p = resolve_case(kb_ / (std::to_string(current_) + ".vga"));
         fs::path bak = p;
         bak += ".bak";
         std::error_code ec;

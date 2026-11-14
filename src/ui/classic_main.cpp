@@ -5,6 +5,7 @@
 // or opens the SDL window and runs the interactive frame loop. The 320x240
 // canvas is scaled up by an integer factor in a resizable window.
 #include "ui/classic_app.hpp"
+#include "ui/game_folder.hpp"
 #include "ui/classic_keyboard.hpp"
 #include "ui/classic_script.hpp"
 #include "ui/classic_sound.hpp"
@@ -36,22 +37,24 @@ void SDLCALL input_message(void* user,void* window,unsigned message,Uint64 key,S
     }
 }
 #endif
-// A folder with the user's own copy of the original game: EM.EXE plus the picture folder KB.
-bool is_game_folder(const fs::path& p){
-    std::error_code ec;
-    return !p.empty()&&(fs::exists(p/"EM.EXE",ec)||fs::exists(p/"EM.exe",ec)||fs::exists(p/"em.exe",ec))&&
-           (fs::is_directory(p/"KB",ec)||fs::is_directory(p/"kb",ec));
-}
-// Where the original data is looked for when --data is not given: OPENEM_DATA, then next to the program (the folder
-// itself, EM, data), then the current folder (itself, EM, data). The first folder that holds the game wins; empty if
-// none does.
-fs::path find_game_folder(const fs::path& exe_dir){
-    std::vector<fs::path> candidates;
-    if(const char* env=std::getenv("OPENEM_DATA"))candidates.push_back(em::ui::path_from_text(env));
-    for(const fs::path& base:{exe_dir,fs::current_path()})
-        for(const char* sub:{"","EM","data"})candidates.push_back(*sub?base/sub:base);
-    for(const auto& c:candidates)if(is_game_folder(c))return c;
-    return {};
+// The game folder of an interactive start: the fixed search order (game_folder.hpp), else the system's "open file"
+// dialog for EM.EXE until the player picks a folder that holds the game. The chosen folder is remembered for the next
+// start. Empty when the player cancels.
+fs::path ask_game_folder(const fs::path& exe_dir){
+    using namespace em::ui;
+    if(const fs::path found=find_game_folder(exe_dir,remembered_game_folder());!found.empty())return found;
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION,"OpenEM",
+        "OpenEM braucht deine Kopie des Original-Spiels \"Eishockey Manager\".\n\n"
+        "Bitte im folgenden Dialog die Datei EM.EXE im Ordner des Spiels auswählen.",nullptr);
+    for(;;){
+        const auto exe=choose_game_exe("EM.EXE des Eishockey Managers wählen");
+        if(!exe)return {};
+        const fs::path folder=exe->parent_path();
+        if(is_game_folder(folder)){remember_game_folder(folder);return folder;}
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING,"OpenEM",
+            "In diesem Ordner liegt kein vollständiger Eishockey Manager (EM.EXE und der Ordner KB fehlen).\n"
+            "Bitte EM.EXE im Ordner des Original-Spiels auswählen.",nullptr);
+    }
 }
 }
 int main(int argc,char**argv){
@@ -73,15 +76,17 @@ int main(int argc,char**argv){
             else if(option=="--cursor"){const auto comma=value.find(',');if(comma==std::string::npos)throw std::runtime_error("--cursor x,y");cursor_x=std::stoi(value.substr(0,comma));cursor_y=std::stoi(value.substr(comma+1));}
             else if(option=="--render"){render=path_from_text(value);headless=true;}else if(option=="--screen")render_screen=value;else throw std::runtime_error("Unknown option");
         }
-        if(data.empty())data=find_game_folder(exe_dir);
+        // the game: --data, else the fixed search order; an interactive start asks with the system dialog
+        if(data.empty())data=headless?find_game_folder(exe_dir,remembered_game_folder()):ask_game_folder(exe_dir);
+        if(data.empty()&&!headless){SDL_Quit();return 0;}  // the player cancelled the dialog
         if(data.empty()||!is_game_folder(data))
-            throw std::runtime_error("OpenEM needs your copy of the original game (the folder with EM.EXE and KB). "
-                                     "Start with --data <folder>, set OPENEM_DATA, or put the folder next to openem as EM.");
+            throw std::runtime_error("OpenEM braucht deine Kopie des Original-Spiels (den Ordner mit EM.EXE und KB). "
+                                     "Starte mit --data <Ordner>, setze OPENEM_DATA oder lege den Ordner als EM neben openem.");
         // saves: --saves, otherwise the user's application data folder
         if(saves.empty()){char* pref=SDL_GetPrefPath("OpenEM","OpenEM");saves=pref?path_from_text(pref)/"saves":data/"saves";SDL_free(pref);}
         fs::create_directories(saves);
         // --new-game opens the start menu of a new game (game/new_game.hpp) instead of the default START.HOK
-        if(save.empty()&&!new_game&&fs::exists(data/"START.HOK"))save=data/"START.HOK";
+        if(save.empty()&&!new_game&&fs::exists(em::resolve_case(data/"START.HOK")))save=em::resolve_case(data/"START.HOK");
         ClassicApplication app(data,saves,save);
         if(cursor_x>=0&&cursor_y>=0)app.motion(cursor_x,cursor_y);
         if(!render.empty()){app.render_screen(render_screen);write_new_save(render,app.canvas().bmp_bytes());return 0;}

@@ -22,7 +22,7 @@ public:
     static constexpr int kEuropeFirst = 64, kAllTeams = 150;  // teams 64..149: European club names, with jersey and strengths only
     static constexpr int kNameLimit = 19, kClubLimit = 22;    // maximum characters of a player / club name
     // `data` is the game directory; the file is <data>/KB/23.vga.
-    explicit TeamDoc(const std::filesystem::path& data) : file_(data / "KB" / "23.vga") {}
+    explicit TeamDoc(const std::filesystem::path& data) : file_(resolve_case(data / "KB" / "23.vga")) {}
 
     bool load();    // reads and decodes KB\23.vga; false (message in status()) on error
     bool save();    // writes KB\23.vga, first time with a .bak copy

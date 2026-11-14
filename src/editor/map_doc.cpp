@@ -14,7 +14,7 @@ const std::vector<int>& MapDoc::numbers() {
     return n;
 }
 
-MapDoc::MapDoc(const fs::path& data) : kb_(data / "KB") {}
+MapDoc::MapDoc(const fs::path& data) : kb_(resolve_case(data / "KB")) {}
 
 // Copies the cell's tile into the rendered rink, flipped vertically when the mirror bit is set. Cells that refer
 // to a tile beyond the loaded set are left as they are.
@@ -79,7 +79,7 @@ bool MapDoc::save() {
     if (current_ < 0) return false;
     try {
         // keep any bytes behind the 6048 map bytes as they are
-        const fs::path p = kb_ / (std::to_string(current_) + ".vga");
+        const fs::path p = resolve_case(kb_ / (std::to_string(current_) + ".vga"));
         Bytes d = read_file(p);
         for (size_t i = 0; i < map_.size(); i++) {
             d[i * 2] = uint8_t(map_[i] >> 8);

@@ -76,7 +76,7 @@ int main(int argc,char** argv){
             app.click(0,0,true);
             require(app.screen()==ClassicScreen::Main,"right click leaves the page");
             const fs::path saved=output/"SETT.OEM";
-            app.click(180,185,false);app.click(80,220,false);app.click(100,200,false);app.text_input("SETT");app.key(SDLK_RETURN);
+            app.click(180,185,false);app.click(80,220,false);app.click(100,200,false);app.text_input("SETT.OEM");app.key(SDLK_RETURN);
             require(fs::exists(saved),"checkpoint created through the save page");
             ClassicApplication loaded(data,output,saved);
             const auto after=loaded.session().game().settings(),now=app.session().game().settings();

@@ -62,7 +62,7 @@ Palette PaletteDoc::palette() const {
 bool PaletteDoc::save() {
     if (current_ < 0) return false;
     try {
-        const fs::path p = kb_ / (std::to_string(current_) + ".vga");
+        const fs::path p = resolve_case(kb_ / (std::to_string(current_) + ".vga"));
         fs::path bak = p;
         bak += ".bak";
         std::error_code ec;

@@ -440,11 +440,11 @@ void ClassicApplication::route_submenu(int item){
     }
     notice("Dieser Bereich ist noch nicht nachgebaut.");
 }
-// Opens the file dialog: saving starts in the save folder with "SPIEL.OEM", loading in the
+// Opens the file dialog: saving starts in the save folder with "SPIEL.HOK" (the original game can load it), loading in the
 // data folder.
 void ClassicApplication::open_files(bool saving){
     save_mode_=saving;file_directory_=saving?saves_:data_;
-    filename_=saving?"SPIEL.OEM":"";filename_focus_=false;file_selection_=-1;file_page_=0;
+    filename_=saving?"SPIEL.HOK":"";filename_focus_=false;file_selection_=-1;file_page_=0;
     file_preview_.reset();screen_=ClassicScreen::Files;refresh_files();
 }
 // The path as the DOS-style dialog shows it: the data folder appears as drive C:, the save
@@ -474,7 +474,7 @@ void ClassicApplication::refresh_files(){
     std::stable_sort(files_.begin(),files_.end(),[](const FileEntry&a,const FileEntry&b){if(a.directory!=b.directory)return a.directory>b.directory;return a.name<b.name;});
     if(file_page_>=files_.size()&&file_page_)file_page_=0;
 }
-// Executes the file name field: enters a folder, or saves/loads the file (".OEM" / ".HOK" is
+// Executes the file name field: enters a folder, or saves/loads the file (".HOK" is
 // appended when there is no extension; "C:" and "D:" stand for the data and save folders).
 // Loading autosaves an unsaved running game first.
 void ClassicApplication::accept_file(){
@@ -487,7 +487,7 @@ void ClassicApplication::accept_file(){
         }
         if(file.is_relative())file=file_directory_/file;
         if(fs::is_directory(file)){file_directory_=file;filename_.clear();file_page_=0;refresh_files();return;}
-        if(!file.has_extension())file+=save_mode_?".OEM":".HOK";
+        if(!file.has_extension())file+=".HOK";
         if(save_mode_)session_.save(file);else{
             if(session_.loaded()&&session_.dirty())autosave();
             session_.load(file);invalidate();close_start_menu();
@@ -848,11 +848,14 @@ void ClassicApplication::key(int key){
     }
     if(screen_==ClassicScreen::Files&&filename_focus_){
         if(key==SDLK_RETURN||key==SDLK_KP_ENTER)accept_file();
-        else if(key==SDLK_BACKSPACE&&!filename_.empty())filename_.pop_back();
+        else if(key==SDLK_BACKSPACE&&!filename_.empty()){  // removes one whole UTF-8 character
+            while(filename_.size()>1&&(static_cast<unsigned char>(filename_.back())&0xC0)==0x80)filename_.pop_back();
+            filename_.pop_back();
+        }
     }
 }
-// Typed text: digits for the fee and contract editors (at most 7 / 1 or 6 digits), upper-cased
-// printable ASCII for the file name (at most 64 characters).
+// Typed text: digits for the fee and contract editors (at most 7 / 1 or 6 digits), any printable
+// text for the file name (long names, up to 255 bytes of UTF-8).
 void ClassicApplication::text_input(std::string_view text){
     if(native_notice_until_)return;
     if(screen_==ClassicScreen::NewManager){text_misc(text);return;}
@@ -868,8 +871,12 @@ void ClassicApplication::text_input(std::string_view text){
         for(unsigned char c:text)if(c>='0'&&c<='9'&&e.digits.size()<limit)e.digits.push_back(char(c));
         return;
     }
+    // file names: long names with spaces, umlauts and folder separators, as typed (the page shows them in capitals);
+    // at most 255 bytes, control characters and incomplete UTF-8 input are dropped
     if(screen_==ClassicScreen::Files&&filename_focus_&&notice_.empty()){
-        for(unsigned char c:text)if(c>=32&&c<127&&filename_.size()<64)filename_.push_back(char(std::toupper(c)));
+        if(filename_.size()+text.size()>255)return;
+        for(unsigned char c:text)if(c<32||c==127)return;
+        filename_.append(text);
     }
 }
 // Draws the frame: title, cup draw, game end, match display, banner or season talks take the

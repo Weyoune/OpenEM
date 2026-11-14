@@ -52,7 +52,7 @@ void ClassicApplication::open_highscore() {
     if (number == 0) return;  // as in the game: this game setting keeps no list
     try {
         if (!m.tables) m.tables = load_highscore_tables(read_file(data_ / "EM.EXE"));
-        const fs::path own = saves_ / highscore_file_name(number), seed = data_ / highscore_file_name(number);
+        const fs::path own = saves_ / highscore_file_name(number), seed = resolve_case(data_ / highscore_file_name(number));
         std::error_code ec;
         m.highscore = fs::exists(own, ec) ? read_highscore_table(read_file(own))
                      : fs::exists(seed, ec) ? read_highscore_table(read_file(seed)) : HighscoreTable{};

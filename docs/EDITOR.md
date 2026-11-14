@@ -1,6 +1,6 @@
 # OpenEM Editor (`em_editor`)
 
-Bearbeitet die Daten des Originalspiels. Nur Windows (Win32 mit Standard-Steuerelementen). Die Dokumentlogik (`src/editor/pixel_editor.*`, `palette_doc.*`, `team_doc.*`, `map_doc.*`) hat keine Oberflächenabhängigkeit und läuft im Test (`ctest -R editor_original`).
+Bearbeitet die Daten des Originalspiels. Unter Windows mit eigener Win32-Oberfläche (Standard-Steuerelemente), unter Linux und macOS mit einer SDL2-Oberfläche (siehe unten). Die Dokumentlogik (`src/editor/pixel_editor.*`, `palette_doc.*`, `team_doc.*`, `map_doc.*`) hat keine Oberflächenabhängigkeit und läuft im Test (`ctest -R editor_original`).
 
 ```
 em_editor [--data <EM-Ordner>] [--file <KB-Nr.>] [--tab 0|1|2] [--shot out.bmp]
@@ -18,6 +18,8 @@ Ohne `--data` sucht der Editor wie `openem` (`OPENEM_DATA`, Programmordner, aktu
 Werkzeuge: Stift (P), Linie (L), Rechteck (R), gefülltes Rechteck (B), Füllen (F), Pipette (I, oder Rechtsklick); Rückgängig/Wiederholen (Strg+Z/Y), Speichern (Strg+S), BMP-Export (Strg+E), Raster (G), Zoom (Strg+Mausrad, +/−).
 
 Bilder lassen sich als PNG (8 Bit mit der aktuellen Palette) oder BMP exportieren und als PNG, BMP, GIF oder JPEG importieren (Strg+I, über Windows Imaging Component): jedes Pixel erhält die nächste Farbe der Palette (Farben 0–254, transparente Pixel Farbe 0); unveränderte Farben behalten ihren Index, auch wenn die Palette eine Farbe doppelt enthält. Eine andere Größe akzeptiert der Editor nur bei einfachen Bildern und nach Rückfrage; Kachel-/Spritebögen und die Anzeigetafel müssen genau passen. Kommandozeile: `--file N --export-png out.png` und `--file N --import-png in.png` (speichert).
+
+**Linux und macOS.** Dort ist `em_editor` eine eigene Oberfläche mit SDL2 und Dear ImGui (`src/editor/sdl_*.cpp`, gezeichnet über SDL_Renderer, ohne OpenGL); unter Windows wird sie zum Testen zusätzlich als `em_editor_sdl` gebaut (`-DEM_BUILD_GUI=ON`, Voreinstellung). Registerkarten, Werkzeuge, Tastenkürzel, `.bak`-Sicherung und die Kommandozeile (`--data`, `--file`, `--tab 0–4`, `--export-png`, `--import-png`, `--shot`) sind dieselben; `--export-png`/`--import-png` laufen ohne Fenster, `--shot out.bmp` zeichnet das Fenster ohne Bildschirm in eine BMP-Datei. Den Import übernimmt stb_image, den PNG-Export (8 Bit mit Palette) ein eigener Schreiber. Statt der Systemdialoge hat sie einen eingebauten Datei- und Ordnerwähler; findet sie keinen Spielordner (`OPENEM_DATA`, Programmordner, aktueller Ordner, jeweils mit den Unterordnern `EM` und `data`), zeigt sie ihn beim Start. `EM.EXE` darf dort beliebig geschrieben sein, der Ordner `KB` und die Dateinamen darin wie im Original (`KB/21.vga`).
 
 Ein Release-Ordner mit Spiel und Editor entsteht mit `cmake --install build --config Release --prefix <Ordner>`.
 

@@ -17,7 +17,12 @@ struct FormatError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-// Reads a whole file; throws FormatError when it cannot be opened.
+// The existing path that matches path when upper and lower case are ignored, component by component (the original
+// game comes from DOS, so a copy may be spelt EM.exe, KB/21.VGA or kb/21.vga; Linux file systems are case sensitive).
+// Returns path unchanged when it exists as given or no matching entry is found.
+std::filesystem::path resolve_case(const std::filesystem::path& path);
+
+// Reads a whole file (spelling resolved with resolve_case); throws FormatError when it cannot be opened.
 Bytes read_file(const std::filesystem::path& path);
 
 // Unsigned little-endian 16/32-bit value at offset o (bounds-checked, throws std::out_of_range).

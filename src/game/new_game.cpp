@@ -78,7 +78,7 @@ bool is_new_game_base(const HokFile& h) {
 
 std::optional<std::filesystem::path> find_new_game_base(const std::filesystem::path& dir) {
     for (const char* name : {"BACKUP.HOK", "AUTOSAVE.HOK"}) {
-        const auto file = dir / name;
+        const auto file = resolve_case(dir / name);
         std::error_code ec;
         if (!std::filesystem::is_regular_file(file, ec)) continue;
         try {

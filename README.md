@@ -19,35 +19,52 @@ und den Unterordnern `KB` (Bilder) und `TORE` (Torszenen).
 - Spielstände im eigenen Format (`.oem`, mit Zufallszustand) und im Format des Originals (`.hok`).
 - `em_editor`: ein Editor für die Originaldaten (Bilder, Torszenengrafik, Paletten, Hallenkarten, Mannschaften).
 
+## Herunterladen
+
+Fertige Pakete für Windows (x64), Linux (x86_64) und macOS (Apple Silicon) liegen bei den
+[Releases](https://github.com/Weyoune/OpenEM/releases). Entpacken, starten, fertig.
+
+- **macOS:** Die Programme sind nicht signiert. Beim ersten Start im Finder mit Rechtsklick → „Öffnen“ bestätigen
+  oder im Terminal `xattr -dr com.apple.quarantine <entpackter Ordner>` ausführen.
+- **Linux:** Gebaut unter Ubuntu 22.04; gebraucht werden X11 oder Wayland, ALSA/PulseAudio/PipeWire und GTK 3 (für
+  den Ordnerdialog beim ersten Start).
+
 ## Bauen
 
-Voraussetzungen: CMake ab 3.24 und ein C++20-Compiler (Visual Studio 2022 oder neuer, GCC, Clang). SDL2 lädt CMake
-beim Konfigurieren selbst herunter; mit `-DEM_USE_SYSTEM_SDL2=ON` wird stattdessen ein installiertes SDL2 benutzt.
+Voraussetzungen: CMake ab 3.24 und ein C++20-Compiler (Visual Studio 2022 oder neuer, GCC, Clang). SDL2,
+nativefiledialog-extended, Dear ImGui und stb lädt CMake beim Konfigurieren selbst herunter; mit
+`-DEM_USE_SYSTEM_SDL2=ON` wird stattdessen ein installiertes SDL2 benutzt. Unter Linux braucht der SDL-Build die
+Entwicklerpakete für X11/Wayland und Audio sowie `libgtk-3-dev` (die genaue Liste steht in
+`.github/workflows/build.yml`).
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
-cmake --install build --config Release --prefix <Release-Ordner>
+cpack --config build/CPackConfig.cmake -C Release   # Paket wie bei den Releases
 ```
 
 ## Starten
 
-```bash
-openem --data "<Pfad zum EM-Ordner>"
-```
+Liegt der Ordner des Originalspiels neben `openem` (als `EM` oder `data`, oder das Programm direkt im Spielordner),
+startet OpenEM sofort. Sonst fragt es beim ersten Start mit dem Dateidialog des Systems nach `EM.EXE` und merkt sich
+den Ordner. Die Schreibweise der Dateien ist gleichgültig (`EM.EXE`, `EM.exe`, `kb/21.VGA` …).
 
-Ohne `--data` sucht OpenEM die Originaldaten in dieser Reihenfolge:
+Weitere Wege: `openem --data "<Pfad zum EM-Ordner>"` oder die Umgebungsvariable `OPENEM_DATA`. Liegt im Spielordner
+ein `START.HOK`, wird er geladen; sonst beginnt OpenEM mit dem Startmenü. `--new-game` öffnet immer das Startmenü
+eines neuen Spiels.
 
-1. die Umgebungsvariable `OPENEM_DATA`;
-2. der Programmordner selbst, dann seine Unterordner `EM` und `data`;
-3. der aktuelle Ordner, dann `EM` und `data` darin.
+## Spielstände
 
-Findet OpenEM nichts, erscheint eine Meldung mit diesen Möglichkeiten. Liegt im Datenordner ein `START.HOK`, wird
-er geladen; sonst beginnt OpenEM mit dem Startmenü. `--new-game` öffnet immer das Startmenü eines neuen Spiels.
+OpenEM speichert im Format des Originals (`.HOK`): Spielstände lassen sich zwischen OpenEM und dem DOS-Spiel in
+beide Richtungen austauschen. Nur die Dateinamen muss man für DOS kurz halten (acht Zeichen plus `.HOK`); OpenEM
+selbst kann lange Datei- und Ordnernamen mit Leerzeichen und Umlauten. Wer den Namen mit `.oem` enden lässt,
+bekommt OpenEMs eigenes Format, das zusätzlich den Zufallszustand enthält (exakt gleiche Fortsetzung); die
+automatischen Sicherungen (`AUTOnnnn.OEM`) nutzen es.
 
 Spielstände liegen im Benutzer-Datenordner (`%APPDATA%\OpenEM\OpenEM\saves` unter Windows,
-`~/.local/share/OpenEM/OpenEM/saves` unter Linux). Im Dateidialog des Spiels sind sie über `D:` erreichbar.
-Bestehende Speicherdateien werden nicht überschrieben.
+`~/.local/share/OpenEM/OpenEM/saves` unter Linux, `~/Library/Application Support/OpenEM/OpenEM/saves` unter macOS).
+Im Dateidialog des Spiels sind sie über `D:` erreichbar, der Spielordner über `C:`. Bestehende Dateien werden nie
+überschrieben.
 
 ## Tests
 
@@ -57,9 +74,9 @@ Vergleichsdaten, die nicht zu diesem Repository gehören. Wer Zugang zum private
 
 ## Editor
 
-`em_editor` (Windows, im Release neben `openem`) bearbeitet die Originaldaten: Bilder, Torszenengrafik, Paletten,
-Hallenkarten und die Mannschaften (Namen, Wappen, Stärken, Trikotfarben). Er sucht die Daten wie `openem` und legt
-vor dem ersten Überschreiben eine `.bak` an. Bedienung: [docs/EDITOR.md](docs/EDITOR.md).
+`em_editor` (im Release neben `openem`; Windows, Linux und macOS) bearbeitet die Originaldaten: Bilder,
+Torszenengrafik, Paletten, Hallenkarten und die Mannschaften (Namen, Wappen, Stärken, Trikotfarben). Er sucht die
+Daten wie `openem` und legt vor dem ersten Überschreiben eine `.bak` an. Bedienung: [docs/EDITOR.md](docs/EDITOR.md).
 
 ## Quellcode
 
@@ -69,4 +86,5 @@ Der Quellcode ist an Ort und Stelle dokumentiert; [docs/ARCHITECTURE.md](docs/AR
 
 Der Quellcode von OpenEM steht unter der GNU General Public License, Version 3 (nur diese Version,
 `GPL-3.0-only`); der Text liegt in [LICENSE](LICENSE). Die Daten des Original-Spiels gehören nicht dazu und werden
-nicht mitgeliefert.
+nicht mitgeliefert. Mitgebaute Bibliotheken anderer Autoren und ihre Lizenzen:
+[THIRD_PARTY.md](THIRD_PARTY.md).
